@@ -1,80 +1,153 @@
-export type FunctionSubstitute<T> = (...args: any[]) => (T & {
-    returns: (...args: T[]) => void;
-  })
-  
-  export type PropertySubstitute<T> = {
-    returns: (...args: T[]) => void;
-  }
-   
-  export type ObjectSubstitute<T extends Object> = {
-    [P in keyof T]:
-      T[P] extends (...args: any[]) => infer R ? FunctionSubstitute<R> :
-      PropertySubstitute<T[P]>;
-  } 
-  
-  export class Substitute {
-    static for<T>(instance: T): ObjectSubstitute<T> {
-      const lastRecord = {
-        type: null as string,
-        target: null as T,
-        metadata: null as any
+export type FunctionSubstitute<F extends any[], T> = (...args: F) => (T & {
+  returns: (...args: T[]) => void;
+})
+
+export type PropertySubstitute<T> = {
+  returns: (...args: T[]) => void;
+}
+
+export type ObjectSubstitute<T extends Object> = {
+  [P in keyof T]:
+  T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> :
+  PropertySubstitute<T[P]>;
+}
+
+export class Substitute {
+  static for<T>(): ObjectSubstitute<T> {
+    let lastRecord: {
+      arguments: Array<any>,
+      shouldReturn: Array<any>,
+      currentReturnOffset: number,
+      proxy: any
+    };
+
+    const createRecord = () => {
+      lastRecord = {
+        arguments: null,
+        shouldReturn: [],
+        proxy: null,
+        currentReturnOffset: 0
       };
 
-      const record = (type: string, target: T, metadata: any) => {
-        lastRecord.type = type;
-        lastRecord.target = target;
-        lastRecord.metadata = metadata;
-      };
+      return lastRecord;
+    };
 
-      const setupRecording = (localTarget: any) => {
-        const proxy = new Proxy(localTarget, {
-          get: (target, property) => {
-            record('get', target, property);
-            return target[property];
-          },
-          apply: (target, thisArg, argumentsList) => {
-            record('apply', target, argumentsList);
-            return target
+    const equals = (a: any, b: any) => {
+      if((!a || !b) && a !== b)
+        return false;
+
+      if(typeof a !== typeof b)
+        return false;
+
+      if(Array.isArray(a) !== Array.isArray(b))
+        return false;
+
+      if(Array.isArray(a) && Array.isArray(b)) {
+        if(a.length !== b.length)
+          return false;
+
+        for(let i=0;i<a.length;i++) {
+          if(!equals(a[i], b[i]))
+            return false;
+        }
+
+        return true;
+      }
+
+      return a === b;
+    }
+    
+    const createProxy = (r: any = null) => {
+      let localRecord: typeof lastRecord = r;
+      
+      let thisProxy: any;
+      return thisProxy = new Proxy(() => {}, {
+        apply: (_target, _thisArg, argumentsList) => {
+          if(localRecord.arguments) {
+            if(!equals(localRecord.arguments, argumentsList))
+              return localRecord.proxy || (localRecord.proxy = createProxy());
+
+            return localRecord.shouldReturn[localRecord.currentReturnOffset++];
           }
-        });
 
-        return proxy;
-      };
-    }
+          localRecord.arguments = argumentsList;
+          return thisProxy;
+        },
+        get: (target, property) => {
+          if(typeof property === 'symbol')
+            return void 0;
+
+          if(property === 'valueOf')
+            return void 0;
+
+          if(property === 'toString')
+            return target[property].toString();
+
+          if(property === 'inspect')
+            return () => "{SubstituteJS fake}";
+
+          if(property === 'constructor')
+            return () => thisProxy;
+
+          if(property === 'returns') {
+            return (...args: any[]) => {
+              localRecord.shouldReturn = args;
+            };
+          }
+
+          if(localRecord) {
+            if(localRecord.arguments)
+              return thisProxy;
+
+            return localRecord.shouldReturn[localRecord.currentReturnOffset];
+          }
+          
+          localRecord = createRecord();
+          return thisProxy;
+        }
+      });
+    };
+
+    return createProxy() as any;
   }
-  
-  class Example {
-    a = "1337";
-    b = 1337; 
-  
-    c(arg1: string, arg2: string) {
-      return "hello " + arg1 + " world (" + arg2 + ")";
-    }
-  
-    get d() {
-      return 1337;
-    }
-  
-    set v(x) {
-      console.log('define: ' + x);
-    }
+}
+
+class Example {
+  a = "1337";
+  b = 1337;
+
+  c(arg1: string, arg2: string) {
+    return "hello " + arg1 + " world (" + arg2 + ")";
   }
-  
-  console.log('start');
-  
-  var ex = new Example();
-  var exFake = Substitute.for(ex);
-  
-  exFake.a.returns("foo", "bar");
-  exFake.b.returns(10, 30);
-  exFake.c("hi", "there").returns("blah", "haha");
-  exFake.d.returns(9);
-  
-  console.log(exFake.a);
-  console.log(exFake.b);
-  
-  console.log(exFake.c("hi", "there"));
-  console.log(exFake.c("hi", "there"));
-  console.log(exFake.c("something", "there"));
-  
-  console.log(exFake.d);
+
+  get d() {
+    return 1337;
+  }
+
+  set v(x) {
+    console.log('define: ' + x);
+  }
+}
+
+var exFake = Substitute.for<Example>();
+
+exFake.a.returns("foo", "bar");
+console.log('returned', exFake.a);
+console.log('returned', exFake.a);
+
+exFake.b.returns(10, 30);
+exFake.c("hi", "there").returns("blah", "haha");
+exFake.d.returns(9);
+
+console.log(exFake.a);
+console.log(exFake.b);
+
+console.log('assert');
+
+console.log(exFake.c("hi", "there"));
+console.log(exFake.c("hi", "the1re"));
+console.log(exFake.c("hi", "there"));
+console.log(exFake.c("hi", "there"));
+console.log(exFake.c("something", "there"));
+
+console.log(exFake.d);
