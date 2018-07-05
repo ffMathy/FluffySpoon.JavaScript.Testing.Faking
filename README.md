@@ -7,7 +7,7 @@ More concretely named `@fluffy-spoon/substitute` on NPM is a TypeScript port of 
 ## Usage
 Experience full strong-typing of your fakes all the way, and let the TypeScript compiler help with all the dirty work! In the usage example given below, the `exFake` instance is strong-typed all the way, and can be used naturally in a fluent interface!
 
-```
+```typescript
 class Example {
   a = "1337";
   b = 1337;
