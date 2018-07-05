@@ -18,7 +18,8 @@ export class Substitute {
       arguments: Array<any>,
       shouldReturn: Array<any>,
       currentReturnOffset: number,
-      proxy: any
+      proxy: any,
+      property: string|number
     };
 
     const createRecord = () => {
@@ -26,7 +27,8 @@ export class Substitute {
         arguments: null,
         shouldReturn: [],
         proxy: null,
-        currentReturnOffset: 0
+        currentReturnOffset: 0,
+        property: null
       };
 
       return lastRecord;
@@ -74,14 +76,18 @@ export class Substitute {
           return thisProxy;
         },
         get: (target, property) => {
-          if(typeof property === 'symbol')
+          if(typeof property === 'symbol') {
+            if(property === Symbol.toPrimitive)
+              return () => void 0;
+
             return void 0;
+          }
 
           if(property === 'valueOf')
             return void 0;
 
           if(property === 'toString')
-            return target[property].toString();
+            return (target[property] || '').toString();
 
           if(property === 'inspect')
             return () => "{SubstituteJS fake}";
@@ -89,20 +95,19 @@ export class Substitute {
           if(property === 'constructor')
             return () => thisProxy;
 
-          if(property === 'returns') {
-            return (...args: any[]) => {
-              localRecord.shouldReturn = args;
-            };
-          }
+          if(property === 'returns')
+            return (...args: any[]) => localRecord.shouldReturn = args;
 
-          if(localRecord) {
+          if(localRecord && localRecord.property === property) {
             if(localRecord.arguments)
               return thisProxy;
 
-            return localRecord.shouldReturn[localRecord.currentReturnOffset];
+            return localRecord.shouldReturn[localRecord.currentReturnOffset++];
           }
           
           localRecord = createRecord();
+          localRecord.property = property;
+
           return thisProxy;
         }
       });
@@ -111,43 +116,3 @@ export class Substitute {
     return createProxy() as any;
   }
 }
-
-class Example {
-  a = "1337";
-  b = 1337;
-
-  c(arg1: string, arg2: string) {
-    return "hello " + arg1 + " world (" + arg2 + ")";
-  }
-
-  get d() {
-    return 1337;
-  }
-
-  set v(x) {
-    console.log('define: ' + x);
-  }
-}
-
-var exFake = Substitute.for<Example>();
-
-exFake.a.returns("foo", "bar");
-console.log('returned', exFake.a);
-console.log('returned', exFake.a);
-
-exFake.b.returns(10, 30);
-exFake.c("hi", "there").returns("blah", "haha");
-exFake.d.returns(9);
-
-console.log(exFake.a);
-console.log(exFake.b);
-
-console.log('assert');
-
-console.log(exFake.c("hi", "there"));
-console.log(exFake.c("hi", "the1re"));
-console.log(exFake.c("hi", "there"));
-console.log(exFake.c("hi", "there"));
-console.log(exFake.c("something", "there"));
-
-console.log(exFake.d);
