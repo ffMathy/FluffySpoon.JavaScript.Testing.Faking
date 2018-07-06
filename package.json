@@ -2,8 +2,8 @@
     "name": "@fluffy-spoon/substitute",
     "version": "1.0.0",
     "description": "",
-    "main": "dist/index.js",
-    "typings": "./dist/index.d.ts",
+    "main": "dist/Index.js",
+    "typings": "./dist/Index.d.ts",
     "scripts": {
         "test": "tsc && ava",
         "build": "tsc"
@@ -26,6 +26,7 @@
             "./dist/src/**/*.js",
             "./dist/spec/**/*.test.js"
         ],
+        "failFast": true,
         "compileEnhancements": false,
         "extensions": [
             "ts"

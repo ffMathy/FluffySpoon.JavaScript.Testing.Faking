@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
 var index_1 = require("../src/index");
+var substitute_1 = require("../src/substitute");
 var Example = /** @class */ (function () {
     function Example() {
         this.a = "1337";
@@ -31,12 +32,21 @@ var substitute;
 ava_1.default.beforeEach(function () {
     substitute = index_1.Substitute.for();
 });
+ava_1.default('equals', function (t) {
+    t.true(substitute_1.equals([], []));
+    t.true(substitute_1.equals(['foo'], ['foo']));
+    t.false(substitute_1.equals([], ['foo']));
+    t.false(substitute_1.equals(['foo', 'bar'], ['foo', 'bar', 'baz']));
+});
 ava_1.default('class string field', function (t) {
     substitute.a.returns("foo", "bar");
     t.deepEqual(substitute.a, 'foo');
     t.deepEqual(substitute.a, 'bar');
     t.deepEqual(substitute.a, void 0);
     t.deepEqual(substitute.a, void 0);
+    t.throws(function () { return substitute.received(3).a; });
+    t.notThrows(function () { return substitute.received().a; });
+    t.notThrows(function () { return substitute.received(4).a; });
 });
 ava_1.default('class number field', function (t) {
     substitute.b.returns(10, 30);
@@ -44,6 +54,9 @@ ava_1.default('class number field', function (t) {
     t.deepEqual(substitute.b, 30);
     t.deepEqual(substitute.b, void 0);
     t.deepEqual(substitute.b, void 0);
+    t.throws(function () { return substitute.received(7).b; });
+    t.notThrows(function () { return substitute.received().b; });
+    t.notThrows(function () { return substitute.received(4).b; });
 });
 ava_1.default('class method', function (t) {
     substitute.c("hi", "there").returns("blah", "haha");
@@ -52,5 +65,8 @@ ava_1.default('class method', function (t) {
     t.deepEqual(substitute.c("hi", "there"), 'haha');
     t.deepEqual(substitute.c("hi", "there"), void 0);
     t.deepEqual(substitute.c("hi", "there"), void 0);
+    t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
+    t.notThrows(function () { return substitute.received().c('hi', 'there'); });
+    t.throws(function () { return substitute.received(7).c('hi', 'there'); });
 });
-//# sourceMappingURL=index.test.js.map
+//# sourceMappingURL=Index.test.js.map
