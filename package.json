@@ -1,17 +1,37 @@
 {
-  "name": "@fluffy-spoon/substitute",
-  "version": "1.0.0",
-  "description": "",
-  "main": "dist/index.js",
-  "typings": "./dist/index.d.ts",
-  "scripts": {
-    "test": "ava",
-    "build": "tsc"
-  },
-  "author": "",
-  "license": "ISC",
-  "devDependencies": {
-    "typescript": "next",
-    "@types/node": "latest"
-  }
+    "name": "@fluffy-spoon/substitute",
+    "version": "1.0.0",
+    "description": "",
+    "main": "dist/index.js",
+    "typings": "./dist/index.d.ts",
+    "scripts": {
+        "test": "tsc && ava",
+        "build": "tsc"
+    },
+    "author": "",
+    "license": "ISC",
+    "devDependencies": {
+        "@types/node": "latest",
+        "ava": "^0.25.0",
+        "ts-node": "^7.0.0",
+        "typescript": "^3.0.0-dev.20180706"
+    },
+    "ava": {
+        "files": [
+            "./dist/spec/*.js"
+        ],
+        "sources": [
+            "./src/**/*.ts",
+            "./spec/**/*.test.ts",
+            "./dist/src/**/*.js",
+            "./dist/spec/**/*.test.js"
+        ],
+        "compileEnhancements": false,
+        "extensions": [
+            "ts"
+        ],
+        "require": [
+            "ts-node/register"
+        ]
+    }
 }

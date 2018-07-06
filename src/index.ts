@@ -2,7 +2,7 @@ export type FunctionSubstitute<F extends any[], T> = (...args: F) => (T & {
   returns: (...args: T[]) => void;
 })
 
-export type PropertySubstitute<T> = {
+export type PropertySubstitute<T> = T & {
   returns: (...args: T[]) => void;
 }
 
@@ -67,7 +67,7 @@ export class Substitute {
         apply: (_target, _thisArg, argumentsList) => {
           if(localRecord.arguments) {
             if(!equals(localRecord.arguments, argumentsList))
-              return localRecord.proxy || (localRecord.proxy = createProxy());
+              return void 0;
 
             return localRecord.shouldReturn[localRecord.currentReturnOffset++];
           }

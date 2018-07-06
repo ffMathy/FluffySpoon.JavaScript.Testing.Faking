@@ -1,4 +1,4 @@
-# FluffySpoon.JavaScript.Testing
+# substitute.js
 More concretely named `@fluffy-spoon/substitute` on NPM is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
 ## Requirements
@@ -8,6 +8,8 @@ More concretely named `@fluffy-spoon/substitute` on NPM is a TypeScript port of 
 Experience full strong-typing of your fakes all the way, and let the TypeScript compiler help with all the dirty work! In the usage example given below, the `exFake` instance is strong-typed all the way, and can be used naturally in a fluent interface!
 
 ```typescript
+import { Substitute } from '@fluffy-spoon/substitute';
+
 class Example {
   a = "1337";
   b = 1337;
