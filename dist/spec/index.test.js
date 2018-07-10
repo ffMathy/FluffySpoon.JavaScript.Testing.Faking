@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
 var index_1 = require("../src/index");
-var substitute_1 = require("../src/substitute");
+var Substitute_1 = require("src/Substitute");
 var Example = /** @class */ (function () {
     function Example() {
         this.a = "1337";
@@ -33,10 +33,10 @@ ava_1.default.beforeEach(function () {
     substitute = index_1.Substitute.for();
 });
 ava_1.default('equals', function (t) {
-    t.true(substitute_1.equals([], []));
-    t.true(substitute_1.equals(['foo'], ['foo']));
-    t.false(substitute_1.equals([], ['foo']));
-    t.false(substitute_1.equals(['foo', 'bar'], ['foo', 'bar', 'baz']));
+    t.true(Substitute_1.equals([], []));
+    t.true(Substitute_1.equals(['foo'], ['foo']));
+    t.false(Substitute_1.equals([], ['foo']));
+    t.false(Substitute_1.equals(['foo', 'bar'], ['foo', 'bar', 'baz']));
 });
 ava_1.default('class string field', function (t) {
     substitute.a.returns("foo", "bar");

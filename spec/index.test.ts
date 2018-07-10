@@ -1,6 +1,6 @@
 import test from 'ava';
 import { Substitute, ObjectSubstitute } from '../src/index';
-import { equals } from '../src/substitute';
+import { equals } from 'src/Substitute';
 
 export class Example {
 	a = "1337";
