@@ -55,10 +55,10 @@ test('class method returns', t => {
 	substitute.c("hi", "there").returns("blah", "haha");
 
 	t.deepEqual(substitute.c("hi", "there"), 'blah');
-	// t.deepEqual(substitute.c("hi", "the1re"), void 0);
-	// t.deepEqual(substitute.c("hi", "there"), 'haha');
-	// t.deepEqual(substitute.c("hi", "there"), void 0);
-	// t.deepEqual(substitute.c("hi", "there"), void 0);
+	t.deepEqual(substitute.c("hi", "the1re"), void 0);
+	t.deepEqual(substitute.c("hi", "there"), 'haha');
+	t.deepEqual(substitute.c("hi", "there"), void 0);
+	t.deepEqual(substitute.c("hi", "there"), void 0);
 });
 
 test('class method received', t => {
@@ -70,7 +70,7 @@ test('class method received', t => {
 	void substitute.c("hi", "there");
 	void substitute.c("hi", "there");
 
+	t.throws(() => substitute.received(7).c('hi', 'there'));
 	t.notThrows(() => substitute.received(4).c('hi', 'there'));
 	t.notThrows(() => substitute.received().c('hi', 'there'));
-	t.throws(() => substitute.received(7).c('hi', 'there'));
 });

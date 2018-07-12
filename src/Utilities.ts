@@ -5,10 +5,10 @@ export function stringifyArguments(args: any[]) {
     return args && args.length > 0 ? '[' + args + ']' : '(no arguments)';
 };
 
-export function stringifyCalls(property: ProxyPropertyContext, calls: ProxyCallRecord[]) {
+export function stringifyCalls(propertyName: string, calls: ProxyCallRecord[]) {
     let output = '';
     for (let call of calls) {
-        output += '\n-> ' + call.callCount + ' call(s) to ' + property.name;
+        output += '\n-> ' + call.callCount + ' call(s) to ' + propertyName;
         if(call.property.type === 'function')
             output += ' with arguments ' + stringifyArguments(call.property.method.arguments);
     }

@@ -1,6 +1,6 @@
 import { ObjectSubstitute } from "./Transformations";
 import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext } from "./Context";
-import { stringifyCalls } from "./Utilities";
+import { stringifyCalls, stringifyArguments } from "./Utilities";
 
 export class Substitute {
     static for<T>(): ObjectSubstitute<T> {
@@ -11,11 +11,17 @@ export class Substitute {
             apply: (_target, _thisArg, argumentsList) => {
                 const propertyContext = objectContext.property;
                 if(propertyContext.type === 'function') {
-                    console.log(objectContext.calls.actual.map(x => x.property).filter(x => x.type === 'function').map((x: any) => x.method));
-
                     const existingCall = objectContext.findActualMethodCall(propertyContext.name, argumentsList); 
                     if(!existingCall)
                         return void 0;
+
+                    const expectedCallCount = objectContext.calls.expectedCallCount;
+                    if(expectedCallCount !== void 0) {
+                        if(!this.doesExistingCallMatchCount(expectedCallCount, existingCall))
+                            throw new Error('Expected ' + (expectedCallCount === null ? 'at least one' : expectedCallCount) + ' call(s) to the method ' + existingCall.property.name + ' with arguments ' + stringifyArguments(argumentsList) + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
+
+                        return thisProxy;
+                    }
                     
                     return propertyContext.method.returnValues[existingCall.callCount++];
                 }
@@ -60,7 +66,7 @@ export class Substitute {
                         if(count === void 0)
                             count = null;
 
-                        objectContext.setExpectedCallCount(count);
+                        objectContext.calls.expectedCallCount = count;
                         return thisProxy;
                     };
                 }
@@ -71,21 +77,10 @@ export class Substitute {
                     if(existingCallProperty.type === 'function')
                         return thisProxy;
                     
-                    const expectedCall = objectContext.calls.expected;
-                    if(expectedCall && expectedCall.callCount !== void 0) {
-                        const expectedCallProperty = new ProxyPropertyContext();
-                        expectedCallProperty.access = 'read';
-                        expectedCallProperty.type = 'object';
-                        expectedCallProperty.name = property.toString();
-
-                        expectedCall.property = expectedCallProperty;
-
-                        let shouldFail = 
-                            (expectedCall.callCount === null && existingCall.callCount === 0) ||
-                            (expectedCall.callCount !== null && expectedCall.callCount !== existingCall.callCount);
-
-                        if(shouldFail)
-                            throw new Error('Expected ' + (expectedCall.callCount === null ? 'at least one' : expectedCall.callCount) + ' call(s) to the method ' + expectedCallProperty.name + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(expectedCallProperty, objectContext.calls.actual));
+                    const expectedCallCount = objectContext.calls.expectedCallCount;
+                    if(expectedCallCount !== void 0) {
+                        if(!this.doesExistingCallMatchCount(expectedCallCount, existingCall))
+                            throw new Error('Expected ' + (expectedCallCount === null ? 'at least one' : expectedCallCount) + ' call(s) to the property ' + existingCall.property.name + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
 
                         return thisProxy;
                     }
@@ -109,33 +104,10 @@ export class Substitute {
                 return thisProxy;
             }
         }) as any;
+    }
 
-        // const findExistingCall = (calls: Call[]) => findCallMatchingArguments(calls, localRecord.arguments);
-
-        // const findOrCreateExistingCall = (calls: Call[]) => {
-        //     let existingCall = findExistingCall(calls);
-        //     if (!existingCall) {
-        //         existingCall = { 
-        //             callCount: 0, 
-        //             arguments: localRecord.arguments,
-        //             name: localRecord.property.toString()
-        //         };
-        //         calls.push(existingCall);
-        //     }
-
-        //     return existingCall;
-        // };
-
-        // const assertExpectedCalls = () => {
-        //     const existingCall = findExistingCall(localRecord.calls);
-        //     if(!localRecord.arguments || localRecord.arguments.length === 0 || ((localRecord.expectedCallCount === -1 && existingCall.callCount === 0) || (localRecord.expectedCallCount !== -1 && localRecord.expectedCallCount !== existingCall.callCount))) {
-        //         throw new Error('Expected ' + (localRecord.expectedCallCount === -1 ? 'at least one' : localRecord.expectedCallCount) + ' call(s) to the property ' + localRecord.property + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(localRecord.calls));
-        //     }
-
-        //     const expectedCall = findExistingCall(localRecord.expectedCalls);
-        //     if (existingCall === null || ((expectedCall.callCount === -1 && existingCall.callCount === 0) || (expectedCall.callCount !== -1 && expectedCall.callCount !== existingCall.callCount))) {
-        //         throw new Error('Expected ' + (expectedCall.callCount === -1 ? 'at least one' : expectedCall.callCount) + ' call(s) to the method ' + localRecord.property + ' with arguments ' + stringifyArguments(expectedCall.arguments) + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(localRecord.calls));
-        //     }
-        // }
+    private static doesExistingCallMatchCount(expectedCallCount: number, existingCall) {
+        return !((expectedCallCount === null && existingCall.callCount === 0) ||
+            (expectedCallCount !== null && expectedCallCount !== existingCall.callCount));
     }
 }

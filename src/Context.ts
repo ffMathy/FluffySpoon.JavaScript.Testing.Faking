@@ -53,11 +53,10 @@ export class ProxyMethodContext {
 }
 
 export class ProxyCallRecords {
-    expected: ProxyCallRecord;
+    expectedCallCount: number;
     actual: ProxyCallRecord[];
 
     constructor() {
-        this.expected = null;
         this.actual = [];
     }
 }
@@ -71,13 +70,6 @@ export class ProxyObjectContext {
         this.property = new ProxyPropertyContext();
     }
 
-    setExpectedCallCount(count: number) {
-        const call = new ProxyCallRecord();
-        call.callCount = count;
-
-        this.calls.expected = call;
-    }
-
     findActualPropertyCall(propertyName: string, access: 'read' | 'write') {
         return this.calls.actual.filter(x => 
             x.property.name === propertyName &&
@@ -85,10 +77,31 @@ export class ProxyObjectContext {
     }
 
     findActualMethodCall(propertyName: string, args: any[]) {
-        return this.calls.actual.filter(x => 
-            x.property.type === 'function' &&
-            x.property.name === propertyName &&
-            areArgumentsEqual(x.property.method.arguments, args))[0] || null;
+        return this.calls
+            .actual
+            .filter(x => x.property.name === propertyName)
+            .filter(x => {
+                if(x.property.type !== 'function') return false;
+                
+                const args1 = x.property.method.arguments;
+                const args2 = args;
+
+                if(!args1 || !args2)
+                    return false;
+
+                if(args1.length !== args2.length)
+                    return false;
+
+                for(let i=0;i<args1.length;i++) {
+                    const arg1 = args1[i];
+                    const arg2 = args2[i];
+
+                    if(!areArgumentsEqual(arg1, arg2))
+                        return false;
+                }
+
+                return true;
+            })[0] || null;
     }
 
     addActualPropertyCall() {
