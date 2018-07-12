@@ -1,5 +1,5 @@
 # substitute.js
-More concretely named `@fluffy-spoon/substitute` on NPM is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
+`@fluffy-spoon/substitute` TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
 ## Requirements
 * `TypeScript^3.0.0`
