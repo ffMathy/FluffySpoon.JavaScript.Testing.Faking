@@ -1,5 +1,5 @@
 # substitute.js
-[`@fluffy-spoon/substitute`](https://www.npmjs.com/package/@fluffy-spoon/substitute) TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
+[`@fluffy-spoon/substitute`](https://www.npmjs.com/package/@fluffy-spoon/substitute) is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
 ## Installing
 `npm install @fluffy-spoon/substitute --save-dev`
