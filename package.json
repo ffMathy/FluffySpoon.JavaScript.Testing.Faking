@@ -14,7 +14,7 @@
         "@types/node": "latest",
         "ava": "^0.25.0",
         "ts-node": "^7.0.0",
-        "typescript": "^3.0.0-dev.20180712"
+        "typescript": "^3.0.0-rc"
     },
     "ava": {
         "files": [
