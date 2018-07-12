@@ -1,5 +1,6 @@
 import { ObjectSubstitute } from "./Transformations";
-import { ProxyObjectContext, ProxyReturnValues } from "./Context";
+import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext } from "./Context";
+import { stringifyCalls } from "./Utilities";
 
 export class Substitute {
     static for<T>(): ObjectSubstitute<T> {
@@ -8,28 +9,20 @@ export class Substitute {
         let thisProxy: ObjectSubstitute<T>;
         return thisProxy = new Proxy(() => { }, {
             apply: (_target, _thisArg, argumentsList) => {
-                if (localRecord.arguments) {
-                    const existingCall = findOrCreateExistingCall(localRecord.calls);
-                    const expectedCall = findExistingCall(localRecord.expectedCalls);
+                const propertyContext = objectContext.property;
+                if(propertyContext.type === 'function') {
+                    console.log(objectContext.calls.actual.map(x => x.property).filter(x => x.type === 'function').map((x: any) => x.method));
 
-                    console.log(existingCall, expectedCall);
+                    const existingCall = objectContext.findActualMethodCall(propertyContext.name, argumentsList); 
+                    if(!existingCall)
+                        return void 0;
                     
-                    if (expectedCall !== null) {
-
-                        assertExpectedCalls();
-                        return void 0;
-                    }
-
-                    existingCall.callCount++;
-
-                    if (!equals(localRecord.arguments, argumentsList))
-                        return void 0;
-
-                    return localRecord.shouldReturn[localRecord.currentReturnOffset++];
+                    return propertyContext.method.returnValues[existingCall.callCount++];
                 }
 
-                findOrCreateExistingCall(localRecord.expectedCalls);
-                localRecord.arguments = [...argumentsList];
+                const newMethodPropertyContext = propertyContext.promoteToMethod();
+                newMethodPropertyContext.method.arguments = argumentsList;
+                newMethodPropertyContext.method.returnValues = null;
 
                 return thisProxy;
             },
@@ -48,51 +41,70 @@ export class Substitute {
                     return (target[property] || '').toString();
 
                 if (property === 'inspect')
-                    return () => "{SubstituteJS fake}";
+                    return () => '{SubstituteJS fake}';
 
                 if (property === 'constructor')
                     return () => thisProxy;
 
-                if (property === 'returns' && objectContext.property.type === 'object')
-                    return (...args: any[]) => objectContext.property.returnValues = new ProxyReturnValues(...args);
+                const currentPropertyContext = objectContext.property;
+                if (property === 'returns') {
+                    if(currentPropertyContext.type === 'object')
+                        return (...args: any[]) => currentPropertyContext.returnValues = args;
+
+                    if(currentPropertyContext.type === 'function')
+                        return (...args: any[]) => currentPropertyContext.method.returnValues = args;
+                }
 
                 if (property === 'received') {
                     return (count?: number) => {
+                        if(count === void 0)
+                            count = null;
+
                         objectContext.setExpectedCallCount(count);
                         return thisProxy;
                     };
                 }
 
-                const existingCall = objectContext.findActualCall(property.toString(), 'read');
+                const existingCall = objectContext.findActualPropertyCall(property.toString(), 'read');
                 if(existingCall) {
-                    if(existingCall.property.type === 'function')
+                    const existingCallProperty = existingCall.property;
+                    if(existingCallProperty.type === 'function')
                         return thisProxy;
                     
-                    const expectedCall = objectContext.findExpectedCall(property.toString(), 'read');
-                    if(expectedCall && expectedCall.property.type === 'object') {
-                        //assert expected call matching.
+                    const expectedCall = objectContext.calls.expected;
+                    if(expectedCall && expectedCall.callCount !== void 0) {
+                        const expectedCallProperty = new ProxyPropertyContext();
+                        expectedCallProperty.access = 'read';
+                        expectedCallProperty.type = 'object';
+                        expectedCallProperty.name = property.toString();
+
+                        expectedCall.property = expectedCallProperty;
+
+                        let shouldFail = 
+                            (expectedCall.callCount === null && existingCall.callCount === 0) ||
+                            (expectedCall.callCount !== null && expectedCall.callCount !== existingCall.callCount);
+
+                        if(shouldFail)
+                            throw new Error('Expected ' + (expectedCall.callCount === null ? 'at least one' : expectedCall.callCount) + ' call(s) to the method ' + expectedCallProperty.name + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(expectedCallProperty, objectContext.calls.actual));
+
+                        return thisProxy;
                     }
+
+                    if(!existingCallProperty.returnValues)
+                        return void 0;
+
+                    return existingCallProperty.returnValues[existingCall.callCount++];
                 }
 
-                // if (existingCall) {
-                //     if (existingCall)
-                //         return thisProxy;
+                const newPropertyContext = new ProxyPropertyContext();
+                newPropertyContext.name = property.toString();
+                newPropertyContext.type = 'object';
+                newPropertyContext.access = 'read';
+                newPropertyContext.returnValues = null;
 
-                //     const existingCall = findOrCreateExistingCall(localRecord.calls);
+                objectContext.property = newPropertyContext;
 
-                //     const expectedCall = findExistingCall(localRecord.expectedCalls);
-                //     if (expectedCall !== null) {
-                //         assertExpectedCalls();
-                //         return void 0;
-                //     }
-
-                //     existingCall.callCount++;
-
-                //     return localRecord.shouldReturn[localRecord.currentReturnOffset++];
-                // }
-
-                // localRecord = createRecord();
-                // localRecord.property = property;
+                objectContext.addActualPropertyCall();
 
                 return thisProxy;
             }

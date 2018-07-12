@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+var Arguments_1 = require("./Arguments");
 function stringifyArguments(args) {
     return args && args.length > 0 ? '[' + args + ']' : '(no arguments)';
 }
@@ -18,6 +19,12 @@ function stringifyCalls(property, calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
+    if (a instanceof Arguments_1.Arg && b instanceof Arguments_1.Arg)
+        throw new Error('Can\'t compare two arguments of type Arg.');
+    if (a instanceof Arguments_1.Arg)
+        return a.matches(b);
+    if (b instanceof Arguments_1.Arg)
+        return b.matches(a);
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;
     if ((!a || !b) && a !== b)

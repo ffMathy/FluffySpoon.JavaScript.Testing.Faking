@@ -4,14 +4,11 @@ export declare abstract class ProxyPropertyContextBase {
     access: 'write' | 'read';
     constructor();
 }
-export declare class ProxyReturnValues {
-    valueSequence: any[];
-    currentSequenceOffset: number;
-    constructor(...args: any[]);
-}
 export declare class ProxyPropertyContext extends ProxyPropertyContextBase {
     type: 'object';
-    returnValues: ProxyReturnValues;
+    returnValues: any[];
+    constructor();
+    promoteToMethod(): ProxyMethodPropertyContext;
 }
 export declare class ProxyMethodPropertyContext extends ProxyPropertyContextBase {
     method: ProxyMethodContext;
@@ -20,7 +17,7 @@ export declare class ProxyMethodPropertyContext extends ProxyPropertyContextBase
 }
 export declare class ProxyMethodContext {
     arguments: any[];
-    returnValues: ProxyReturnValues;
+    returnValues: any[];
     constructor();
 }
 export declare class ProxyCallRecords {
@@ -29,15 +26,14 @@ export declare class ProxyCallRecords {
     constructor();
 }
 export declare class ProxyObjectContext {
-    property: ProxyPropertyContext;
+    property: ProxyPropertyContext | ProxyMethodPropertyContext;
     calls: ProxyCallRecords;
     constructor();
     setExpectedCallCount(count: number): void;
-    findExpectedCall(propertyName: string, access: 'read' | 'write'): any;
-    findActualCall(propertyName: string, access: 'read' | 'write'): ProxyCallRecord;
-    addActualCall(...args: any[]): void;
+    findActualPropertyCall(propertyName: string, access: 'read' | 'write'): ProxyCallRecord;
+    findActualMethodCall(propertyName: string, args: any[]): ProxyCallRecord;
+    addActualPropertyCall(): void;
     private findCall;
-    private addCall;
 }
 export declare class ProxyCallRecord {
     callCount: number;

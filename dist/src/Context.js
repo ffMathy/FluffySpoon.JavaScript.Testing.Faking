@@ -23,23 +23,17 @@ var ProxyPropertyContextBase = /** @class */ (function () {
     return ProxyPropertyContextBase;
 }());
 exports.ProxyPropertyContextBase = ProxyPropertyContextBase;
-var ProxyReturnValues = /** @class */ (function () {
-    function ProxyReturnValues() {
-        var args = [];
-        for (var _i = 0; _i < arguments.length; _i++) {
-            args[_i] = arguments[_i];
-        }
-        this.valueSequence = args || [];
-        this.currentSequenceOffset = 0;
-    }
-    return ProxyReturnValues;
-}());
-exports.ProxyReturnValues = ProxyReturnValues;
 var ProxyPropertyContext = /** @class */ (function (_super) {
     __extends(ProxyPropertyContext, _super);
     function ProxyPropertyContext() {
-        return _super !== null && _super.apply(this, arguments) || this;
+        return _super.call(this) || this;
     }
+    ProxyPropertyContext.prototype.promoteToMethod = function () {
+        var methodContext = this;
+        methodContext.method = new ProxyMethodContext();
+        methodContext.type = 'function';
+        return methodContext;
+    };
     return ProxyPropertyContext;
 }(ProxyPropertyContextBase));
 exports.ProxyPropertyContext = ProxyPropertyContext;
@@ -78,36 +72,31 @@ var ProxyObjectContext = /** @class */ (function () {
         call.callCount = count;
         this.calls.expected = call;
     };
-    ProxyObjectContext.prototype.findExpectedCall = function (propertyName, access) {
-        return this.findCall(this.calls.expected, propertyName, access);
-    };
-    ProxyObjectContext.prototype.findActualCall = function (propertyName, access) {
-        return this.findCall(this.calls.actual, propertyName, access);
-    };
-    ProxyObjectContext.prototype.addActualCall = function () {
-        var args = [];
-        for (var _i = 0; _i < arguments.length; _i++) {
-            args[_i] = arguments[_i];
-        }
-        this.addCall(this.calls.actual, args);
-    };
-    ProxyObjectContext.prototype.findCall = function (callList, propertyName, access) {
-        return callList.filter(function (x) {
+    ProxyObjectContext.prototype.findActualPropertyCall = function (propertyName, access) {
+        return this.calls.actual.filter(function (x) {
             return x.property.name === propertyName &&
                 x.property.access === access;
         })[0] || null;
     };
-    ProxyObjectContext.prototype.addCall = function (callList, args) {
+    ProxyObjectContext.prototype.findActualMethodCall = function (propertyName, args) {
+        return this.calls.actual.filter(function (x) {
+            return x.property.type === 'function' &&
+                x.property.name === propertyName &&
+                Utilities_1.areArgumentsEqual(x.property.method.arguments, args);
+        })[0] || null;
+    };
+    ProxyObjectContext.prototype.addActualPropertyCall = function () {
         var _this = this;
         var existingCall;
-        var existingCallCandidates = callList.filter(function (x) {
+        var existingCallCandidates = this.calls.actual.filter(function (x) {
             return x.property.name === _this.property.name &&
                 x.property.access === _this.property.access;
         });
-        if (args) {
+        var thisProperty = this.property;
+        if (thisProperty.type === 'function') {
             existingCall = existingCallCandidates.filter(function (x) {
-                return x.property.type === 'function' &&
-                    Utilities_1.areArgumentsEqual(x.property.method.arguments, args);
+                return x.property.type === thisProperty.type &&
+                    Utilities_1.areArgumentsEqual(x.property.method.arguments, thisProperty.method.arguments);
             })[0];
         }
         else {
@@ -118,8 +107,9 @@ var ProxyObjectContext = /** @class */ (function () {
             return;
         }
         var newCall = new ProxyCallRecord(this.property);
-        newCall.callCount++;
-        callList.push(newCall);
+        this.calls.actual.push(newCall);
+    };
+    ProxyObjectContext.prototype.findCall = function (callList, propertyName, access) {
     };
     return ProxyObjectContext;
 }());
