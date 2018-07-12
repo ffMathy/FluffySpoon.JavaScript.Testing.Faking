@@ -53,11 +53,22 @@ export class ProxyMethodContext {
 }
 
 export class ProxyCallRecords {
-    expectedCallCount: number;
+    expected: ProxyExpectation;
     actual: ProxyCallRecord[];
 
     constructor() {
+        this.expected = null;
         this.actual = [];
+    }
+}
+
+export class ProxyExpectation {
+    callCount: number;
+    negated: boolean;
+
+    constructor() {
+        this.callCount = void 0;
+        this.negated = false;
     }
 }
 
@@ -68,6 +79,14 @@ export class ProxyObjectContext {
     constructor() {
         this.calls = new ProxyCallRecords();
         this.property = new ProxyPropertyContext();
+    }
+
+    setExpectations(count: number, negated: boolean) {
+        const call = new ProxyExpectation();
+        call.callCount = count;
+        call.negated = negated;
+
+        this.calls.expected = call;
     }
 
     findActualPropertyCall(propertyName: string, access: 'read' | 'write') {

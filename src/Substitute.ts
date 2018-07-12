@@ -1,5 +1,5 @@
 import { ObjectSubstitute } from "./Transformations";
-import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext } from "./Context";
+import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext, ProxyCallRecord, ProxyExpectation } from "./Context";
 import { stringifyCalls, stringifyArguments } from "./Utilities";
 
 export class Substitute {
@@ -15,10 +15,10 @@ export class Substitute {
                     if(!existingCall)
                         return void 0;
 
-                    const expectedCallCount = objectContext.calls.expectedCallCount;
-                    if(expectedCallCount !== void 0) {
-                        if(!this.doesExistingCallMatchCount(expectedCallCount, existingCall))
-                            throw new Error('Expected ' + (expectedCallCount === null ? 'at least one' : expectedCallCount) + ' call(s) to the method ' + existingCall.property.name + ' with arguments ' + stringifyArguments(argumentsList) + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
+                    const expected = objectContext.calls.expected;
+                    if(expected && expected.callCount !== void 0) {
+                        if(!this.doesExistingCallMatchCount(expected, existingCall))
+                            throw new Error((expected.negated ? 'Dit not expect' : 'Expected') + ' ' + (expected.callCount === null ? 'more than 0' : expected.callCount) + ' call(s) to the method ' + existingCall.property.name + ' with arguments ' + stringifyArguments(argumentsList) + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
 
                         return thisProxy;
                     }
@@ -61,12 +61,12 @@ export class Substitute {
                         return (...args: any[]) => currentPropertyContext.method.returnValues = args;
                 }
 
-                if (property === 'received') {
+                if (property === 'received' || property === 'didNotReceive') {
                     return (count?: number) => {
                         if(count === void 0)
                             count = null;
 
-                        objectContext.calls.expectedCallCount = count;
+                        objectContext.setExpectations(count, property === 'didNotReceive');
                         return thisProxy;
                     };
                 }
@@ -77,10 +77,10 @@ export class Substitute {
                     if(existingCallProperty.type === 'function')
                         return thisProxy;
                     
-                    const expectedCallCount = objectContext.calls.expectedCallCount;
-                    if(expectedCallCount !== void 0) {
-                        if(!this.doesExistingCallMatchCount(expectedCallCount, existingCall))
-                            throw new Error('Expected ' + (expectedCallCount === null ? 'at least one' : expectedCallCount) + ' call(s) to the property ' + existingCall.property.name + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
+                    const expected = objectContext.calls.expected;
+                    if(expected && expected.callCount !== void 0) {
+                        if(!this.doesExistingCallMatchCount(expected, existingCall))
+                            throw new Error((expected.negated ? 'Dit not expect' : 'Expected') + ' ' + (expected.callCount === null ? 'more than 0' : expected.callCount) + ' call(s) to the property ' + existingCall.property.name + ', but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
 
                         return thisProxy;
                     }
@@ -106,8 +106,21 @@ export class Substitute {
         }) as any;
     }
 
-    private static doesExistingCallMatchCount(expectedCallCount: number, existingCall) {
-        return !((expectedCallCount === null && existingCall.callCount === 0) ||
-            (expectedCallCount !== null && expectedCallCount !== existingCall.callCount));
+    private static doesExistingCallMatchCount(expected: ProxyExpectation, existingCall: ProxyCallRecord) {
+        return !(
+            (
+                !expected.negated && (
+                    (expected.callCount === null && existingCall.callCount === 0) ||
+                    (expected.callCount !== null && expected.callCount !== existingCall.callCount)
+                )
+            ) ||
+            (
+                expected.negated && (
+                    (expected.callCount === null && existingCall.callCount !== 0) ||
+                    (expected.callCount !== null && expected.callCount === existingCall.callCount)
+                )
+            )
+        );
+        
     }
 }
