@@ -28,5 +28,41 @@ calculator.received().add(1, Arg.any());
 calculator.didNotReceive().add(2, 2);
 ```
 
+### Creating a mock
+`var myFakeCalculator = Substitute.for<Calculator>();`
+
+### Setting return types
+See the example below.
+
+```typescript
+//single return type
+calculator.add(1, 2).returns(4);
+console.log(calculator.add(1, 2)); //prints 4
+console.log(calculator.add(1, 2)); //prints undefined
+
+//multiple return types in sequence
+calculator.add(1, 2).returns(3, 7, 9);
+console.log(calculator.add(1, 2)); //prints 3
+console.log(calculator.add(1, 2)); //prints 7
+console.log(calculator.add(1, 2)); //prints 9
+console.log(calculator.add(1, 2)); //prints undefined
+```
+
+### Argument matchers
+There are several ways of matching arguments. You don't have to be explicit.
+
+```typescript
+import { Arg } from '@fluffy-spoon/substitute';
+
+//ignoring arguments
+calculator.add(Arg.any(), 2).returns(10);
+console.log(calculator.add(1337, 3)); //prints undefined since second argument doesn't match
+console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
+calculator.received().add(Arg.any(), 3); //will not throw since a call matches
+
+//ignoring arguments of specific type
+calculator.add(Arg.any('number'), 2).returns(10); //could also be 'array' or any string returned by the typeof operator
+```
+
 ## What is this - black magic?
 `@fluffy-spoon/substitute` works the same way that NSubstitute does, except that it uses the EcmaScript 6 `Proxy` class to produce the fakes. You can read more about how NSubstitute works to get inspired.
