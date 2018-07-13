@@ -1,4 +1,4 @@
-class Arg {
+export class Arg {
     private constructor(
         private description: string,
         private matchingFunction: (arg: any) => boolean
