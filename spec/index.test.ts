@@ -27,6 +27,7 @@ test('are arguments equal', t => {
 	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
 
 	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
+	t.true(areArgumentsEqual(Arg.is(x => x), ['foo', 'bar']));
 });
 
 test('class string field returns', t => {

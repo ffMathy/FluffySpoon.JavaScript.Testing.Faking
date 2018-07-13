@@ -35,13 +35,8 @@ export class Arg {
         });
     }
 
-    static is<T>(value: T): Arg & T
-    static is<T>(predicate: (input: T) => boolean): Arg & T
-    static is<T>(predicateOrValue: ((input: T) => boolean) | T): Arg & T {
-        if(typeof predicateOrValue === 'function')
-            return new Arg('{arg matching predicate ' + this.toStringify(predicateOrValue) + '}', predicateOrValue) as any;
-
-        return new Arg('{arg matching ' + this.toStringify(predicateOrValue) + '}', x => x === predicateOrValue) as any;
+    static is<T>(predicate: (input: T) => boolean): Arg & T {
+        return new Arg('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate) as any;
     }
 
     private static toStringify(obj: any) {
