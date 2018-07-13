@@ -5,12 +5,10 @@ export abstract class ProxyPropertyContextBase {
     name: string;
 
     type: 'function' | 'object';
-    access: 'write' | 'read';
 
     constructor() {
         this.name = null;
         this.type = null;
-        this.access = null;
     }
 }
 
@@ -89,14 +87,13 @@ export class ProxyObjectContext {
         this.calls.expected = call;
     }
 
-    findActualPropertyCall(propertyName: string, access: 'read' | 'write') {
+    findActualPropertyCall(propertyName: string) {
         return this.calls.actual.filter(x => 
-            x.property.name === propertyName &&
-            x.property.access === access)[0] || null;
+            x.property.name === propertyName)[0] || null;
     }
 
     findActualMethodCall(propertyName: string, args: any[]) {
-        return this.calls
+        let result = this.calls
             .actual
             .filter(x => x.property.name === propertyName)
             .filter(x => {
@@ -120,15 +117,16 @@ export class ProxyObjectContext {
                 }
 
                 return true;
-            })[0] || null;
+            })[0];
+
+        return result;
     }
 
     addActualPropertyCall() {
         let existingCall: ProxyCallRecord;
 
         const existingCallCandidates = this.calls.actual.filter(x => 
-            x.property.name === this.property.name &&
-            x.property.access === this.property.access);
+            x.property.name === this.property.name);
 
         const thisProperty = this.property;
         if(thisProperty.type === 'function') {
@@ -146,9 +144,8 @@ export class ProxyObjectContext {
 
         const newCall = new ProxyCallRecord(this.property);
         this.calls.actual.push(newCall);
-    }
 
-    private findCall(callList: ProxyCallRecord[], propertyName: string, access: 'read'|'write') {
+        return newCall;
     }
 }
 

@@ -6,6 +6,9 @@ export function stringifyArguments(args: any[]) {
 };
 
 export function stringifyCalls(propertyName: string, calls: ProxyCallRecord[]) {
+    if(calls.length === 0)
+        return ' (no calls)';
+
     let output = '';
     for (let call of calls) {
         output += '\n-> ' + call.callCount + ' call(s) to ' + propertyName;
@@ -18,7 +21,7 @@ export function stringifyCalls(propertyName: string, calls: ProxyCallRecord[]) {
 
 export function areArgumentsEqual(a: any, b: any) {
     if(a instanceof Arg && b instanceof Arg)
-        throw new Error('Can\'t compare two arguments of type Arg.');
+        return a.matches(b) && b.matches(a);
 
     if(a instanceof Arg) 
         return a.matches(b);

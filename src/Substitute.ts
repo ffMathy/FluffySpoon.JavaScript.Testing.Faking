@@ -11,7 +11,7 @@ export class Substitute {
             apply: (_target, _thisArg, argumentsList) => {
                 const propertyContext = objectContext.property;
                 if(propertyContext.type === 'function') {
-                    const existingCall = objectContext.findActualMethodCall(propertyContext.name, argumentsList); 
+                    let existingCall = objectContext.findActualMethodCall(propertyContext.name, argumentsList); 
                     if(!existingCall)
                         return void 0;
 
@@ -23,7 +23,8 @@ export class Substitute {
                         return thisProxy;
                     }
                     
-                    return propertyContext.method.returnValues[existingCall.callCount++];
+                    const callCount = existingCall ? existingCall.callCount++ : 0;
+                    return propertyContext.method.returnValues[callCount];
                 }
 
                 const newMethodPropertyContext = propertyContext.promoteToMethod();
@@ -31,6 +32,40 @@ export class Substitute {
                 newMethodPropertyContext.method.returnValues = null;
 
                 return thisProxy;
+            },
+            set: (_target, property, value) => {
+                const propertyContext = objectContext.property;
+                const argumentsList = [value];
+
+                let existingCall = objectContext.findActualMethodCall(propertyContext.name, argumentsList); 
+                if(existingCall && propertyContext.type === 'function') {                    
+                    const expected = objectContext.calls.expected;
+                    if(expected && expected.callCount !== void 0) {
+                        console.log('find', '\n', propertyContext, '\n', existingCall);
+                        console.log('expected', expected);
+                        
+                        if(!this.doesExistingCallMatchCount(expected, existingCall))
+                            throw new Error((expected.negated ? 'Dit not expect' : 'Expected') + ' ' + (expected.callCount === null ? 'more than 0' : expected.callCount) + ' call(s) to the property ' + existingCall.property.name + ' with value [' + value + '], but received ' + existingCall.callCount + ' of such call(s).\nOther calls received:' + stringifyCalls(existingCall.property.name, objectContext.calls.actual));
+
+                        return true;
+                    }
+                    
+                    existingCall.callCount++;
+                    return true;
+                }
+
+                const newMethodPropertyContext = new ProxyMethodPropertyContext();
+                newMethodPropertyContext.name = property.toString();
+                newMethodPropertyContext.type = 'function';
+                newMethodPropertyContext.method.arguments = argumentsList;
+                newMethodPropertyContext.method.returnValues = argumentsList;
+
+                objectContext.property = newMethodPropertyContext;
+
+                const call = objectContext.addActualPropertyCall();
+                call.callCount = 1;
+
+                return true;
             },
             get: (target, property) => {
                 if (typeof property === 'symbol') {
@@ -71,7 +106,7 @@ export class Substitute {
                     };
                 }
 
-                const existingCall = objectContext.findActualPropertyCall(property.toString(), 'read');
+                const existingCall = objectContext.findActualPropertyCall(property.toString());
                 if(existingCall) {
                     const existingCallProperty = existingCall.property;
                     if(existingCallProperty.type === 'function')
@@ -94,7 +129,6 @@ export class Substitute {
                 const newPropertyContext = new ProxyPropertyContext();
                 newPropertyContext.name = property.toString();
                 newPropertyContext.type = 'object';
-                newPropertyContext.access = 'read';
                 newPropertyContext.returnValues = null;
 
                 objectContext.property = newPropertyContext;

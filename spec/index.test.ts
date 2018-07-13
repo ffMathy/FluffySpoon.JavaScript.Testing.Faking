@@ -13,8 +13,12 @@ export class Example {
 		return 1337;
 	}
 
-	set v(x) {
+	set v(x: string) {
 		console.log('define: ' + x);
+	}
+
+	foo(): void {
+		console.log('stuff');
 	}
 }
 
@@ -29,7 +33,14 @@ test('are arguments equal', t => {
 	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
 });
 
-test('class string field returns', t => {
+test('class void returns', t => {
+	substitute.foo().returns(void 0, null);
+
+	t.deepEqual(substitute.foo(), void 0);
+	t.deepEqual(substitute.foo(), null);
+});
+
+test('class string field get returns', t => {
 	substitute.a.returns("foo", "bar");
 
 	t.deepEqual(substitute.a, 'foo');
@@ -38,9 +49,25 @@ test('class string field returns', t => {
 	t.deepEqual(substitute.a, void 0);
 });
 
-test('class string field received', t => {
-	substitute.a.returns("foo", "bar");
+test('class string field set received', t => {
+	substitute.v = 'hello';
+	substitute.v = 'hello';
+	substitute.v = 'world';
+	substitute.v = null;
+	substitute.v = undefined;
 
+	t.throws(() => substitute.received(2).v = Arg.any());
+	t.throws(() => substitute.received(1).v = Arg.any());
+	t.throws(() => substitute.received(1).v = Arg.is(x => x.indexOf('ll') > -1));
+	t.throws(() => substitute.received(3).v = 'hello');
+	t.notThrows(() => substitute.received().v = Arg.any());
+	t.notThrows(() => substitute.received(5).v = Arg.any());
+	t.notThrows(() => substitute.received().v = 'hello');
+	t.notThrows(() => substitute.received(2).v = 'hello');
+	t.notThrows(() => substitute.received(2).v = Arg.is(x => x.indexOf('ll') > -1));
+});
+
+test('class string field get received', t => {
 	void substitute.a;
 	void substitute.a;
 	void substitute.a;
@@ -62,8 +89,6 @@ test('class method returns', t => {
 });
 
 test('class method received', t => {
-	substitute.c("hi", "there").returns("blah", "haha");
-	
 	void substitute.c("hi", "there");
 	void substitute.c("hi", "the1re");
 	void substitute.c("hi", "there");
