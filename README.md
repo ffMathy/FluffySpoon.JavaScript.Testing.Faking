@@ -58,10 +58,9 @@ import { Arg } from '@fluffy-spoon/substitute';
 calculator.add(Arg.any(), 2).returns(10);
 console.log(calculator.add(1337, 3)); //prints undefined since second argument doesn't match
 console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
-calculator.received().add(Arg.any(), 3); //will not throw since a call matches
 
-//ignoring arguments of specific type
-calculator.add(Arg.any('number'), 2).returns(10); //could also be 'array' or any string returned by the typeof operator
+//received call with first arg 1 and second arg less than 0
+calculator.received().add(1, Arg.is<number>(x => x < 0));
 ```
 
 ## What is this - black magic?
