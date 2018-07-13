@@ -28,5 +28,14 @@ calculator.received().add(1, Arg.any());
 calculator.didNotReceive().add(2, 2);
 ```
 
+## Why require TypeScript 3?
+Let's say I want to mock the type T, so I create a function `function mock<T>(): T`. If I then passed the object `{ doFooWithOneArgument: (input: string) => boolean, doFooWithTwoArguments: (input1: string, input2: boolean) => string }` to it, I would get a strong-typed variant of it in return.
+
+That's all good, but if I wanted to map that type into `{ doFooWithOneArgument: (whateverTheOneParameterTypeWas) => boolean, doWithTwoArguments: (whateverTheTwoParameterTypesWas) => string } & { returns: (...returnValuesInSequence: whateverTheReturnTypeOfDoFooWas[]) => void }`, I wouldn't be able to do it in a fully strong-typed manner, since there would be no way of expressing `whateverTheOneParameterTypeWas` and `whateverTheTwoParameterTypesWas` in a mapped type, and they would have to be defined as `...args: any[]`. However, now there's "Generic rest parameters" that can express this, as seen in [the example in the announcement post](https://github.com/Microsoft/TypeScript/wiki/What's-new-in-TypeScript#generic-rest-parameters).
+
+See [this example TypeScript file](https://github.com/ffMathy/FluffySpoon.JavaScript.Testing/blob/master/src/Transformations.ts) for an example of how the type is defined. For each property of the original type given, I then handle it differently whether or not it's a function or a property by using the `infer` keyword. If it's a function, I then infer the arguments and its return type and re-express them in a strong-typed manner, but retaining the type safety of the arguments given. This was not possible before.
+
+The end-result of this is that I can do something like `myFake.doWithTwoArguments('foo', false).returns("firstThis", "thenThis", "andThenThis")`, where both `'foo'` and `false` are strong-typed.
+
 ## What is this - black magic?
 `@fluffy-spoon/substitute` works the same way that NSubstitute does, except that it uses the EcmaScript 6 `Proxy` class to produce the fakes. You can read more about how NSubstitute works to get inspired.
