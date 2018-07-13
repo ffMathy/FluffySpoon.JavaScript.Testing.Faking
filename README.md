@@ -60,7 +60,7 @@ console.log(calculator.add(1337, 3)); //prints undefined since second argument d
 console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
 
 //received call with first arg 1 and second arg less than 0
-calculator.received().add(1, Arg.is<number>(x => x < 0));
+calculator.received().add(1, Arg.is(x => x < 0));
 ```
 
 ## What is this - black magic?
