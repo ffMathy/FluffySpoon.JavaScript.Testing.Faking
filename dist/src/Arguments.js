@@ -17,17 +17,17 @@ var Arg = /** @class */ (function () {
     Arg.any = function (type) {
         var description = !type ? '{any arg}' : '{arg matching ' + type + '}';
         return new Arg(description, function (x) {
-            if (typeof type !== 'string')
+            if (typeof type === 'string')
+                return true;
+            if (typeof type === 'undefined')
                 return true;
             if (type === 'array')
                 return x && Array.isArray(x);
             return typeof x === type;
         });
     };
-    Arg.is = function (predicateOrValue) {
-        if (typeof predicateOrValue === 'function')
-            return new Arg('{arg matching predicate ' + this.toStringify(predicateOrValue) + '}', predicateOrValue);
-        return new Arg('{arg matching ' + this.toStringify(predicateOrValue) + '}', function (x) { return x === predicateOrValue; });
+    Arg.is = function (predicate) {
+        return new Arg('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate);
     };
     Arg.toStringify = function (obj) {
         if (typeof obj.inspect === 'function')
