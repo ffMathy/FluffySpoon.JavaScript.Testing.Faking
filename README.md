@@ -28,7 +28,21 @@ calculator.received().add(1, Arg.any());
 calculator.didNotReceive().add(2, 2);
 ```
 
-## Why require TypeScript 3?
+### Creating a mock
+`var myFakeCalculator = Substitute.for<Calculator>();`
+
+### Setting return types
+Multiple return types can be set in sequence. Consider the example below.
+
+```
+myFakeCalculator.add(1, 2).returns(3, 7, 9);
+console.log(myFakeCalculator.add(1, 2)); //prints 3
+console.log(myFakeCalculator.add(1, 2)); //prints 7
+console.log(myFakeCalculator.add(1, 2)); //prints 9
+console.log(myFakeCalculator.add(1, 2)); //prints undefined
+```
+
+## Why TypeScript 3?
 Let's say I want to mock the type T, so I create a function `function mock<T>(): T`. If I then passed the object `{ doFooWithOneArgument: (input: string) => boolean, doFooWithTwoArguments: (input1: string, input2: boolean) => string }` to it, I would get a strong-typed variant of it in return.
 
 That's all good, but if I wanted to map that type into `{ doFooWithOneArgument: (whateverTheOneParameterTypeWas) => boolean, doWithTwoArguments: (whateverTheTwoParameterTypesWas) => string } & { returns: (...returnValuesInSequence: whateverTheReturnTypeOfDoFooWas[]) => void }`, I wouldn't be able to do it in a fully strong-typed manner, since there would be no way of expressing `whateverTheOneParameterTypeWas` and `whateverTheTwoParameterTypesWas` in a mapped type, and they would have to be defined as `...args: any[]`. However, now there's "Generic rest parameters" that can express this, as seen in [the example in the announcement post](https://github.com/Microsoft/TypeScript/wiki/What's-new-in-TypeScript#generic-rest-parameters).
