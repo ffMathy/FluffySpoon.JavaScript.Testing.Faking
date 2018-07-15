@@ -1,7 +1,6 @@
 import { ObjectSubstitute } from "./Transformations";
 import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext, ProxyCallRecord, ProxyExpectation } from "./Context";
 import { stringifyCalls, stringifyArguments } from "./Utilities";
-import { access } from "fs";
 
 export class Substitute {
     static for<T>(): ObjectSubstitute<T> {

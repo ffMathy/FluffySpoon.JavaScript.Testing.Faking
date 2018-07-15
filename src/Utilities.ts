@@ -1,5 +1,5 @@
-import { ProxyPropertyContext, ProxyCallRecord } from "./Context";
-import { Arg, Argument } from "./Arguments";
+import { ProxyCallRecord } from "./Context";
+import { Argument } from "./Arguments";
 
 export function stringifyArguments(args: any[]) {
     return args && args.length > 0 ? '[' + args + ']' : '(no arguments)';
