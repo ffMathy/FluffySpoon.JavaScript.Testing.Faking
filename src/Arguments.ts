@@ -1,32 +1,14 @@
 export class Arg {
-    private constructor(
-        private description: string,
-        private matchingFunction: (arg: any) => boolean
-    ) {
-    }
-
-    matches(arg: any) {
-        return this.matchingFunction(arg);
-    }
-
-    toString() {
-        return this.description;
-    }
-
-    inspect() {
-        return this.description;
-    }
-
     static any()
-    static any<T extends 'string'>(type: T): Arg & string
-    static any<T extends 'number'>(type: T): Arg & number
-    static any<T extends 'boolean'>(type: T): Arg & boolean
-    static any<T extends 'array'>(type: T): Arg & any[]
-    static any<T extends 'function'>(type: T): Arg & Function
+    static any<T extends 'string'>(type: T): Argument<string> & string
+    static any<T extends 'number'>(type: T): Argument<number> & number
+    static any<T extends 'boolean'>(type: T): Argument<boolean> & boolean
+    static any<T extends 'array'>(type: T): Argument<any[]> & any[]
+    static any<T extends 'function'>(type: T): Argument<Function> & Function
     static any<T extends 'string'|'number'|'boolean'|'symbol'|'undefined'|'object'|'function'|'array'>(type: T)
-    static any(type?: string): any {
+    static any(type?: string): Argument<any> & any {
         const description = !type ? '{any arg}' : '{arg matching ' + type + '}';
-        return new Arg(description, x => {
+        return new Argument<any>(description, x => {
             if(typeof type === 'string')
                 return true;
 
@@ -40,8 +22,8 @@ export class Arg {
         });
     }
 
-    static is<T>(predicate: (input: T) => boolean): Arg & T {
-        return new Arg('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate) as any;
+    static is<T>(predicate: (input: T) => boolean): Argument<T> & T {
+        return new Argument<T>('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate) as any;
     }
 
     private static toStringify(obj: any) {
@@ -52,5 +34,25 @@ export class Arg {
             return obj.toString();
 
         return obj;
+    }
+}
+
+export class Argument<T> {
+    constructor(
+        private description: string,
+        private matchingFunction: (arg: T) => boolean
+    ) {
+    }
+
+    matches(arg: T) {
+        return this.matchingFunction(arg);
+    }
+
+    toString() {
+        return this.description;
+    }
+
+    inspect() {
+        return this.description;
     }
 }

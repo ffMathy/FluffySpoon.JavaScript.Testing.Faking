@@ -1,7 +1,6 @@
 export declare abstract class ProxyPropertyContextBase {
     name: string;
     type: 'function' | 'object';
-    access: 'write' | 'read';
     constructor();
 }
 export declare class ProxyPropertyContext extends ProxyPropertyContextBase {
@@ -28,6 +27,8 @@ export declare class ProxyCallRecords {
 export declare class ProxyExpectation {
     callCount: number;
     negated: boolean;
+    propertyName: string;
+    arguments: Array<any>;
     constructor();
 }
 export declare class ProxyObjectContext {
@@ -35,10 +36,10 @@ export declare class ProxyObjectContext {
     calls: ProxyCallRecords;
     constructor();
     setExpectations(count: number, negated: boolean): void;
-    findActualPropertyCall(propertyName: string, access: 'read' | 'write'): ProxyCallRecord;
-    findActualMethodCall(propertyName: string, args: any[]): ProxyCallRecord;
-    addActualPropertyCall(): void;
-    private findCall;
+    findActualPropertyCalls(propertyName: string): ProxyCallRecord[];
+    findActualMethodCalls(propertyName: string, args: any[]): ProxyCallRecord[];
+    getLastCall(): ProxyCallRecord;
+    addActualPropertyCall(): ProxyCallRecord;
 }
 export declare class ProxyCallRecord {
     callCount: number;

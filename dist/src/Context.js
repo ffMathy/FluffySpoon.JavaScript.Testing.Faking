@@ -18,7 +18,6 @@ var ProxyPropertyContextBase = /** @class */ (function () {
     function ProxyPropertyContextBase() {
         this.name = null;
         this.type = null;
-        this.access = null;
     }
     return ProxyPropertyContextBase;
 }());
@@ -81,14 +80,13 @@ var ProxyObjectContext = /** @class */ (function () {
         call.negated = negated;
         this.calls.expected = call;
     };
-    ProxyObjectContext.prototype.findActualPropertyCall = function (propertyName, access) {
+    ProxyObjectContext.prototype.findActualPropertyCalls = function (propertyName) {
         return this.calls.actual.filter(function (x) {
-            return x.property.name === propertyName &&
-                x.property.access === access;
-        })[0] || null;
+            return x.property.name === propertyName;
+        });
     };
-    ProxyObjectContext.prototype.findActualMethodCall = function (propertyName, args) {
-        return this.calls
+    ProxyObjectContext.prototype.findActualMethodCalls = function (propertyName, args) {
+        var result = this.calls
             .actual
             .filter(function (x) { return x.property.name === propertyName; })
             .filter(function (x) {
@@ -107,14 +105,17 @@ var ProxyObjectContext = /** @class */ (function () {
                     return false;
             }
             return true;
-        })[0] || null;
+        });
+        return result;
+    };
+    ProxyObjectContext.prototype.getLastCall = function () {
+        return this.calls.actual[this.calls.actual.length - 1];
     };
     ProxyObjectContext.prototype.addActualPropertyCall = function () {
         var _this = this;
         var existingCall;
         var existingCallCandidates = this.calls.actual.filter(function (x) {
-            return x.property.name === _this.property.name &&
-                x.property.access === _this.property.access;
+            return x.property.name === _this.property.name;
         });
         var thisProperty = this.property;
         if (thisProperty.type === 'function') {
@@ -132,8 +133,7 @@ var ProxyObjectContext = /** @class */ (function () {
         }
         var newCall = new ProxyCallRecord(this.property);
         this.calls.actual.push(newCall);
-    };
-    ProxyObjectContext.prototype.findCall = function (callList, propertyName, access) {
+        return newCall;
     };
     return ProxyObjectContext;
 }());

@@ -6,11 +6,15 @@ function stringifyArguments(args) {
 }
 exports.stringifyArguments = stringifyArguments;
 ;
-function stringifyCalls(propertyName, calls) {
+function stringifyCalls(calls) {
+    calls = calls.filter(function (x) { return x.callCount > 0; });
+    if (calls.length === 0)
+        return '(no calls)';
     var output = '';
     for (var _i = 0, calls_1 = calls; _i < calls_1.length; _i++) {
         var call = calls_1[_i];
-        output += '\n-> ' + call.callCount + ' call(s) to ' + propertyName;
+        output += '\n-> ' + call.callCount + ' call';
+        output += call.callCount !== 1 ? 's' : '';
         if (call.property.type === 'function')
             output += ' with arguments ' + stringifyArguments(call.property.method.arguments);
     }
@@ -19,11 +23,11 @@ function stringifyCalls(propertyName, calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
-    if (a instanceof Arguments_1.Arg && b instanceof Arguments_1.Arg)
-        throw new Error('Can\'t compare two arguments of type Arg.');
-    if (a instanceof Arguments_1.Arg)
+    if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument)
+        return a.matches(b) && b.matches(a);
+    if (a instanceof Arguments_1.Argument)
         return a.matches(b);
-    if (b instanceof Arguments_1.Arg)
+    if (b instanceof Arguments_1.Argument)
         return b.matches(a);
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;

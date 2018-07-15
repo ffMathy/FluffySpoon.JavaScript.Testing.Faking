@@ -1,22 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var Arg = /** @class */ (function () {
-    function Arg(description, matchingFunction) {
-        this.description = description;
-        this.matchingFunction = matchingFunction;
+    function Arg() {
     }
-    Arg.prototype.matches = function (arg) {
-        return this.matchingFunction(arg);
-    };
-    Arg.prototype.toString = function () {
-        return this.description;
-    };
-    Arg.prototype.inspect = function () {
-        return this.description;
-    };
     Arg.any = function (type) {
         var description = !type ? '{any arg}' : '{arg matching ' + type + '}';
-        return new Arg(description, function (x) {
+        return new Argument(description, function (x) {
             if (typeof type === 'string')
                 return true;
             if (typeof type === 'undefined')
@@ -27,7 +16,7 @@ var Arg = /** @class */ (function () {
         });
     };
     Arg.is = function (predicate) {
-        return new Arg('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate);
+        return new Argument('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate);
     };
     Arg.toStringify = function (obj) {
         if (typeof obj.inspect === 'function')
@@ -39,4 +28,21 @@ var Arg = /** @class */ (function () {
     return Arg;
 }());
 exports.Arg = Arg;
+var Argument = /** @class */ (function () {
+    function Argument(description, matchingFunction) {
+        this.description = description;
+        this.matchingFunction = matchingFunction;
+    }
+    Argument.prototype.matches = function (arg) {
+        return this.matchingFunction(arg);
+    };
+    Argument.prototype.toString = function () {
+        return this.description;
+    };
+    Argument.prototype.inspect = function () {
+        return this.description;
+    };
+    return Argument;
+}());
+exports.Argument = Argument;
 //# sourceMappingURL=Arguments.js.map

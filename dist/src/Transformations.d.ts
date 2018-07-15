@@ -1,7 +1,6 @@
-export declare type FunctionSubstitute<F extends any[], T> = (...args: F) => (T & {
-    returns: (...args: T[]) => void;
-});
-export declare type PropertySubstitute<T> = T & {
+export declare type FunctionSubstitute<F extends any[], T> = (...args: F) => (T & MockObjectMixin<T>);
+export declare type PropertySubstitute<T> = T & Partial<MockObjectMixin<T>>;
+declare type MockObjectMixin<T> = {
     returns: (...args: T[]) => void;
 };
 export declare type ObjectSubstitute<T extends Object> = ObjectSubstituteTransformation<T> & {

@@ -24,6 +24,9 @@ var Example = /** @class */ (function () {
         enumerable: true,
         configurable: true
     });
+    Example.prototype.foo = function () {
+        console.log('stuff');
+    };
     return Example;
 }());
 exports.Example = Example;
@@ -35,15 +38,35 @@ ava_1.default('are arguments equal', function (t) {
     t.false(Utilities_1.areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
     t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), ['foo', 'bar']));
 });
-ava_1.default('class string field returns', function (t) {
+ava_1.default('class void returns', function (t) {
+    substitute.foo().returns(void 0, null);
+    t.deepEqual(substitute.foo(), void 0);
+    t.deepEqual(substitute.foo(), null);
+});
+ava_1.default('class string field get returns', function (t) {
     substitute.a.returns("foo", "bar");
     t.deepEqual(substitute.a, 'foo');
     t.deepEqual(substitute.a, 'bar');
     t.deepEqual(substitute.a, void 0);
     t.deepEqual(substitute.a, void 0);
 });
-ava_1.default('class string field received', function (t) {
-    substitute.a.returns("foo", "bar");
+ava_1.default('class string field set received', function (t) {
+    substitute.v = undefined;
+    substitute.v = null;
+    substitute.v = 'hello';
+    substitute.v = 'hello';
+    substitute.v = 'world';
+    t.throws(function () { return substitute.received(2).v = Index_1.Arg.any(); });
+    t.throws(function () { return substitute.received(1).v = Index_1.Arg.any(); });
+    t.throws(function () { return substitute.received(1).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
+    t.throws(function () { return substitute.received(3).v = 'hello'; });
+    t.notThrows(function () { return substitute.received().v = Index_1.Arg.any(); });
+    t.notThrows(function () { return substitute.received(5).v = Index_1.Arg.any(); });
+    t.notThrows(function () { return substitute.received().v = 'hello'; });
+    t.notThrows(function () { return substitute.received(2).v = 'hello'; });
+    t.notThrows(function () { return substitute.received(2).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
+});
+ava_1.default('class string field get received', function (t) {
     void substitute.a;
     void substitute.a;
     void substitute.a;
@@ -61,7 +84,6 @@ ava_1.default('class method returns', function (t) {
     t.deepEqual(substitute.c("hi", "there"), void 0);
 });
 ava_1.default('class method received', function (t) {
-    substitute.c("hi", "there").returns("blah", "haha");
     void substitute.c("hi", "there");
     void substitute.c("hi", "the1re");
     void substitute.c("hi", "there");
