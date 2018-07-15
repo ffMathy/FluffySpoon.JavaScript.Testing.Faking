@@ -1,15 +1,12 @@
-# substitute.js
 [`@fluffy-spoon/substitute`](https://www.npmjs.com/package/@fluffy-spoon/substitute) is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
-## Installing
+# Installing
 `npm install @fluffy-spoon/substitute --save-dev`
 
-## Requirements
+# Requirements
 * `TypeScript^3.0.0`
 
-## Usage
-Experience full strong-typing of your fakes all the way, and let the TypeScript compiler help with all the dirty work! All methods below have full strong typing all around, even when creating a fake from an interface!
-
+# Usage
 ```typescript
 import { Substitute, Arg } from '@fluffy-spoon/substitute';
 
@@ -28,11 +25,11 @@ calculator.received().add(1, Arg.any());
 calculator.didNotReceive().add(2, 2);
 ```
 
-### Creating a mock
-`var myFakeCalculator = Substitute.for<Calculator>();`
+## Creating a mock
+`var calculator = Substitute.for<Calculator>();`
 
-### Setting return types
-See the example below.
+## Setting return types
+See the example below. The same syntax also applies to properties and fields.
 
 ```typescript
 //single return type
@@ -48,8 +45,8 @@ console.log(calculator.add(1, 2)); //prints 9
 console.log(calculator.add(1, 2)); //prints undefined
 ```
 
-### Argument matchers
-There are several ways of matching arguments. You don't have to be explicit.
+## Argument matchers
+There are several ways of matching arguments. The examples below also applies to properties and fields.
 
 ```typescript
 import { Arg } from '@fluffy-spoon/substitute';
@@ -62,6 +59,3 @@ console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
 //received call with first arg 1 and second arg less than 0
 calculator.received().add(1, Arg.is(x => x < 0));
 ```
-
-## What is this - black magic?
-`@fluffy-spoon/substitute` works the same way that NSubstitute does, except that it uses the EcmaScript 6 `Proxy` class to produce the fakes. You can read more about how NSubstitute works to get inspired.
