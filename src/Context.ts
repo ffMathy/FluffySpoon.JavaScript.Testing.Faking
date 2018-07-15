@@ -63,6 +63,8 @@ export class ProxyCallRecords {
 export class ProxyExpectation {
     callCount: number;
     negated: boolean;
+    propertyName: string;
+    arguments: Array<any>;
 
     constructor() {
         this.callCount = void 0;
@@ -87,12 +89,12 @@ export class ProxyObjectContext {
         this.calls.expected = call;
     }
 
-    findActualPropertyCall(propertyName: string) {
+    findActualPropertyCalls(propertyName: string) {
         return this.calls.actual.filter(x => 
-            x.property.name === propertyName)[0] || null;
+            x.property.name === propertyName);
     }
 
-    findActualMethodCall(propertyName: string, args: any[]) {
+    findActualMethodCalls(propertyName: string, args: any[]) {
         let result = this.calls
             .actual
             .filter(x => x.property.name === propertyName)
@@ -117,9 +119,13 @@ export class ProxyObjectContext {
                 }
 
                 return true;
-            })[0];
+            });
 
         return result;
+    }
+
+    getLastCall() {
+        return this.calls.actual[this.calls.actual.length-1];
     }
 
     addActualPropertyCall() {

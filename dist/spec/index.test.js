@@ -51,20 +51,20 @@ ava_1.default('class string field get returns', function (t) {
     t.deepEqual(substitute.a, void 0);
 });
 ava_1.default('class string field set received', function (t) {
+    substitute.v = undefined;
+    substitute.v = null;
     substitute.v = 'hello';
     substitute.v = 'hello';
     substitute.v = 'world';
-    substitute.v = null;
-    substitute.v = undefined;
     t.throws(function () { return substitute.received(2).v = Index_1.Arg.any(); });
     t.throws(function () { return substitute.received(1).v = Index_1.Arg.any(); });
-    t.throws(function () { return substitute.received(1).v = Index_1.Arg.is(function (x) { return x.indexOf('ll') > -1; }); });
+    t.throws(function () { return substitute.received(1).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
     t.throws(function () { return substitute.received(3).v = 'hello'; });
     t.notThrows(function () { return substitute.received().v = Index_1.Arg.any(); });
     t.notThrows(function () { return substitute.received(5).v = Index_1.Arg.any(); });
     t.notThrows(function () { return substitute.received().v = 'hello'; });
     t.notThrows(function () { return substitute.received(2).v = 'hello'; });
-    t.notThrows(function () { return substitute.received(2).v = Index_1.Arg.is(function (x) { return x.indexOf('ll') > -1; }); });
+    t.notThrows(function () { return substitute.received(2).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
 });
 ava_1.default('class string field get received', function (t) {
     void substitute.a;

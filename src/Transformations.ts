@@ -15,7 +15,3 @@ type ObjectSubstituteTransformation<T extends Object> = {
     T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> :
     PropertySubstitute<T[P]>;
 }
-
-type MockMethodMixin<TReturnType> = {
-    returns: (...args: TReturnType[]) => void;
-}

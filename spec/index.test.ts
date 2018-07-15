@@ -50,21 +50,21 @@ test('class string field get returns', t => {
 });
 
 test('class string field set received', t => {
+	substitute.v = undefined;
+	substitute.v = null;
 	substitute.v = 'hello';
 	substitute.v = 'hello';
 	substitute.v = 'world';
-	substitute.v = null;
-	substitute.v = undefined;
 
 	t.throws(() => substitute.received(2).v = Arg.any());
 	t.throws(() => substitute.received(1).v = Arg.any());
-	t.throws(() => substitute.received(1).v = Arg.is(x => x.indexOf('ll') > -1));
+	t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1));
 	t.throws(() => substitute.received(3).v = 'hello');
 	t.notThrows(() => substitute.received().v = Arg.any());
 	t.notThrows(() => substitute.received(5).v = Arg.any());
 	t.notThrows(() => substitute.received().v = 'hello');
 	t.notThrows(() => substitute.received(2).v = 'hello');
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => x.indexOf('ll') > -1));
+	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
 });
 
 test('class string field get received', t => {

@@ -1,18 +1,22 @@
 import { ProxyPropertyContext, ProxyCallRecord } from "./Context";
-import { Arg } from "./Arguments";
+import { Arg, Argument } from "./Arguments";
 
 export function stringifyArguments(args: any[]) {
     return args && args.length > 0 ? '[' + args + ']' : '(no arguments)';
 };
 
-export function stringifyCalls(propertyName: string, calls: ProxyCallRecord[]) {
+export function stringifyCalls(calls: ProxyCallRecord[]) {
+    calls = calls.filter(x => x.callCount > 0);
+
     if(calls.length === 0)
-        return ' (no calls)';
+        return '(no calls)';
 
     let output = '';
     for (let call of calls) {
-        output += '\n-> ' + call.callCount + ' call(s) to ' + propertyName;
-        if(call.property.type === 'function')
+        output += '\n-> ' + call.callCount + ' call';
+        output += call.callCount !== 1 ? 's' : '';
+
+        if(call.property.type === 'function') 
             output += ' with arguments ' + stringifyArguments(call.property.method.arguments);
     }
 
@@ -20,13 +24,13 @@ export function stringifyCalls(propertyName: string, calls: ProxyCallRecord[]) {
 };
 
 export function areArgumentsEqual(a: any, b: any) {
-    if(a instanceof Arg && b instanceof Arg)
+    if(a instanceof Argument && b instanceof Argument)
         return a.matches(b) && b.matches(a);
 
-    if(a instanceof Arg) 
+    if(a instanceof Argument) 
         return a.matches(b);
 
-    if(b instanceof Arg)
+    if(b instanceof Argument)
         return b.matches(a);
 
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))

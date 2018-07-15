@@ -80,12 +80,12 @@ var ProxyObjectContext = /** @class */ (function () {
         call.negated = negated;
         this.calls.expected = call;
     };
-    ProxyObjectContext.prototype.findActualPropertyCall = function (propertyName) {
+    ProxyObjectContext.prototype.findActualPropertyCalls = function (propertyName) {
         return this.calls.actual.filter(function (x) {
             return x.property.name === propertyName;
-        })[0] || null;
+        });
     };
-    ProxyObjectContext.prototype.findActualMethodCall = function (propertyName, args) {
+    ProxyObjectContext.prototype.findActualMethodCalls = function (propertyName, args) {
         var result = this.calls
             .actual
             .filter(function (x) { return x.property.name === propertyName; })
@@ -105,8 +105,11 @@ var ProxyObjectContext = /** @class */ (function () {
                     return false;
             }
             return true;
-        })[0];
+        });
         return result;
+    };
+    ProxyObjectContext.prototype.getLastCall = function () {
+        return this.calls.actual[this.calls.actual.length - 1];
     };
     ProxyObjectContext.prototype.addActualPropertyCall = function () {
         var _this = this;
