@@ -59,3 +59,10 @@ console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
 //received call with first arg 1 and second arg less than 0
 calculator.received().add(1, Arg.is(x => x < 0));
 ```
+
+# Benefits over other mocking libraries
+- Easier-to-understand fluent syntax.
+- No need to cast to `any` in certain places (for instance, when overriding read-only properties) due to the `myProperty.returns(...)` syntax.
+- Doesn't weigh much.
+- Produces very clean and descriptive error messages. Try it out - you'll love it.
+- Doesn't rely on object instances - you can produce a strong-typed fake from nothing, ensuring that everything is mocked.
