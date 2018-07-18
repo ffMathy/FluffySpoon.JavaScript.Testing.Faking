@@ -1,8 +1,8 @@
 import { areArgumentsEqual } from "./Utilities";
-import { ENGINE_METHOD_DIGESTS } from "constants";
 
 export abstract class ProxyPropertyContextBase {
     name: string;
+    mimicks: MimickInstanceContext|MimickObjectContext;
 
     type: 'function' | 'object';
 
@@ -12,8 +12,15 @@ export abstract class ProxyPropertyContextBase {
     }
 }
 
+export abstract class MimickContextBase {
+    type: 'instance' | 'function';
+}
+
+
+
 export class ProxyPropertyContext extends ProxyPropertyContextBase {
     type: 'object';
+    
     returnValues: any[];
 
     constructor() {
@@ -143,15 +150,12 @@ export class ProxyObjectContext {
             existingCall = existingCallCandidates[0];
         }
             
-        if(existingCall) {
-            existingCall.callCount++;
-            return;
+        if(!existingCall) {
+            existingCall = new ProxyCallRecord(this.property);
+            this.calls.actual.push(existingCall);
         }
 
-        const newCall = new ProxyCallRecord(this.property);
-        this.calls.actual.push(newCall);
-
-        return newCall;
+        existingCall.callCount++;
     }
 }
 

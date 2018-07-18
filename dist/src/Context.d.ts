@@ -1,5 +1,6 @@
 export declare abstract class ProxyPropertyContextBase {
     name: string;
+    mimicks: Function | Object;
     type: 'function' | 'object';
     constructor();
 }
@@ -39,7 +40,7 @@ export declare class ProxyObjectContext {
     findActualPropertyCalls(propertyName: string): ProxyCallRecord[];
     findActualMethodCalls(propertyName: string, args: any[]): ProxyCallRecord[];
     getLastCall(): ProxyCallRecord;
-    addActualPropertyCall(): ProxyCallRecord;
+    addActualPropertyCall(): void;
 }
 export declare class ProxyCallRecord {
     callCount: number;

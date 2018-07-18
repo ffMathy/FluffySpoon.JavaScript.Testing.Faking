@@ -25,14 +25,24 @@ var Example = /** @class */ (function () {
         configurable: true
     });
     Example.prototype.foo = function () {
-        console.log('stuff');
+        return 'stuff';
     };
     return Example;
 }());
 exports.Example = Example;
+var instance;
 var substitute;
 ava_1.default.beforeEach(function () {
+    instance = new Example();
     substitute = Index_1.Substitute.for();
+});
+ava_1.default('partial mocks using function mimicks', function (t) {
+    substitute.c.mimicks(instance.c);
+    t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
+});
+ava_1.default('partial mocks using property instance mimicks', function (t) {
+    substitute.d.mimicks(instance);
+    t.deepEqual(substitute.d, 1337);
 });
 ava_1.default('are arguments equal', function (t) {
     t.false(Utilities_1.areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));

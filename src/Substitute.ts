@@ -3,6 +3,7 @@ import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext, P
 import { stringifyCalls, stringifyArguments } from "./Utilities";
 
 export class Substitute {
+
     static for<T>(): ObjectSubstitute<T> {
         const objectContext = new ProxyObjectContext();
 
@@ -10,6 +11,7 @@ export class Substitute {
         return thisProxy = new Proxy(() => { }, {
             apply: (_target, _thisArg, argumentsList) => {
                 const propertyContext = objectContext.property;
+
                 if (propertyContext.type === 'function') {
                     let existingCalls = objectContext.findActualMethodCalls(propertyContext.name, argumentsList);
                     if (existingCalls.length === 0)
@@ -25,10 +27,11 @@ export class Substitute {
                     }
 
                     const existingCall = existingCalls[0];
+                    if(existingCall)
+                        existingCall.callCount++;
+
                     if(!existingCall)
                         return propertyContext.method.returnValues[0];
-
-                    existingCall.callCount++;
 
                     if(propertyContext.method.returnValues)
                         return propertyContext.method.returnValues[existingCall.callCount - 1];
@@ -71,8 +74,7 @@ export class Substitute {
 
                 objectContext.property = newMethodPropertyContext;
 
-                const call = objectContext.addActualPropertyCall();
-                call.callCount = 1;
+                objectContext.addActualPropertyCall();
 
                 return true;
             },
@@ -100,17 +102,40 @@ export class Substitute {
                 if (property === 'returns') {
                     if (currentPropertyContext.type === 'object') {
                         return (...args: any[]) => {
-                            currentPropertyContext.returnValues = args;
+                            if(currentPropertyContext.mimicks)
+                                currentPropertyContext.mimicks = void 0;
+
                             objectContext.getLastCall().callCount--;
+                            currentPropertyContext.returnValues = args;
                         };
                     }
 
                     if (currentPropertyContext.type === 'function') {
                         return (...args: any[]) => {
-                            currentPropertyContext.method.returnValues = args;
+                            if(currentPropertyContext.mimicks)
+                                currentPropertyContext.mimicks = void 0;
+
                             objectContext.getLastCall().callCount--;
+                            currentPropertyContext.method.returnValues = args;
                         };
                     }
+                }
+
+                if(property === 'mimicks') {
+                    return (value: T|Function) => {
+                        if(currentPropertyContext.type === 'object')
+                            currentPropertyContext.returnValues = void 0;
+                            
+                        if(currentPropertyContext.type === 'function')
+                            currentPropertyContext.method.returnValues = void 0;
+                        
+                        if(typeof value === 'function') {
+                            currentPropertyContext.mimicks = value;
+                        } else {
+                            const currentPropertyName = currentPropertyContext.name;
+                            currentPropertyContext.mimicks = value;
+                        }
+                    };
                 }
 
                 if (property === 'received' || property === 'didNotReceive') {
@@ -139,10 +164,11 @@ export class Substitute {
 
                     existingCall.callCount++;
 
-                    if (!existingCallProperty.returnValues)
-                        return void 0;
-
-                    return existingCallProperty.returnValues[existingCall.callCount - 1];
+                    if (existingCallProperty.returnValues)
+                        return existingCallProperty.returnValues[existingCall.callCount - 1];
+                    
+                    if(existingCallProperty.mimicks)
+                        return this;
                 }
 
                 const newPropertyContext = new ProxyPropertyContext();
@@ -152,8 +178,7 @@ export class Substitute {
 
                 objectContext.property = newPropertyContext;
 
-                const call = objectContext.addActualPropertyCall();
-                call.callCount++;
+                objectContext.addActualPropertyCall();
 
                 return thisProxy;
             }

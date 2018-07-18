@@ -17,14 +17,28 @@ export class Example {
 		console.log('define: ' + x);
 	}
 
-	foo(): void {
-		console.log('stuff');
+	foo() {
+		return 'stuff';
 	}
 }
 
+let instance: Example;
 let substitute: ObjectSubstitute<Example>;
 test.beforeEach(() => {
+	instance = new Example();
 	substitute = Substitute.for<Example>();
+});
+
+test('partial mocks using function mimicks', t => {
+	substitute.c.mimicks(instance.c);
+
+	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
+});
+
+test('partial mocks using property instance mimicks', t => {
+	substitute.d.mimicks(instance);
+
+	t.deepEqual(substitute.d, 1337);
 });
 
 test('are arguments equal', t => {

@@ -22,6 +22,12 @@ var ProxyPropertyContextBase = /** @class */ (function () {
     return ProxyPropertyContextBase;
 }());
 exports.ProxyPropertyContextBase = ProxyPropertyContextBase;
+var MimickContextBase = /** @class */ (function () {
+    function MimickContextBase() {
+    }
+    return MimickContextBase;
+}());
+exports.MimickContextBase = MimickContextBase;
 var ProxyPropertyContext = /** @class */ (function (_super) {
     __extends(ProxyPropertyContext, _super);
     function ProxyPropertyContext() {
@@ -127,13 +133,11 @@ var ProxyObjectContext = /** @class */ (function () {
         else {
             existingCall = existingCallCandidates[0];
         }
-        if (existingCall) {
-            existingCall.callCount++;
-            return;
+        if (!existingCall) {
+            existingCall = new ProxyCallRecord(this.property);
+            this.calls.actual.push(existingCall);
         }
-        var newCall = new ProxyCallRecord(this.property);
-        this.calls.actual.push(newCall);
-        return newCall;
+        existingCall.callCount++;
     };
     return ProxyObjectContext;
 }());

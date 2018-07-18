@@ -24,9 +24,10 @@ var Substitute = /** @class */ (function () {
                         return thisProxy;
                     }
                     var existingCall = existingCalls[0];
+                    if (existingCall)
+                        existingCall.callCount++;
                     if (!existingCall)
                         return propertyContext.method.returnValues[0];
-                    existingCall.callCount++;
                     if (propertyContext.method.returnValues)
                         return propertyContext.method.returnValues[existingCall.callCount - 1];
                     return void 0;
@@ -58,8 +59,7 @@ var Substitute = /** @class */ (function () {
                 newMethodPropertyContext.method.arguments = argumentsList;
                 newMethodPropertyContext.method.returnValues = argumentsList;
                 objectContext.property = newMethodPropertyContext;
-                var call = objectContext.addActualPropertyCall();
-                call.callCount = 1;
+                objectContext.addActualPropertyCall();
                 return true;
             },
             get: function (target, property) {
@@ -84,8 +84,10 @@ var Substitute = /** @class */ (function () {
                             for (var _i = 0; _i < arguments.length; _i++) {
                                 args[_i] = arguments[_i];
                             }
-                            currentPropertyContext.returnValues = args;
+                            if (currentPropertyContext.mimicks)
+                                currentPropertyContext.mimicks = void 0;
                             objectContext.getLastCall().callCount--;
+                            currentPropertyContext.returnValues = args;
                         };
                     }
                     if (currentPropertyContext.type === 'function') {
@@ -94,10 +96,27 @@ var Substitute = /** @class */ (function () {
                             for (var _i = 0; _i < arguments.length; _i++) {
                                 args[_i] = arguments[_i];
                             }
-                            currentPropertyContext.method.returnValues = args;
+                            if (currentPropertyContext.mimicks)
+                                currentPropertyContext.mimicks = void 0;
                             objectContext.getLastCall().callCount--;
+                            currentPropertyContext.method.returnValues = args;
                         };
                     }
+                }
+                if (property === 'mimicks') {
+                    return function (value) {
+                        if (currentPropertyContext.type === 'object')
+                            currentPropertyContext.returnValues = void 0;
+                        if (currentPropertyContext.type === 'function')
+                            currentPropertyContext.method.returnValues = void 0;
+                        if (typeof value === 'function') {
+                            currentPropertyContext.mimicks = value;
+                        }
+                        else {
+                            var currentPropertyName = currentPropertyContext.name;
+                            currentPropertyContext.mimicks = value;
+                        }
+                    };
                 }
                 if (property === 'received' || property === 'didNotReceive') {
                     return function (count) {
@@ -119,17 +138,17 @@ var Substitute = /** @class */ (function () {
                         return thisProxy;
                     }
                     existingCall.callCount++;
-                    if (!existingCallProperty.returnValues)
-                        return void 0;
-                    return existingCallProperty.returnValues[existingCall.callCount - 1];
+                    if (existingCallProperty.returnValues)
+                        return existingCallProperty.returnValues[existingCall.callCount - 1];
+                    if (existingCallProperty.mimicks)
+                        return _this;
                 }
                 var newPropertyContext = new Context_1.ProxyPropertyContext();
                 newPropertyContext.name = property.toString();
                 newPropertyContext.type = 'object';
                 newPropertyContext.returnValues = null;
                 objectContext.property = newPropertyContext;
-                var call = objectContext.addActualPropertyCall();
-                call.callCount++;
+                objectContext.addActualPropertyCall();
                 return thisProxy;
             }
         });
