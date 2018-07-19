@@ -1,8 +1,8 @@
 import { areArgumentsEqual } from "./Utilities";
+import { AllArguments } from "./Arguments";
 
 export abstract class ProxyPropertyContextBase {
     name: string;
-    mimicks: MimickInstanceContext|MimickObjectContext;
 
     type: 'function' | 'object';
 
@@ -12,15 +12,10 @@ export abstract class ProxyPropertyContextBase {
     }
 }
 
-export abstract class MimickContextBase {
-    type: 'instance' | 'function';
-}
-
-
-
 export class ProxyPropertyContext extends ProxyPropertyContextBase {
     type: 'object';
     
+    mimicks: Function;
     returnValues: any[];
 
     constructor() {
@@ -51,6 +46,7 @@ export class ProxyMethodPropertyContext extends ProxyPropertyContextBase {
 export class ProxyMethodContext {
     arguments: any[];
     returnValues: any[];
+    mimicks: Function;
 
     constructor() {
         this.arguments = [];
@@ -114,6 +110,11 @@ export class ProxyObjectContext {
                 if(!args1 || !args2)
                     return false;
 
+                const firstArg1 = args1[0];
+                const firstArg2 = args2[0];
+                if(firstArg1 instanceof AllArguments || firstArg2 instanceof AllArguments)
+                    return true;
+
                 if(args1.length !== args2.length)
                     return false;
 
@@ -121,7 +122,7 @@ export class ProxyObjectContext {
                     const arg1 = args1[i];
                     const arg2 = args2[i];
 
-                    if(!areArgumentsEqual(arg1, arg2))
+                    if(!areArgumentsEqual(arg1, arg2)) 
                         return false;
                 }
 

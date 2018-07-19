@@ -29,22 +29,62 @@ test.beforeEach(() => {
 	substitute = Substitute.for<Example>();
 });
 
-test('partial mocks using function mimicks', t => {
-	substitute.c.mimicks(instance.c);
+test('are arguments equal', t => {
+	t.true(areArgumentsEqual(Arg.any(), 'hi'));
+	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
+
+	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
+	t.false(areArgumentsEqual(Arg.any('array'), 1337));
+});
+
+test('class method returns with placeholder args', t => {
+	substitute.c(Arg.any(), "there").returns("blah", "haha");
+
+	t.deepEqual(substitute.c("hi", "there"), 'blah');
+	t.deepEqual(substitute.c("hi", "the1re"), void 0);
+	t.deepEqual(substitute.c("his", "there"), 'haha');
+	t.deepEqual(substitute.c("his", "there"), void 0);
+	t.deepEqual(substitute.c("hi", "there"), void 0);
+});
+
+test('partial mocks using function mimicks with specific args', t => {
+	substitute.c('a', 'b').mimicks(instance.c);
+
+	t.deepEqual(substitute.c('c', 'b'), void 0);
+	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
+});
+
+test('class method returns with specific args', t => {
+	substitute.c("hi", "there").returns("blah", "haha");
+
+	t.deepEqual(substitute.c("hi", "there"), 'blah');
+	t.deepEqual(substitute.c("hi", "the1re"), void 0);
+	t.deepEqual(substitute.c("hi", "there"), 'haha');
+	t.deepEqual(substitute.c("hi", "there"), void 0);
+	t.deepEqual(substitute.c("hi", "there"), void 0);
+});
+
+test('class string field get received', t => {
+	void substitute.a;
+	void substitute.a;
+	void substitute.a;
+	void substitute.a;
+
+	t.throws(() => substitute.received(3).a);
+	t.notThrows(() => substitute.received().a);
+	t.notThrows(() => substitute.received(4).a);
+});
+
+test('partial mocks using function mimicks with all args', t => {
+	substitute.c(Arg.all()).mimicks(instance.c);
 
 	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
 });
 
 test('partial mocks using property instance mimicks', t => {
-	substitute.d.mimicks(instance);
+	substitute.d.mimicks(() => instance.d);
 
 	t.deepEqual(substitute.d, 1337);
-});
-
-test('are arguments equal', t => {
-	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
-
-	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
 });
 
 test('class void returns', t => {
@@ -79,27 +119,6 @@ test('class string field set received', t => {
 	t.notThrows(() => substitute.received().v = 'hello');
 	t.notThrows(() => substitute.received(2).v = 'hello');
 	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
-});
-
-test('class string field get received', t => {
-	void substitute.a;
-	void substitute.a;
-	void substitute.a;
-	void substitute.a;
-
-	t.throws(() => substitute.received(3).a);
-	t.notThrows(() => substitute.received().a);
-	t.notThrows(() => substitute.received(4).a);
-});
-
-test('class method returns', t => {
-	substitute.c("hi", "there").returns("blah", "haha");
-
-	t.deepEqual(substitute.c("hi", "there"), 'blah');
-	t.deepEqual(substitute.c("hi", "the1re"), void 0);
-	t.deepEqual(substitute.c("hi", "there"), 'haha');
-	t.deepEqual(substitute.c("hi", "there"), void 0);
-	t.deepEqual(substitute.c("hi", "there"), void 0);
 });
 
 test('class method received', t => {

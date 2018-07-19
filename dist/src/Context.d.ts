@@ -1,11 +1,11 @@
 export declare abstract class ProxyPropertyContextBase {
     name: string;
-    mimicks: Function | Object;
     type: 'function' | 'object';
     constructor();
 }
 export declare class ProxyPropertyContext extends ProxyPropertyContextBase {
     type: 'object';
+    mimicks: Function;
     returnValues: any[];
     constructor();
     promoteToMethod(): ProxyMethodPropertyContext;
@@ -18,6 +18,7 @@ export declare class ProxyMethodPropertyContext extends ProxyPropertyContextBase
 export declare class ProxyMethodContext {
     arguments: any[];
     returnValues: any[];
+    mimicks: Function;
     constructor();
 }
 export declare class ProxyCallRecords {

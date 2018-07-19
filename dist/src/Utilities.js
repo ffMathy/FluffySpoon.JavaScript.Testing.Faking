@@ -23,6 +23,8 @@ function stringifyCalls(calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
+    if (a instanceof Arguments_1.AllArguments || b instanceof Arguments_1.AllArguments)
+        return true;
     if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument)
         return a.matches(b) && b.matches(a);
     if (a instanceof Arguments_1.Argument)
@@ -31,10 +33,6 @@ function areArgumentsEqual(a, b) {
         return b.matches(a);
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;
-    if ((!a || !b) && a !== b)
-        return false;
-    if (Array.isArray(a) !== Array.isArray(b))
-        return false;
     return a === b;
 }
 exports.areArgumentsEqual = areArgumentsEqual;
