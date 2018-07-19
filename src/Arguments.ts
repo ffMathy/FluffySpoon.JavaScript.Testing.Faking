@@ -1,4 +1,34 @@
+export class Argument<T> {
+    constructor(
+        private description: string,
+        private matchingFunction: (arg: T) => boolean
+    ) {
+    }
+
+    matches(arg: T) {
+        return this.matchingFunction(arg);
+    }
+
+    toString() {
+        return this.description;
+    }
+
+    inspect() {
+        return this.description;
+    }
+}
+
+export class AllArguments extends Argument<any> {
+    constructor() {
+        super('{all arguments}', () => true);
+    }
+}
+
 export class Arg {
+    static all() {
+        return new AllArguments();
+    }
+
     static any()
     static any<T extends 'string'>(type: T): Argument<string> & string
     static any<T extends 'number'>(type: T): Argument<number> & number
@@ -9,10 +39,10 @@ export class Arg {
     static any(type?: string): Argument<any> & any {
         const description = !type ? '{any arg}' : '{arg matching ' + type + '}';
         return new Argument<any>(description, x => {
-            if(typeof type === 'string')
+            if(!type)
                 return true;
 
-            if(typeof type === 'undefined')
+            if(typeof x === 'undefined')
                 return true;
 
             if(type === 'array')
@@ -34,25 +64,5 @@ export class Arg {
             return obj.toString();
 
         return obj;
-    }
-}
-
-export class Argument<T> {
-    constructor(
-        private description: string,
-        private matchingFunction: (arg: T) => boolean
-    ) {
-    }
-
-    matches(arg: T) {
-        return this.matchingFunction(arg);
-    }
-
-    toString() {
-        return this.description;
-    }
-
-    inspect() {
-        return this.description;
     }
 }

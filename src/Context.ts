@@ -1,5 +1,5 @@
 import { areArgumentsEqual } from "./Utilities";
-import { ENGINE_METHOD_DIGESTS } from "constants";
+import { AllArguments } from "./Arguments";
 
 export abstract class ProxyPropertyContextBase {
     name: string;
@@ -14,6 +14,8 @@ export abstract class ProxyPropertyContextBase {
 
 export class ProxyPropertyContext extends ProxyPropertyContextBase {
     type: 'object';
+    
+    mimicks: Function;
     returnValues: any[];
 
     constructor() {
@@ -44,6 +46,7 @@ export class ProxyMethodPropertyContext extends ProxyPropertyContextBase {
 export class ProxyMethodContext {
     arguments: any[];
     returnValues: any[];
+    mimicks: Function;
 
     constructor() {
         this.arguments = [];
@@ -107,6 +110,11 @@ export class ProxyObjectContext {
                 if(!args1 || !args2)
                     return false;
 
+                const firstArg1 = args1[0];
+                const firstArg2 = args2[0];
+                if(firstArg1 instanceof AllArguments || firstArg2 instanceof AllArguments)
+                    return true;
+
                 if(args1.length !== args2.length)
                     return false;
 
@@ -114,7 +122,7 @@ export class ProxyObjectContext {
                     const arg1 = args1[i];
                     const arg2 = args2[i];
 
-                    if(!areArgumentsEqual(arg1, arg2))
+                    if(!areArgumentsEqual(arg1, arg2)) 
                         return false;
                 }
 
@@ -143,15 +151,12 @@ export class ProxyObjectContext {
             existingCall = existingCallCandidates[0];
         }
             
-        if(existingCall) {
-            existingCall.callCount++;
-            return;
+        if(!existingCall) {
+            existingCall = new ProxyCallRecord(this.property);
+            this.calls.actual.push(existingCall);
         }
 
-        const newCall = new ProxyCallRecord(this.property);
-        this.calls.actual.push(newCall);
-
-        return newCall;
+        existingCall.callCount++;
     }
 }
 

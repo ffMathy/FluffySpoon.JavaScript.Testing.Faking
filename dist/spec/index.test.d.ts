@@ -3,5 +3,5 @@ export declare class Example {
     c(arg1: string, arg2: string): string;
     readonly d: number;
     v: string;
-    foo(): void;
+    foo(): string;
 }

@@ -14,6 +14,7 @@ var __extends = (this && this.__extends) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 var Utilities_1 = require("./Utilities");
+var Arguments_1 = require("./Arguments");
 var ProxyPropertyContextBase = /** @class */ (function () {
     function ProxyPropertyContextBase() {
         this.name = null;
@@ -96,6 +97,10 @@ var ProxyObjectContext = /** @class */ (function () {
             var args2 = args;
             if (!args1 || !args2)
                 return false;
+            var firstArg1 = args1[0];
+            var firstArg2 = args2[0];
+            if (firstArg1 instanceof Arguments_1.AllArguments || firstArg2 instanceof Arguments_1.AllArguments)
+                return true;
             if (args1.length !== args2.length)
                 return false;
             for (var i = 0; i < args1.length; i++) {
@@ -127,13 +132,11 @@ var ProxyObjectContext = /** @class */ (function () {
         else {
             existingCall = existingCallCandidates[0];
         }
-        if (existingCall) {
-            existingCall.callCount++;
-            return;
+        if (!existingCall) {
+            existingCall = new ProxyCallRecord(this.property);
+            this.calls.actual.push(existingCall);
         }
-        var newCall = new ProxyCallRecord(this.property);
-        this.calls.actual.push(newCall);
-        return newCall;
+        existingCall.callCount++;
     };
     return ProxyObjectContext;
 }());
