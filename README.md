@@ -120,3 +120,10 @@ fakeCalculator.divide(Arg.all()).returns(1338);
 console.log(fakeCalculator.divide(10, 5)); //prints 5
 console.log(fakeCalculator.divide(9, 5)); //prints 1338
 ```
+
+# Benefits over other mocking libraries
+- Easier-to-understand fluent syntax.
+- No need to cast to `any` in certain places (for instance, when overriding read-only properties) due to the `myProperty.returns(...)` syntax.
+- Doesn't weigh much.
+- Produces very clean and descriptive error messages. Try it out - you'll love it.
+- Doesn't rely on object instances - you can produce a strong-typed fake from nothing, ensuring that everything is mocked.
