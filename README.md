@@ -97,6 +97,7 @@ import { Substitute, Arg } from '@fluffy-spoon/substitute';
 class RealCalculator implements Calculator {
   add(a: number, b: number) => a + b;
   subtract(a: number, b: number) => a - b;
+  divide(a: number, b: number) => a / b;
 }
 
 var realCalculator = new RealCalculator();
