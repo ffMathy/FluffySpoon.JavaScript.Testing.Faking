@@ -15,13 +15,17 @@ export class Substitute {
                 const existingCalls = objectContext.findActualMethodCalls(propertyContext.name, argumentsList);
                 const existingCall = existingCalls[0];
 
+                const allCalls = objectContext.findActualMethodCalls(propertyContext.name);
+
                 if (propertyContext.type === 'function') {
                     const expected = objectContext.calls.expected;
                     if(expected && expected.callCount !== void 0) {
                         expected.arguments = argumentsList;
                         expected.propertyName = propertyContext.name;
                         
-                        this.assertCallMatchCount('method', expected, existingCalls);
+                        this.assertCallMatchCount('method', expected, 
+                            allCalls,
+                            existingCalls);
                         return void 0;
                     }
 
@@ -33,10 +37,12 @@ export class Substitute {
                             if(mimicks) 
                                 return mimicks.call(_target, ...argumentsList);
                         }
-                    }
+                    } else {
+                        propertyContext.method.arguments = argumentsList;
+                        objectContext.addActualPropertyCall();
 
-                    if(!existingCall)
                         return void 0;
+                    }
 
                     if(propertyContext.method.returnValues)
                         return propertyContext.method.returnValues[existingCall.callCount - 1];
@@ -47,6 +53,8 @@ export class Substitute {
                 const newMethodPropertyContext = propertyContext.promoteToMethod();
                 newMethodPropertyContext.method.arguments = argumentsList;
                 newMethodPropertyContext.method.returnValues = null;
+
+                objectContext.fixExistingCallArguments();
 
                 return thisProxy;
             },
@@ -61,7 +69,9 @@ export class Substitute {
                         expected.arguments = argumentsList;
                         expected.propertyName = propertyContext.name;
 
-                        this.assertCallMatchCount('property', expected, existingCalls);
+                        this.assertCallMatchCount('property', expected, 
+                            objectContext.findActualMethodCalls(propertyContext.name),
+                            existingCalls);
                         return true;
                     }
 
@@ -159,7 +169,7 @@ export class Substitute {
                     if (expected && expected.callCount !== void 0) {
                         expected.propertyName = existingCallProperty.name;
 
-                        this.assertCallMatchCount('property', expected, [existingCall]);
+                        this.assertCallMatchCount('property', expected, [existingCall], [existingCall]);
                         return thisProxy;
                     }
 
@@ -189,20 +199,32 @@ export class Substitute {
         }) as any;
     }
 
-    private static assertCallMatchCount(type: 'property' | 'method', expected: ProxyExpectation, existingCalls: ProxyCallRecord[]): void {
-        const existingCallCount = existingCalls.map(x => x.callCount).reduce((accumulator, value) => accumulator + value);
+    private static assertCallMatchCount(
+        type: 'property' | 'method', 
+        expected: ProxyExpectation, 
+        allCalls: ProxyCallRecord[],
+        matchingCalls: ProxyCallRecord[]): void 
+    {
+        const getCallCounts = (calls: ProxyCallRecord[]) => {
+            const callCounts = calls.map(x => x.callCount);
+            const totalCallCount = callCounts.length === 0 ? 0 : callCounts.reduce((accumulator, value) => accumulator + value);
+            return totalCallCount;
+        }
+
+        const matchingCallsCount = getCallCounts(matchingCalls);
+
         const isMatch = 
         !(
             (
                 !expected.negated && (
-                    (expected.callCount === null && existingCallCount === 0) ||
-                    (expected.callCount !== null && expected.callCount !== existingCallCount)
+                    (expected.callCount === null && matchingCallsCount === 0) ||
+                    (expected.callCount !== null && expected.callCount !== matchingCallsCount)
                 )
             ) ||
             (
                 expected.negated && (
-                    (expected.callCount === null && existingCallCount !== 0) ||
-                    (expected.callCount !== null && expected.callCount === existingCallCount)
+                    (expected.callCount === null && matchingCallsCount !== 0) ||
+                    (expected.callCount !== null && expected.callCount === matchingCallsCount)
                 )
             )
         );
@@ -234,28 +256,28 @@ export class Substitute {
                     if(value)
                         errorMessage += value;
                 } else if(type === 'method') {
-                    errorMessage += ' with arguments ';
+                    errorMessage += ' with ';
                     errorMessage += stringifyArguments(expected.arguments);
                 }
             }
 
             errorMessage += ', but received ';
-            errorMessage += existingCallCount === 0 ? 'none' : existingCallCount;
+            errorMessage += matchingCallsCount === 0 ? 'none' : matchingCallsCount;
 
             if(expected.arguments) {
                 errorMessage += ' of such call';
-                errorMessage += existingCallCount !== 1 ? 's' : '';
+                errorMessage += matchingCallsCount !== 1 ? 's' : '';
             }
 
             errorMessage += '.';
 
             if(expected.arguments) {
-                errorMessage += '\nCalls received to ';
+                errorMessage += '\nAll calls received to ';
                 errorMessage += type;
                 errorMessage += ' ';
                 errorMessage += expected.propertyName;
-                errorMessage += ' in general: ';
-                errorMessage += stringifyCalls(existingCalls);
+                errorMessage += ':';
+                errorMessage += stringifyCalls(allCalls);
             }
 
             throw new Error(errorMessage);

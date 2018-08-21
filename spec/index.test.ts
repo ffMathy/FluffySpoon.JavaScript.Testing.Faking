@@ -29,6 +29,25 @@ test.beforeEach(() => {
 	substitute = Substitute.for<Example>();
 });
 
+test('class method received', t => {
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "the1re");
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "there");
+
+	t.notThrows(() => substitute.received(4).c('hi', 'there'));
+	t.notThrows(() => substitute.received(1).c('hi', 'the1re'));
+	t.notThrows(() => substitute.received().c('hi', 'there'));
+
+	const err: Error = t.throws(() => substitute.received(7).c('hi', 'there'));
+	t.deepEqual(err.message, 
+`Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.
+All calls received to method c:
+-> 4 calls with arguments [hi, there]
+-> 1 call with arguments [hi, the1re]`);
+});
+
 test('are arguments equal', t => {
 	t.true(areArgumentsEqual(Arg.any(), 'hi'));
 	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
@@ -119,16 +138,4 @@ test('class string field set received', t => {
 	t.notThrows(() => substitute.received().v = 'hello');
 	t.notThrows(() => substitute.received(2).v = 'hello');
 	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
-});
-
-test('class method received', t => {
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "the1re");
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "there");
-
-	t.throws(() => substitute.received(7).c('hi', 'there'));
-	t.notThrows(() => substitute.received(4).c('hi', 'there'));
-	t.notThrows(() => substitute.received().c('hi', 'there'));
 });

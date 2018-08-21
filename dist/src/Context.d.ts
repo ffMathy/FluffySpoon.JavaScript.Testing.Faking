@@ -39,12 +39,14 @@ export declare class ProxyObjectContext {
     constructor();
     setExpectations(count: number, negated: boolean): void;
     findActualPropertyCalls(propertyName: string): ProxyCallRecord[];
-    findActualMethodCalls(propertyName: string, args: any[]): ProxyCallRecord[];
+    findActualMethodCalls(propertyName: string, args?: any[]): ProxyCallRecord[];
     getLastCall(): ProxyCallRecord;
     addActualPropertyCall(): void;
+    fixExistingCallArguments(): void;
 }
 export declare class ProxyCallRecord {
     callCount: number;
     property: ProxyPropertyContext | ProxyMethodPropertyContext;
+    argumentsSnapshot: any[];
     constructor(property?: ProxyPropertyContext | ProxyMethodPropertyContext);
 }

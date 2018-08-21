@@ -97,14 +97,17 @@ export class ProxyObjectContext {
             x.property.name === propertyName);
     }
 
-    findActualMethodCalls(propertyName: string, args: any[]) {
+    findActualMethodCalls(propertyName: string, args?: any[]) {
         let result = this.calls
             .actual
             .filter(x => x.property.name === propertyName)
             .filter(x => {
+                if(args === void 0)
+                    return true;
+
                 if(x.property.type !== 'function') return false;
                 
-                const args1 = x.property.method.arguments;
+                const args1 = x.argumentsSnapshot;
                 const args2 = args;
 
                 if(!args1 || !args2)
@@ -146,7 +149,7 @@ export class ProxyObjectContext {
         if(thisProperty.type === 'function') {
             existingCall = existingCallCandidates.filter(x => 
                 x.property.type === thisProperty.type && 
-                areArgumentsEqual(x.property.method.arguments, thisProperty.method.arguments))[0];
+                areArgumentsEqual(x.argumentsSnapshot, thisProperty.method.arguments))[0];
         } else {
             existingCall = existingCallCandidates[0];
         }
@@ -157,15 +160,29 @@ export class ProxyObjectContext {
         }
 
         existingCall.callCount++;
+
+        this.fixExistingCallArguments();
+    }
+
+    fixExistingCallArguments() {
+        const actualCalls = this.calls.actual;
+        for(let existingCall of [...actualCalls]) {
+            const existingCallProperty = existingCall.property;
+            if(existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
+                existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+        }
     }
 }
 
 export class ProxyCallRecord {
     callCount: number;
+
     property: ProxyPropertyContext | ProxyMethodPropertyContext;
+    argumentsSnapshot: any[];
 
     constructor(property?: ProxyPropertyContext | ProxyMethodPropertyContext) {
         this.callCount = 0;
         this.property = property || null;
+        this.argumentsSnapshot = property && property.type === 'function' ? property.method.arguments : null;
     }
 }

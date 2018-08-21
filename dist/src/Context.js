@@ -91,9 +91,11 @@ var ProxyObjectContext = /** @class */ (function () {
             .actual
             .filter(function (x) { return x.property.name === propertyName; })
             .filter(function (x) {
+            if (args === void 0)
+                return true;
             if (x.property.type !== 'function')
                 return false;
-            var args1 = x.property.method.arguments;
+            var args1 = x.argumentsSnapshot;
             var args2 = args;
             if (!args1 || !args2)
                 return false;
@@ -126,7 +128,7 @@ var ProxyObjectContext = /** @class */ (function () {
         if (thisProperty.type === 'function') {
             existingCall = existingCallCandidates.filter(function (x) {
                 return x.property.type === thisProperty.type &&
-                    Utilities_1.areArgumentsEqual(x.property.method.arguments, thisProperty.method.arguments);
+                    Utilities_1.areArgumentsEqual(x.argumentsSnapshot, thisProperty.method.arguments);
             })[0];
         }
         else {
@@ -137,6 +139,16 @@ var ProxyObjectContext = /** @class */ (function () {
             this.calls.actual.push(existingCall);
         }
         existingCall.callCount++;
+        this.fixExistingCallArguments();
+    };
+    ProxyObjectContext.prototype.fixExistingCallArguments = function () {
+        var actualCalls = this.calls.actual;
+        for (var _i = 0, _a = actualCalls.slice(); _i < _a.length; _i++) {
+            var existingCall = _a[_i];
+            var existingCallProperty = existingCall.property;
+            if (existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
+                existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+        }
     };
     return ProxyObjectContext;
 }());
@@ -145,6 +157,7 @@ var ProxyCallRecord = /** @class */ (function () {
     function ProxyCallRecord(property) {
         this.callCount = 0;
         this.property = property || null;
+        this.argumentsSnapshot = property && property.type === 'function' ? property.method.arguments : null;
     }
     return ProxyCallRecord;
 }());

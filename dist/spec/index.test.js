@@ -36,6 +36,18 @@ ava_1.default.beforeEach(function () {
     instance = new Example();
     substitute = Index_1.Substitute.for();
 });
+ava_1.default('class method received', function (t) {
+    void substitute.c("hi", "there");
+    void substitute.c("hi", "the1re");
+    void substitute.c("hi", "there");
+    void substitute.c("hi", "there");
+    void substitute.c("hi", "there");
+    t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
+    t.notThrows(function () { return substitute.received(1).c('hi', 'the1re'); });
+    t.notThrows(function () { return substitute.received().c('hi', 'there'); });
+    var err = t.throws(function () { return substitute.received(7).c('hi', 'there'); });
+    t.deepEqual(err.message, "Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.\nAll calls received to method c:\n-> 4 calls with arguments [hi, there]\n-> 1 call with arguments [hi, the1re]");
+});
 ava_1.default('are arguments equal', function (t) {
     t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any(), 'hi'));
     t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), ['foo', 'bar']));
@@ -107,15 +119,5 @@ ava_1.default('class string field set received', function (t) {
     t.notThrows(function () { return substitute.received().v = 'hello'; });
     t.notThrows(function () { return substitute.received(2).v = 'hello'; });
     t.notThrows(function () { return substitute.received(2).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
-});
-ava_1.default('class method received', function (t) {
-    void substitute.c("hi", "there");
-    void substitute.c("hi", "the1re");
-    void substitute.c("hi", "there");
-    void substitute.c("hi", "there");
-    void substitute.c("hi", "there");
-    t.throws(function () { return substitute.received(7).c('hi', 'there'); });
-    t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
-    t.notThrows(function () { return substitute.received().c('hi', 'there'); });
 });
 //# sourceMappingURL=index.test.js.map

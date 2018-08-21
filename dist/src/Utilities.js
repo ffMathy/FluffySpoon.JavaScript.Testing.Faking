@@ -2,21 +2,21 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 var Arguments_1 = require("./Arguments");
 function stringifyArguments(args) {
-    return args && args.length > 0 ? '[' + args + ']' : '(no arguments)';
+    return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
 }
 exports.stringifyArguments = stringifyArguments;
 ;
 function stringifyCalls(calls) {
     calls = calls.filter(function (x) { return x.callCount > 0; });
     if (calls.length === 0)
-        return '(no calls)';
+        return ' (no calls)';
     var output = '';
     for (var _i = 0, calls_1 = calls; _i < calls_1.length; _i++) {
         var call = calls_1[_i];
         output += '\n-> ' + call.callCount + ' call';
         output += call.callCount !== 1 ? 's' : '';
         if (call.property.type === 'function')
-            output += ' with arguments ' + stringifyArguments(call.property.method.arguments);
+            output += ' with ' + stringifyArguments(call.argumentsSnapshot);
     }
     return output;
 }
