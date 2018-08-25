@@ -24,6 +24,8 @@ var Example = /** @class */ (function () {
         enumerable: true,
         configurable: true
     });
+    Example.prototype.received = function (stuff) {
+    };
     Example.prototype.foo = function () {
         return 'stuff';
     };
@@ -36,12 +38,45 @@ ava_1.default.beforeEach(function () {
     instance = new Example();
     substitute = Index_1.Substitute.for();
 });
+ava_1.default('class string field get received', function (t) {
+    void substitute.a;
+    void substitute.a;
+    void substitute.a;
+    void substitute.a;
+    t.throws(function () { return substitute.received(3).a; });
+    t.notThrows(function () { return substitute.received().a; });
+    t.notThrows(function () { return substitute.received(4).a; });
+});
+ava_1.default('class void returns', function (t) {
+    substitute.foo().returns(void 0, null);
+    t.deepEqual(substitute.foo(), void 0);
+    t.deepEqual(substitute.foo(), null);
+});
+ava_1.default('class with method called "received" can be used for call count verification when proxies are suspended', function (t) {
+    Index_1.Substitute.disableFor(substitute).received(2);
+    t.throws(function () { return substitute.received(2).received(2); });
+    t.notThrows(function () { return substitute.received(1).received(2); });
+});
+ava_1.default('class with method called "received" can be used for call count verification', function (t) {
+    Index_1.Substitute.disableFor(substitute).received('foo');
+    t.notThrows(function () { return substitute.received(1).received('foo'); });
+    t.throws(function () { return substitute.received(2).received('foo'); });
+});
+ava_1.default('partial mocks using property instance mimicks', function (t) {
+    substitute.d.mimicks(function () { return instance.d; });
+    t.deepEqual(substitute.d, 1337);
+});
+ava_1.default('partial mocks using function mimicks with all args', function (t) {
+    substitute.c(Index_1.Arg.all()).mimicks(instance.c);
+    t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
+});
 ava_1.default('class method received', function (t) {
     void substitute.c("hi", "there");
     void substitute.c("hi", "the1re");
     void substitute.c("hi", "there");
     void substitute.c("hi", "there");
     void substitute.c("hi", "there");
+    substitute.received(4).c('hi', 'there');
     t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
     t.notThrows(function () { return substitute.received(1).c('hi', 'the1re'); });
     t.notThrows(function () { return substitute.received().c('hi', 'there'); });
@@ -74,28 +109,6 @@ ava_1.default('class method returns with specific args', function (t) {
     t.deepEqual(substitute.c("hi", "there"), 'haha');
     t.deepEqual(substitute.c("hi", "there"), void 0);
     t.deepEqual(substitute.c("hi", "there"), void 0);
-});
-ava_1.default('class string field get received', function (t) {
-    void substitute.a;
-    void substitute.a;
-    void substitute.a;
-    void substitute.a;
-    t.throws(function () { return substitute.received(3).a; });
-    t.notThrows(function () { return substitute.received().a; });
-    t.notThrows(function () { return substitute.received(4).a; });
-});
-ava_1.default('partial mocks using function mimicks with all args', function (t) {
-    substitute.c(Index_1.Arg.all()).mimicks(instance.c);
-    t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
-});
-ava_1.default('partial mocks using property instance mimicks', function (t) {
-    substitute.d.mimicks(function () { return instance.d; });
-    t.deepEqual(substitute.d, 1337);
-});
-ava_1.default('class void returns', function (t) {
-    substitute.foo().returns(void 0, null);
-    t.deepEqual(substitute.foo(), void 0);
-    t.deepEqual(substitute.foo(), null);
 });
 ava_1.default('class string field get returns', function (t) {
     substitute.a.returns("foo", "bar");

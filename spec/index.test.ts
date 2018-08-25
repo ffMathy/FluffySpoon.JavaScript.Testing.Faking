@@ -1,6 +1,8 @@
 import test from 'ava';
-import { Substitute, ObjectSubstitute, Arg } from '../src/Index';
+
+import { Substitute, Arg } from '../src/Index';
 import { areArgumentsEqual } from '../src/Utilities';
+import { OmitProxyMethods, ObjectSubstitute } from '../src/Transformations';
 
 export class Example {
 	a = "1337";
@@ -17,16 +19,65 @@ export class Example {
 		console.log('define: ' + x);
 	}
 
+	received(stuff: number|string) {
+
+	}
+
 	foo() {
 		return 'stuff';
 	}
 }
 
 let instance: Example;
-let substitute: ObjectSubstitute<Example>;
+let substitute: ObjectSubstitute<OmitProxyMethods<Example>, Example>;
+
 test.beforeEach(() => {
 	instance = new Example();
 	substitute = Substitute.for<Example>();
+});
+
+test('class string field get received', t => {
+	void substitute.a;
+	void substitute.a;
+	void substitute.a;
+	void substitute.a;
+
+	t.throws(() => substitute.received(3).a);
+	t.notThrows(() => substitute.received().a);
+	t.notThrows(() => substitute.received(4).a);
+});
+
+test('class void returns', t => {
+	substitute.foo().returns(void 0, null);
+
+	t.deepEqual(substitute.foo(), void 0);
+	t.deepEqual(substitute.foo(), null);
+});
+
+test('class with method called "received" can be used for call count verification when proxies are suspended', t => {
+	Substitute.disableFor(substitute).received(2);
+
+	t.throws(() => substitute.received(2).received(2));
+	t.notThrows(() => substitute.received(1).received(2));
+});
+
+test('class with method called "received" can be used for call count verification', t => {
+	Substitute.disableFor(substitute).received('foo');
+
+	t.notThrows(() => substitute.received(1).received('foo'));
+	t.throws(() => substitute.received(2).received('foo'));
+});
+
+test('partial mocks using property instance mimicks', t => {
+	substitute.d.mimicks(() => instance.d);
+
+	t.deepEqual(substitute.d, 1337);
+});
+
+test('partial mocks using function mimicks with all args', t => {
+	substitute.c(Arg.all()).mimicks(instance.c);
+
+	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
 });
 
 test('class method received', t => {
@@ -35,6 +86,8 @@ test('class method received', t => {
 	void substitute.c("hi", "there");
 	void substitute.c("hi", "there");
 	void substitute.c("hi", "there");
+
+	substitute.received(4).c('hi', 'there')
 
 	t.notThrows(() => substitute.received(4).c('hi', 'there'));
 	t.notThrows(() => substitute.received(1).c('hi', 'the1re'));
@@ -81,36 +134,6 @@ test('class method returns with specific args', t => {
 	t.deepEqual(substitute.c("hi", "there"), 'haha');
 	t.deepEqual(substitute.c("hi", "there"), void 0);
 	t.deepEqual(substitute.c("hi", "there"), void 0);
-});
-
-test('class string field get received', t => {
-	void substitute.a;
-	void substitute.a;
-	void substitute.a;
-	void substitute.a;
-
-	t.throws(() => substitute.received(3).a);
-	t.notThrows(() => substitute.received().a);
-	t.notThrows(() => substitute.received(4).a);
-});
-
-test('partial mocks using function mimicks with all args', t => {
-	substitute.c(Arg.all()).mimicks(instance.c);
-
-	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
-});
-
-test('partial mocks using property instance mimicks', t => {
-	substitute.d.mimicks(() => instance.d);
-
-	t.deepEqual(substitute.d, 1337);
-});
-
-test('class void returns', t => {
-	substitute.foo().returns(void 0, null);
-
-	t.deepEqual(substitute.foo(), void 0);
-	t.deepEqual(substitute.foo(), null);
 });
 
 test('class string field get returns', t => {

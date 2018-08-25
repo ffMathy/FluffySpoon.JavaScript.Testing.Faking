@@ -12,6 +12,36 @@ var __extends = (this && this.__extends) || (function () {
         d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
     };
 })();
+var __read = (this && this.__read) || function (o, n) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator];
+    if (!m) return o;
+    var i = m.call(o), r, ar = [], e;
+    try {
+        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+    }
+    catch (error) { e = { error: error }; }
+    finally {
+        try {
+            if (r && !r.done && (m = i["return"])) m.call(i);
+        }
+        finally { if (e) throw e.error; }
+    }
+    return ar;
+};
+var __spread = (this && this.__spread) || function () {
+    for (var ar = [], i = 0; i < arguments.length; i++) ar = ar.concat(__read(arguments[i]));
+    return ar;
+};
+var __values = (this && this.__values) || function (o) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator], i = 0;
+    if (m) return m.call(o);
+    return {
+        next: function () {
+            if (o && i >= o.length) o = void 0;
+            return { value: o && o[i++], done: !o };
+        }
+    };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 var Utilities_1 = require("./Utilities");
 var Arguments_1 = require("./Arguments");
@@ -118,6 +148,10 @@ var ProxyObjectContext = /** @class */ (function () {
     ProxyObjectContext.prototype.getLastCall = function () {
         return this.calls.actual[this.calls.actual.length - 1];
     };
+    ProxyObjectContext.prototype.removeActualPropertyCall = function (call) {
+        var callIndex = this.calls.actual.indexOf(call);
+        this.calls.actual.splice(callIndex, 1);
+    };
     ProxyObjectContext.prototype.addActualPropertyCall = function () {
         var _this = this;
         var existingCall;
@@ -140,14 +174,25 @@ var ProxyObjectContext = /** @class */ (function () {
         }
         existingCall.callCount++;
         this.fixExistingCallArguments();
+        return existingCall;
     };
     ProxyObjectContext.prototype.fixExistingCallArguments = function () {
+        var e_1, _a;
         var actualCalls = this.calls.actual;
-        for (var _i = 0, _a = actualCalls.slice(); _i < _a.length; _i++) {
-            var existingCall = _a[_i];
-            var existingCallProperty = existingCall.property;
-            if (existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
-                existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+        try {
+            for (var _b = __values(__spread(actualCalls)), _c = _b.next(); !_c.done; _c = _b.next()) {
+                var existingCall = _c.value;
+                var existingCallProperty = existingCall.property;
+                if (existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
+                    existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+            }
+        }
+        catch (e_1_1) { e_1 = { error: e_1_1 }; }
+        finally {
+            try {
+                if (_c && !_c.done && (_a = _b.return)) _a.call(_b);
+            }
+            finally { if (e_1) throw e_1.error; }
         }
     };
     return ProxyObjectContext;

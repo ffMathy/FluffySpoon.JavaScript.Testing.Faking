@@ -1,14 +1,44 @@
-import { ObjectSubstitute } from "./Transformations";
+import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from "./Transformations";
 import { ProxyObjectContext, ProxyPropertyContext, ProxyMethodPropertyContext, ProxyCallRecord, ProxyExpectation } from "./Context";
 import { stringifyCalls, stringifyArguments } from "./Utilities";
 
-export class Substitute {
+const areProxiesDisabledKey = Symbol.for('areProxiesDisabled');
+const handlerKey = Symbol.for('handler');
 
-    static for<T>(): ObjectSubstitute<T> {
+const internalSymbols = [areProxiesDisabledKey, handlerKey];
+
+export class Substitute {
+    static disableFor<T extends ObjectSubstitute<OmitProxyMethods<any>>>(substitute: T): DisabledSubstituteObject<T> {
+        const thisProxy = substitute as any;
+        const thisExposedProxy = thisProxy[handlerKey];
+
+        const disableProxy = <K extends Function>(f: K): K => {
+            return function() {
+                thisProxy[areProxiesDisabledKey] = true;
+                const returnValue = f.call(thisExposedProxy, ...arguments);
+                thisProxy[areProxiesDisabledKey] = false;
+                return returnValue;
+            } as any;
+        };
+
+        return new Proxy(() => { }, {
+            apply: disableProxy(thisExposedProxy.apply),
+            set: disableProxy(thisExposedProxy.set),
+            get: disableProxy(thisExposedProxy.get)
+        }) as any;
+    }
+
+    static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> {
         const objectContext = new ProxyObjectContext();
 
         let thisProxy: ObjectSubstitute<T>;
-        return thisProxy = new Proxy(() => { }, {
+
+        const isProxyDisabled = () => thisProxy[areProxiesDisabledKey];
+        const isFluffySpoonProperty = (p: symbol) => internalSymbols.indexOf(p) !== -1;
+
+        const internalStore = Object.create(null) as any;
+        
+        var thisExposedProxy: ProxyHandler<any> = {
             apply: (_target, _thisArg, argumentsList) => {
                 const propertyContext = objectContext.property;
 
@@ -22,6 +52,8 @@ export class Substitute {
                     if(expected && expected.callCount !== void 0) {
                         expected.arguments = argumentsList;
                         expected.propertyName = propertyContext.name;
+                        
+                        thisProxy[areProxiesDisabledKey] = false;
                         
                         this.assertCallMatchCount('method', expected, 
                             allCalls,
@@ -59,6 +91,11 @@ export class Substitute {
                 return thisProxy;
             },
             set: (_target, property, value) => {
+                if(isFluffySpoonProperty(property as symbol)) {
+                    internalStore[property] = value;
+                    return true;
+                }
+
                 const propertyContext = objectContext.property;
                 const argumentsList = [value];
 
@@ -68,6 +105,8 @@ export class Substitute {
                     if (expected && expected.callCount !== void 0) {
                         expected.arguments = argumentsList;
                         expected.propertyName = propertyContext.name;
+                        
+                        thisProxy[areProxiesDisabledKey] = false;
 
                         this.assertCallMatchCount('property', expected, 
                             objectContext.findActualMethodCalls(propertyContext.name),
@@ -94,11 +133,12 @@ export class Substitute {
                 return true;
             },
             get: (target, property) => {
+                if(isFluffySpoonProperty(property as symbol))
+                    return internalStore[property];
+
                 if (typeof property === 'symbol') {
                     if (property === Symbol.toPrimitive)
                         return () => void 0;
-
-                    return void 0;
                 }
 
                 if (property === 'valueOf')
@@ -114,7 +154,48 @@ export class Substitute {
                     return () => thisProxy;
 
                 const currentPropertyContext = objectContext.property;
-                if (property === 'returns') {
+                const addPropertyToObjectContext = () => {
+                    const existingCall = objectContext.findActualPropertyCalls(property.toString())[0] || null;
+                    if (existingCall) {
+                        const existingCallProperty = existingCall.property;
+                        if (existingCallProperty.type === 'function')
+                            return thisProxy;
+    
+                        const expected = objectContext.calls.expected;
+                        if (expected && expected.callCount !== void 0) {
+                            expected.propertyName = existingCallProperty.name;
+                        
+                            thisProxy[areProxiesDisabledKey] = false;
+    
+                            this.assertCallMatchCount('property', expected, [existingCall], [existingCall]);
+                            return thisProxy;
+                        }
+    
+                        existingCall.callCount++;
+    
+                        if (existingCallProperty.returnValues)
+                            return existingCallProperty.returnValues[existingCall.callCount - 1];
+                        
+                        const mimicks = existingCallProperty.mimicks;
+                        if(mimicks) 
+                            return mimicks();
+    
+                        return void 0;
+                    }
+
+                    const newPropertyContext = new ProxyPropertyContext();
+                    newPropertyContext.name = property.toString();
+                    newPropertyContext.type = 'object';
+                    newPropertyContext.returnValues = null;
+
+                    objectContext.property = newPropertyContext;
+
+                    objectContext.addActualPropertyCall();
+
+                    return thisProxy;
+                };
+
+                if (property === 'returns' && !isProxyDisabled()) {
                     const createReturnsFunction = (context: {returnValues, mimicks}) => {
                         return (...args: any[]) => {
                             context.returnValues = args;
@@ -131,7 +212,7 @@ export class Substitute {
                         return createReturnsFunction(currentPropertyContext.method);
                 }
 
-                if(property === 'mimicks') {
+                if(property === 'mimicks' && !isProxyDisabled()) {
                     const createMimicksFunction = (context: {returnValues, mimicks}) => {
                         return (value: Function) => {
                             context.returnValues = void 0;
@@ -144,59 +225,38 @@ export class Substitute {
                     if(currentPropertyContext.type === 'object') 
                         return createMimicksFunction(currentPropertyContext);
 
-                    if(currentPropertyContext.type === 'function') {
+                    if(currentPropertyContext.type === 'function')
                         return createMimicksFunction(currentPropertyContext.method);
-                    }
                 }
 
-                if (property === 'received' || property === 'didNotReceive') {
-                    return (count?: number) => {
+                if (!isProxyDisabled() && (property === 'received' || property === 'didNotReceive')) {
+                    return (count?: number, ...args) => {
+                        const shouldForwardCall = (typeof count !== 'number' && typeof count !== 'undefined') || args.length > 0 || isProxyDisabled();
+                        if(shouldForwardCall) {
+                            addPropertyToObjectContext();
+                            return thisExposedProxy.apply(target, target, [count, ...args]);
+                        }
+
                         if (count === void 0)
                             count = null;
 
                         objectContext.setExpectations(count, property === 'didNotReceive');
+                        thisProxy[areProxiesDisabledKey] = true;
+
                         return thisProxy;
                     };
                 }
 
-                const existingCall = objectContext.findActualPropertyCalls(property.toString())[0] || null;
-                if (existingCall) {
-                    const existingCallProperty = existingCall.property;
-                    if (existingCallProperty.type === 'function')
-                        return thisProxy;
-
-                    const expected = objectContext.calls.expected;
-                    if (expected && expected.callCount !== void 0) {
-                        expected.propertyName = existingCallProperty.name;
-
-                        this.assertCallMatchCount('property', expected, [existingCall], [existingCall]);
-                        return thisProxy;
-                    }
-
-                    existingCall.callCount++;
-
-                    if (existingCallProperty.returnValues)
-                        return existingCallProperty.returnValues[existingCall.callCount - 1];
-                    
-                    const mimicks = existingCallProperty.mimicks;
-                    if(mimicks) 
-                        return mimicks();
-
-                    return void 0;
-                }
-
-                const newPropertyContext = new ProxyPropertyContext();
-                newPropertyContext.name = property.toString();
-                newPropertyContext.type = 'object';
-                newPropertyContext.returnValues = null;
-
-                objectContext.property = newPropertyContext;
-
-                objectContext.addActualPropertyCall();
-
-                return thisProxy;
+                return addPropertyToObjectContext();
             }
-        }) as any;
+        };
+
+        thisProxy = new Proxy(() => { }, thisExposedProxy) as any;
+
+        thisProxy[areProxiesDisabledKey] = false;
+        thisProxy[handlerKey] = thisExposedProxy;
+
+        return thisProxy;
     }
 
     private static assertCallMatchCount(

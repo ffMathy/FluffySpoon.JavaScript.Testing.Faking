@@ -130,3 +130,27 @@ console.log(fakeCalculator.divide(9, 5)); //prints 1338
 - Doesn't weigh much.
 - Produces very clean and descriptive error messages. Try it out - you'll love it.
 - Doesn't rely on object instances - you can produce a strong-typed fake from nothing, ensuring that everything is mocked.
+
+# Beware
+Let's say we have a class with a method called `received`, `didNotReceive` or `mimick` keyword - how do we mock it? 
+
+Simple! We disable the proxy methods temporarily while invoking the method by using the `disableFor` method which disables these special methods.
+
+```typescript
+class Example {
+  received(someNumber: number) {
+    console.log(someNumber);
+  }
+}
+
+var fake = Substitute.for<Example>();
+
+//BAD: this would have called substitute.js' "received" method.
+//fake.received(2);
+
+//GOOD: we now call the "received" method we have defined in the class above.
+Substitute.disableFor(fake).received(1337);
+
+//now we can assert that we received a call to the "received" method.
+fake.received().received(1337);
+```

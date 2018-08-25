@@ -139,6 +139,11 @@ export class ProxyObjectContext {
         return this.calls.actual[this.calls.actual.length-1];
     }
 
+    removeActualPropertyCall(call: ProxyCallRecord) {
+        const callIndex = this.calls.actual.indexOf(call);
+        this.calls.actual.splice(callIndex, 1);
+    }
+
     addActualPropertyCall() {
         let existingCall: ProxyCallRecord;
 
@@ -162,6 +167,8 @@ export class ProxyObjectContext {
         existingCall.callCount++;
 
         this.fixExistingCallArguments();
+
+        return existingCall;
     }
 
     fixExistingCallArguments() {

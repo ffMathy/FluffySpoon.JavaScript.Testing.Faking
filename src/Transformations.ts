@@ -21,8 +21,9 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
     mimicks: (func: (...args: TArguments) => TReturnType) => void;
 }
 
-export type ObjectSubstitute<T extends Object> = ObjectSubstituteTransformation<T> & {
-    received(amount?: number): T;
+export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
+    received(amount?: number): K;
+    didNotReceive(amount?: number): K;
     mimick(instance: T): void;
 }
 
@@ -32,3 +33,9 @@ type ObjectSubstituteTransformation<T extends Object> = {
     T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> :
     PropertySubstitute<T[P]>;
 }
+
+type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
+
+export type OmitProxyMethods<T extends any> = Omit<T, 'mimick'|'received'|'didNotReceive'>;
+
+export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;

@@ -41,7 +41,8 @@ export declare class ProxyObjectContext {
     findActualPropertyCalls(propertyName: string): ProxyCallRecord[];
     findActualMethodCalls(propertyName: string, args?: any[]): ProxyCallRecord[];
     getLastCall(): ProxyCallRecord;
-    addActualPropertyCall(): void;
+    removeActualPropertyCall(call: ProxyCallRecord): void;
+    addActualPropertyCall(): ProxyCallRecord;
     fixExistingCallArguments(): void;
 }
 export declare class ProxyCallRecord {
