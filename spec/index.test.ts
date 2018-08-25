@@ -52,7 +52,7 @@ test('class void returns', t => {
 
 	t.deepEqual(substitute.foo(), void 0);
 	t.deepEqual(substitute.foo(), null);
-});
+}); 
 
 test('class with method called "received" can be used for call count verification when proxies are suspended', t => {
 	Substitute.disableFor(substitute).received(2);
