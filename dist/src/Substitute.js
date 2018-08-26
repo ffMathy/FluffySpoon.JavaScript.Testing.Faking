@@ -24,10 +24,14 @@ var Context_1 = require("./Context");
 var Utilities_1 = require("./Utilities");
 var areProxiesDisabledKey = Symbol.for('areProxiesDisabled');
 var handlerKey = Symbol.for('handler');
-var internalSymbols = [areProxiesDisabledKey, handlerKey];
+var isFake = Symbol.for('isFake');
+var internalSymbols = [areProxiesDisabledKey, handlerKey, isFake];
 var Substitute = /** @class */ (function () {
     function Substitute() {
     }
+    Substitute.isSubstitute = function (instance) {
+        return instance[isFake];
+    };
     Substitute.disableFor = function (substitute) {
         var thisProxy = substitute;
         var thisExposedProxy = thisProxy[handlerKey];
@@ -218,6 +222,7 @@ var Substitute = /** @class */ (function () {
         };
         thisProxy = new Proxy(function () { }, thisExposedProxy);
         thisProxy[areProxiesDisabledKey] = false;
+        thisProxy[isFake] = true;
         thisProxy[handlerKey] = thisExposedProxy;
         return thisProxy;
     };

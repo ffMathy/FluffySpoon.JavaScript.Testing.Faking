@@ -1,4 +1,14 @@
 "use strict";
+var __values = (this && this.__values) || function (o) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator], i = 0;
+    if (m) return m.call(o);
+    return {
+        next: function () {
+            if (o && i >= o.length) o = void 0;
+            return { value: o && o[i++], done: !o };
+        }
+    };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 var Arguments_1 = require("./Arguments");
 function stringifyArguments(args) {
@@ -7,16 +17,26 @@ function stringifyArguments(args) {
 exports.stringifyArguments = stringifyArguments;
 ;
 function stringifyCalls(calls) {
+    var e_1, _a;
     calls = calls.filter(function (x) { return x.callCount > 0; });
     if (calls.length === 0)
         return ' (no calls)';
     var output = '';
-    for (var _i = 0, calls_1 = calls; _i < calls_1.length; _i++) {
-        var call = calls_1[_i];
-        output += '\n-> ' + call.callCount + ' call';
-        output += call.callCount !== 1 ? 's' : '';
-        if (call.property.type === 'function')
-            output += ' with ' + stringifyArguments(call.argumentsSnapshot);
+    try {
+        for (var calls_1 = __values(calls), calls_1_1 = calls_1.next(); !calls_1_1.done; calls_1_1 = calls_1.next()) {
+            var call = calls_1_1.value;
+            output += '\n-> ' + call.callCount + ' call';
+            output += call.callCount !== 1 ? 's' : '';
+            if (call.property.type === 'function')
+                output += ' with ' + stringifyArguments(call.argumentsSnapshot);
+        }
+    }
+    catch (e_1_1) { e_1 = { error: e_1_1 }; }
+    finally {
+        try {
+            if (calls_1_1 && !calls_1_1.done && (_a = calls_1.return)) _a.call(calls_1);
+        }
+        finally { if (e_1) throw e_1.error; }
     }
     return output;
 }
