@@ -12,9 +12,12 @@ declare type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockOb
     mimicks: (func: (...args: TArguments) => TReturnType) => void;
 };
 export declare type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
-    received(amount?: number): K;
-    didNotReceive(amount?: number): K;
+    received(amount?: number): TerminatingObject<K>;
+    didNotReceive(amount?: number): TerminatingObject<K>;
     mimick(instance: T): void;
+};
+declare type TerminatingObject<T> = {
+    [P in keyof T]: T[P] extends () => infer R ? () => void : T[P] extends (...args: infer F) => infer R ? (...args: F) => void : T[P];
 };
 declare type ObjectSubstituteTransformation<T extends Object> = {
     [P in keyof T]: T[P] extends () => infer R ? NoArgumentFunctionSubstitute<R> : T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> : PropertySubstitute<T[P]>;
