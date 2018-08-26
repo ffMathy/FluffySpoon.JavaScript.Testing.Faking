@@ -4,10 +4,15 @@ import { stringifyCalls, stringifyArguments } from "./Utilities";
 
 const areProxiesDisabledKey = Symbol.for('areProxiesDisabled');
 const handlerKey = Symbol.for('handler');
+const isFake = Symbol.for('isFake');
 
-const internalSymbols = [areProxiesDisabledKey, handlerKey];
+const internalSymbols = [areProxiesDisabledKey, handlerKey, isFake];
 
 export class Substitute {
+    static isSubstitute<T>(instance: T) {
+        return instance[isFake];
+    }
+
     static disableFor<T extends ObjectSubstitute<OmitProxyMethods<any>>>(substitute: T): DisabledSubstituteObject<T> {
         const thisProxy = substitute as any;
         const thisExposedProxy = thisProxy[handlerKey];
@@ -254,6 +259,7 @@ export class Substitute {
         thisProxy = new Proxy(() => { }, thisExposedProxy) as any;
 
         thisProxy[areProxiesDisabledKey] = false;
+        thisProxy[isFake] = true;
         thisProxy[handlerKey] = thisExposedProxy;
 
         return thisProxy;
