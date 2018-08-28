@@ -59,18 +59,30 @@ var Substitute = /** @class */ (function () {
         var thisExposedProxy = {
             apply: function (_target, _thisArg, argumentsList) {
                 var propertyContext = objectContext.property;
+                if (!propertyContext)
+                    throw new Error('The property context could not be determined while invoking a proxy method.');
+                if (!propertyContext.name)
+                    throw new Error('The name of the current method could not be found.');
+                var expected = objectContext.calls.expected;
+                if (propertyContext.type !== 'function') {
+                    var newMethodPropertyContext = propertyContext.promoteToMethod();
+                    newMethodPropertyContext.method.arguments = argumentsList;
+                    newMethodPropertyContext.method.returnValues = null;
+                }
                 var existingCalls = objectContext.findActualMethodCalls(propertyContext.name, argumentsList);
                 var existingCall = existingCalls[0];
                 var allCalls = objectContext.findActualMethodCalls(propertyContext.name);
-                if (propertyContext.type === 'function') {
-                    var expected = objectContext.calls.expected;
-                    if (expected && expected.callCount !== void 0) {
-                        expected.arguments = argumentsList;
-                        expected.propertyName = propertyContext.name;
-                        thisProxy[areProxiesDisabledKey] = false;
-                        _this.assertCallMatchCount('method', expected, allCalls, existingCalls);
-                        return void 0;
-                    }
+                if (propertyContext.type === 'object')
+                    throw new Error('An error occured while promoting a property to a method.');
+                var hasExpected = expected && expected.callCount !== void 0;
+                if (hasExpected) {
+                    expected.arguments = argumentsList;
+                    expected.propertyName = propertyContext.name;
+                    objectContext.fixExistingCallArguments();
+                    _this.assertCallMatchCount('method', thisProxy, objectContext, allCalls, existingCalls);
+                    return void 0;
+                }
+                else {
                     if (existingCall) {
                         existingCall.callCount++;
                         if (existingCall.property.type === 'function') {
@@ -78,20 +90,17 @@ var Substitute = /** @class */ (function () {
                             if (mimicks)
                                 return mimicks.call.apply(mimicks, __spread([_target], argumentsList));
                         }
+                        if (propertyContext.method.returnValues)
+                            return propertyContext.method.returnValues[existingCall.callCount - 1];
                     }
                     else {
                         propertyContext.method.arguments = argumentsList;
-                        objectContext.addActualPropertyCall();
-                        return void 0;
+                        if (!expected)
+                            objectContext.addActualPropertyCall();
+                        if (isProxyDisabled())
+                            return void 0;
                     }
-                    if (propertyContext.method.returnValues)
-                        return propertyContext.method.returnValues[existingCall.callCount - 1];
-                    return void 0;
                 }
-                var newMethodPropertyContext = propertyContext.promoteToMethod();
-                newMethodPropertyContext.method.arguments = argumentsList;
-                newMethodPropertyContext.method.returnValues = null;
-                objectContext.fixExistingCallArguments();
                 return thisProxy;
             },
             set: function (_target, property, value) {
@@ -99,21 +108,23 @@ var Substitute = /** @class */ (function () {
                     internalStore[property] = value;
                     return true;
                 }
-                var propertyContext = objectContext.property;
+                var expected = objectContext.calls.expected;
                 var argumentsList = [value];
-                var existingCalls = objectContext.findActualMethodCalls(propertyContext.name, argumentsList);
-                if (existingCalls.length > 0 && propertyContext.type === 'function') {
-                    var expected = objectContext.calls.expected;
-                    if (expected && expected.callCount !== void 0) {
-                        expected.arguments = argumentsList;
-                        expected.propertyName = propertyContext.name;
-                        thisProxy[areProxiesDisabledKey] = false;
-                        _this.assertCallMatchCount('property', expected, objectContext.findActualMethodCalls(propertyContext.name), existingCalls);
+                var existingCalls = objectContext.findActualMethodCalls(property.toString(), argumentsList);
+                if (expected && expected.callCount !== void 0) {
+                    expected.arguments = argumentsList;
+                    expected.propertyName = property.toString();
+                    _this.assertCallMatchCount('property', thisProxy, objectContext, objectContext.findActualMethodCalls(property.toString()), existingCalls);
+                    return true;
+                }
+                var propertyContext = objectContext.property;
+                if (propertyContext) {
+                    if (existingCalls.length > 0 && propertyContext.type === 'function') {
+                        var existingCall = existingCalls[0];
+                        if (!expected)
+                            existingCall.callCount++;
                         return true;
                     }
-                    var existingCall = existingCalls[0];
-                    existingCall.callCount++;
-                    return true;
                 }
                 var newMethodPropertyContext = new Context_1.ProxyMethodPropertyContext();
                 newMethodPropertyContext.name = property.toString();
@@ -121,7 +132,8 @@ var Substitute = /** @class */ (function () {
                 newMethodPropertyContext.method.arguments = argumentsList;
                 newMethodPropertyContext.method.returnValues = argumentsList;
                 objectContext.property = newMethodPropertyContext;
-                objectContext.addActualPropertyCall();
+                if (!expected)
+                    objectContext.addActualPropertyCall();
                 return true;
             },
             get: function (target, property) {
@@ -130,6 +142,8 @@ var Substitute = /** @class */ (function () {
                 if (typeof property === 'symbol') {
                     if (property === Symbol.toPrimitive)
                         return function () { return void 0; };
+                    if (property === Symbol.toStringTag)
+                        return void 0;
                 }
                 if (property === 'valueOf')
                     return void 0;
@@ -141,16 +155,17 @@ var Substitute = /** @class */ (function () {
                     return function () { return thisProxy; };
                 var currentPropertyContext = objectContext.property;
                 var addPropertyToObjectContext = function () {
+                    var expected = objectContext.calls.expected;
                     var existingCall = objectContext.findActualPropertyCalls(property.toString())[0] || null;
                     if (existingCall) {
                         var existingCallProperty = existingCall.property;
-                        if (existingCallProperty.type === 'function')
+                        if (existingCallProperty.type === 'function') {
+                            objectContext.property = existingCallProperty;
                             return thisProxy;
-                        var expected = objectContext.calls.expected;
+                        }
                         if (expected && expected.callCount !== void 0) {
                             expected.propertyName = existingCallProperty.name;
-                            thisProxy[areProxiesDisabledKey] = false;
-                            _this.assertCallMatchCount('property', expected, [existingCall], [existingCall]);
+                            _this.assertCallMatchCount('property', thisProxy, objectContext, [existingCall], [existingCall]);
                             return thisProxy;
                         }
                         existingCall.callCount++;
@@ -166,7 +181,8 @@ var Substitute = /** @class */ (function () {
                     newPropertyContext.type = 'object';
                     newPropertyContext.returnValues = null;
                     objectContext.property = newPropertyContext;
-                    objectContext.addActualPropertyCall();
+                    if (!expected)
+                        objectContext.addActualPropertyCall();
                     return thisProxy;
                 };
                 if (property === 'returns' && !isProxyDisabled()) {
@@ -189,6 +205,8 @@ var Substitute = /** @class */ (function () {
                 if (property === 'mimicks' && !isProxyDisabled()) {
                     var createMimicksFunction = function (context) {
                         return function (value) {
+                            objectContext.property = null;
+                            objectContext.calls.expected = null;
                             context.returnValues = void 0;
                             context.mimicks = value;
                             objectContext.getLastCall().callCount--;
@@ -226,7 +244,11 @@ var Substitute = /** @class */ (function () {
         thisProxy[handlerKey] = thisExposedProxy;
         return thisProxy;
     };
-    Substitute.assertCallMatchCount = function (type, expected, allCalls, matchingCalls) {
+    Substitute.assertCallMatchCount = function (type, thisProxy, objectContext, allCalls, matchingCalls) {
+        var expected = objectContext.calls.expected;
+        objectContext.property = null;
+        objectContext.calls.expected = null;
+        thisProxy[areProxiesDisabledKey] = false;
         var getCallCounts = function (calls) {
             var callCounts = calls.map(function (x) { return x.callCount; });
             var totalCallCount = callCounts.length === 0 ? 0 : callCounts.reduce(function (accumulator, value) { return accumulator + value; });

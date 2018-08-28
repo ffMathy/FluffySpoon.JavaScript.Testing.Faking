@@ -12,7 +12,7 @@
     "license": "ISC",
     "devDependencies": {
         "@types/node": "latest",
-        "ava": "^0.25.0",
+        "ava": "latest",
         "ts-node": "^7.0.0",
         "typescript": "^3.0.0"
     },
@@ -26,7 +26,10 @@
             "./dist/src/**/*.js",
             "./dist/spec/**/*.test.js"
         ],
+        "cache": false,
+        "concurrency": 1,
         "failFast": true,
+        "failWithoutAssertions": true,
         "compileEnhancements": false,
         "extensions": [
             "ts"

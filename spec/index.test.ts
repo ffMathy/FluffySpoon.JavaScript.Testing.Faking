@@ -32,8 +32,109 @@ let instance: Example;
 let substitute: ObjectSubstitute<OmitProxyMethods<Example>, Example>;
 
 test.beforeEach(() => {
+	console.log('');
+	console.log('Ava: beforeEach')
+	console.log('');
+
 	instance = new Example();
 	substitute = Substitute.for<Example>();
+});
+
+test('class string field set received', t => {
+	substitute.v = undefined;
+	substitute.v = null;
+	substitute.v = 'hello';
+	substitute.v = 'hello';
+	substitute.v = 'world';
+	
+	t.notThrows(() => substitute.received().v = 'hello');
+	t.notThrows(() => substitute.received(5).v = Arg.any());
+	t.notThrows(() => substitute.received().v = Arg.any());
+	t.notThrows(() => substitute.received(2).v = 'hello');
+	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
+
+	t.throws(() => substitute.received(2).v = Arg.any());
+	t.throws(() => substitute.received(1).v = Arg.any());
+	t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1));
+	t.throws(() => substitute.received(3).v = 'hello');
+});
+
+test('class method returns with specific args', t => {
+	substitute.c("hi", "there").returns("blah", "haha");
+
+	t.is(substitute.c("hi", "there"), 'blah');
+	t.is<any>(substitute.c("hi", "the1re"), substitute);
+	t.deepEqual(substitute.c("hi", "there"), 'haha');
+	t.is(substitute.c("hi", "there"), void 0);
+	t.is(substitute.c("hi", "there"), void 0);
+});
+
+test('partial mocks using function mimicks with specific args', t => {
+	substitute.c('a', 'b').mimicks(instance.c);
+
+	t.is<any>(substitute.c('c', 'b'), substitute);
+	t.is(substitute.c('a', 'b'), 'hello a world (b)');
+});
+
+test('class method returns with placeholder args', t => {
+	substitute.c(Arg.any(), "there").returns("blah", "haha");
+	
+	t.is(substitute.c("hi", "there"), 'blah');
+	t.is<any>(substitute.c("hi", "the1re"), substitute);
+	t.is(substitute.c("his", "there"), 'haha');
+	t.is<any>(substitute.c("his", "there"), void 0);
+	t.is<any>(substitute.c("hi", "there"), void 0);
+});
+
+test('class void returns', t => {
+	substitute.foo().returns(void 0, null);
+
+	t.is(substitute.foo(), void 0);
+	t.is(substitute.foo(), null);
+}); 
+
+test('class method received', t => {
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "the1re");
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "there");
+	void substitute.c("hi", "there");
+
+	t.notThrows(() => substitute.received(4).c('hi', 'there'));
+	t.notThrows(() => substitute.received(1).c('hi', 'the1re'));
+	t.notThrows(() => substitute.received().c('hi', 'there'));
+
+	t.throws(() => substitute.received(7).c('hi', 'there'), 
+`Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.
+All calls received to method c:
+-> 4 calls with arguments [hi, there]
+-> 1 call with arguments [hi, the1re]`);
+});
+
+test('received call matches after partial mocks using property instance mimicks', t => {
+	substitute.d.mimicks(() => instance.d);
+	substitute.c('lala', 'bar');
+
+	substitute.received(1).c('lala', 'bar');
+	substitute.received(1).c('lala', 'bar');
+
+	t.notThrows(() => substitute.received(1).c('lala', 'bar'));
+	t.throws(() => substitute.received(2).c('lala', 'bar'),
+`Expected 2 calls to the method c with arguments [lala, bar], but received 1 of such call.
+All calls received to method c:
+-> 1 call with arguments [lala, bar]`);
+	
+	t.deepEqual(substitute.d, 1337);
+});
+
+test('can call received twice', t => { 
+	t.throws(() => substitute.received(1337).c('foo', 'bar'), 
+`Expected 1337 calls to the method c with arguments [foo, bar], but received none of such calls.
+All calls received to method c: (no calls)`);
+
+	t.throws(() => substitute.received(2117).c('foo', 'bar'),
+`Expected 2117 calls to the method c with arguments [foo, bar], but received none of such calls.
+All calls received to method c: (no calls)`);
 });
 
 test('class string field get received', t => {
@@ -46,13 +147,6 @@ test('class string field get received', t => {
 	t.notThrows(() => substitute.received().a);
 	t.notThrows(() => substitute.received(4).a);
 });
-
-test('class void returns', t => {
-	substitute.foo().returns(void 0, null);
-
-	t.deepEqual(substitute.foo(), void 0);
-	t.deepEqual(substitute.foo(), null);
-}); 
 
 test('class with method called "received" can be used for call count verification when proxies are suspended', t => {
 	Substitute.disableFor(substitute).received(2);
@@ -80,60 +174,12 @@ test('partial mocks using function mimicks with all args', t => {
 	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
 });
 
-test('class method received', t => {
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "the1re");
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "there");
-	void substitute.c("hi", "there");
-
-	substitute.received(4).c('hi', 'there')
-
-	t.notThrows(() => substitute.received(4).c('hi', 'there'));
-	t.notThrows(() => substitute.received(1).c('hi', 'the1re'));
-	t.notThrows(() => substitute.received().c('hi', 'there'));
-
-	const err: Error = t.throws(() => substitute.received(7).c('hi', 'there'));
-	t.deepEqual(err.message, 
-`Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.
-All calls received to method c:
--> 4 calls with arguments [hi, there]
--> 1 call with arguments [hi, the1re]`);
-});
-
 test('are arguments equal', t => {
 	t.true(areArgumentsEqual(Arg.any(), 'hi'));
 	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
 
 	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
 	t.false(areArgumentsEqual(Arg.any('array'), 1337));
-});
-
-test('class method returns with placeholder args', t => {
-	substitute.c(Arg.any(), "there").returns("blah", "haha");
-
-	t.deepEqual(substitute.c("hi", "there"), 'blah');
-	t.deepEqual(substitute.c("hi", "the1re"), void 0);
-	t.deepEqual(substitute.c("his", "there"), 'haha');
-	t.deepEqual(substitute.c("his", "there"), void 0);
-	t.deepEqual(substitute.c("hi", "there"), void 0);
-});
-
-test('partial mocks using function mimicks with specific args', t => {
-	substitute.c('a', 'b').mimicks(instance.c);
-
-	t.deepEqual(substitute.c('c', 'b'), void 0);
-	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
-});
-
-test('class method returns with specific args', t => {
-	substitute.c("hi", "there").returns("blah", "haha");
-
-	t.deepEqual(substitute.c("hi", "there"), 'blah');
-	t.deepEqual(substitute.c("hi", "the1re"), void 0);
-	t.deepEqual(substitute.c("hi", "there"), 'haha');
-	t.deepEqual(substitute.c("hi", "there"), void 0);
-	t.deepEqual(substitute.c("hi", "there"), void 0);
 });
 
 test('class string field get returns', t => {
@@ -143,22 +189,4 @@ test('class string field get returns', t => {
 	t.deepEqual(substitute.a, 'bar');
 	t.deepEqual(substitute.a, void 0);
 	t.deepEqual(substitute.a, void 0);
-});
-
-test('class string field set received', t => {
-	substitute.v = undefined;
-	substitute.v = null;
-	substitute.v = 'hello';
-	substitute.v = 'hello';
-	substitute.v = 'world';
-
-	t.throws(() => substitute.received(2).v = Arg.any());
-	t.throws(() => substitute.received(1).v = Arg.any());
-	t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1));
-	t.throws(() => substitute.received(3).v = 'hello');
-	t.notThrows(() => substitute.received().v = Arg.any());
-	t.notThrows(() => substitute.received(5).v = Arg.any());
-	t.notThrows(() => substitute.received().v = 'hello');
-	t.notThrows(() => substitute.received(2).v = 'hello');
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
 });

@@ -109,6 +109,7 @@ var ProxyObjectContext = /** @class */ (function () {
         var call = new ProxyExpectation();
         call.callCount = count;
         call.negated = negated;
+        call.propertyName = null;
         this.calls.expected = call;
     };
     ProxyObjectContext.prototype.findActualPropertyCalls = function (propertyName) {
@@ -172,8 +173,10 @@ var ProxyObjectContext = /** @class */ (function () {
             existingCall = new ProxyCallRecord(this.property);
             this.calls.actual.push(existingCall);
         }
+        else if (thisProperty.type === 'function') {
+            existingCall.argumentsSnapshot = thisProperty.method.arguments;
+        }
         existingCall.callCount++;
-        this.fixExistingCallArguments();
         return existingCall;
     };
     ProxyObjectContext.prototype.fixExistingCallArguments = function () {
@@ -184,7 +187,7 @@ var ProxyObjectContext = /** @class */ (function () {
                 var existingCall = _c.value;
                 var existingCallProperty = existingCall.property;
                 if (existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
-                    existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+                    this.calls.actual.splice(this.calls.actual.indexOf(existingCall), 1);
             }
         }
         catch (e_1_1) { e_1 = { error: e_1_1 }; }

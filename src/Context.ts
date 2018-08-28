@@ -88,6 +88,7 @@ export class ProxyObjectContext {
         const call = new ProxyExpectation();
         call.callCount = count;
         call.negated = negated;
+        call.propertyName = null;
 
         this.calls.expected = call;
     }
@@ -162,11 +163,11 @@ export class ProxyObjectContext {
         if(!existingCall) {
             existingCall = new ProxyCallRecord(this.property);
             this.calls.actual.push(existingCall);
+        } else if(thisProperty.type === 'function') {
+            existingCall.argumentsSnapshot = thisProperty.method.arguments;
         }
 
         existingCall.callCount++;
-
-        this.fixExistingCallArguments();
 
         return existingCall;
     }
@@ -176,7 +177,7 @@ export class ProxyObjectContext {
         for(let existingCall of [...actualCalls]) {
             const existingCallProperty = existingCall.property;
             if(existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
-                existingCall.argumentsSnapshot = existingCallProperty.method.arguments;
+                this.calls.actual.splice(this.calls.actual.indexOf(existingCall), 1);
         }
     }
 }
