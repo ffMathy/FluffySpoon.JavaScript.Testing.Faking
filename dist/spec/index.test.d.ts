@@ -4,5 +4,6 @@ export declare class Example {
     readonly d: number;
     v: string;
     received(stuff: number | string): void;
+    returnPromise(): Promise<number>;
     foo(): string;
 }

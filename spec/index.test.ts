@@ -23,6 +23,10 @@ export class Example {
 
 	}
 
+	returnPromise() {
+		return Promise.resolve(1337);
+	}
+
 	foo() {
 		return 'stuff';
 	}
@@ -38,6 +42,12 @@ test.beforeEach(() => {
 
 	instance = new Example();
 	substitute = Substitute.for<Example>();
+});
+
+test('returning resolved promises works', async t => {
+	substitute.returnPromise().returns(Promise.resolve(1338));
+
+	t.is(1338, await substitute.returnPromise());
 });
 
 test('class string field set received', t => {
