@@ -39,6 +39,11 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
 var Index_1 = require("../src/Index");
 var Utilities_1 = require("../src/Utilities");
+var Dummy = /** @class */ (function () {
+    function Dummy() {
+    }
+    return Dummy;
+}());
 var Example = /** @class */ (function () {
     function Example() {
         this.a = "1337";
@@ -63,7 +68,7 @@ var Example = /** @class */ (function () {
     Example.prototype.received = function (stuff) {
     };
     Example.prototype.returnPromise = function () {
-        return Promise.resolve(1337);
+        return Promise.resolve(new Dummy());
     };
     Example.prototype.foo = function () {
         return 'stuff';
@@ -80,6 +85,22 @@ ava_1.default.beforeEach(function () {
     instance = new Example();
     substitute = Index_1.Substitute.for();
 });
+ava_1.default('returning other fake from promise works', function (t) { return __awaiter(_this, void 0, void 0, function () {
+    var otherSubstitute, _a, _b, _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0:
+                otherSubstitute = Index_1.Substitute.for();
+                substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
+                _b = (_a = t).is;
+                _c = [otherSubstitute];
+                return [4 /*yield*/, substitute.returnPromise()];
+            case 1:
+                _b.apply(_a, _c.concat([_d.sent()]));
+                return [2 /*return*/];
+        }
+    });
+}); });
 ava_1.default('returning resolved promises works', function (t) { return __awaiter(_this, void 0, void 0, function () {
     var _a, _b, _c;
     return __generator(this, function (_d) {

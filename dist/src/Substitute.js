@@ -153,6 +153,8 @@ var Substitute = /** @class */ (function () {
                     return function () { return '{SubstituteJS fake}'; };
                 if (property === 'constructor')
                     return function () { return thisProxy; };
+                if (property === 'then')
+                    return void 0;
                 var currentPropertyContext = objectContext.property;
                 var addPropertyToObjectContext = function () {
                     var expected = objectContext.calls.expected;

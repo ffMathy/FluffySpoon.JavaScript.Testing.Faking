@@ -4,6 +4,10 @@ import { Substitute, Arg } from '../src/Index';
 import { areArgumentsEqual } from '../src/Utilities';
 import { OmitProxyMethods, ObjectSubstitute } from '../src/Transformations';
 
+class Dummy {
+
+}
+
 export class Example {
 	a = "1337";
 
@@ -24,7 +28,7 @@ export class Example {
 	}
 
 	returnPromise() {
-		return Promise.resolve(1337);
+		return Promise.resolve(new Dummy());
 	}
 
 	foo() {
@@ -42,6 +46,13 @@ test.beforeEach(() => {
 
 	instance = new Example();
 	substitute = Substitute.for<Example>();
+});
+
+test('returning other fake from promise works', async t => {
+	const otherSubstitute = Substitute.for<Dummy>();
+	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
+
+	t.is(otherSubstitute, await substitute.returnPromise());
 });
 
 test('returning resolved promises works', async t => {

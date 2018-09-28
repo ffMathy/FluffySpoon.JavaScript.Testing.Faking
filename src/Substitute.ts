@@ -174,6 +174,9 @@ export class Substitute {
                 if (property === 'constructor')
                     return () => thisProxy;
 
+                if(property === 'then')
+                    return void 0;
+
                 const currentPropertyContext = objectContext.property;
                 const addPropertyToObjectContext = () => {
                     const expected = objectContext.calls.expected;
