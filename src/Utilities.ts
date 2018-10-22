@@ -1,26 +1,7 @@
-import { ProxyCallRecord } from "./Context";
 import { Argument, AllArguments } from "./Arguments";
 
 export function stringifyArguments(args: any[]) {
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
-};
-
-export function stringifyCalls(calls: ProxyCallRecord[]) {
-    calls = calls.filter(x => x.callCount > 0);
-
-    if(calls.length === 0)
-        return ' (no calls)';
-
-    let output = '';
-    for (let call of calls) {
-        output += '\n-> ' + call.callCount + ' call';
-        output += call.callCount !== 1 ? 's' : '';
-
-        if(call.property.type === 'function') 
-            output += ' with ' + stringifyArguments(call.argumentsSnapshot);
-    }
-
-    return output;
 };
 
 export function areArgumentsEqual(a: any, b: any) {
