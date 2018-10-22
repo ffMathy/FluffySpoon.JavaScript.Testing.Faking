@@ -3,7 +3,9 @@ import { InitialState } from "./states/InitialState";
 
 export class Context {
     private _initialState: InitialState;
+
     private _proxy: any;
+    private _rootProxy: any;
     
     private _state: ContextState;
 
@@ -22,6 +24,21 @@ export class Context {
                 return this.get(property);
             }
         });
+
+        this._rootProxy = new Proxy(() => { }, {
+            apply: (_target, _this, args) => {
+                this.state = this.initialState;
+                return this.apply(args);
+            },
+            set: (_target, property, value) => {
+                this.state = this.initialState;
+                return this.set(property, value);
+            },
+            get: (_target, property) => {
+                this.state = this.initialState;
+                return this.get(property);
+            }
+        });
     }
 
     apply(args: any[]) {
@@ -37,7 +54,8 @@ export class Context {
     get(property: PropertyKey) {
         const uninterestingProperties = [
             '$$typeof',
-            'constructor'
+            'constructor',
+            'name'
         ];
         if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
             console.log('get', property);
@@ -49,12 +67,18 @@ export class Context {
         return this._proxy;
     }
 
+    public get rootProxy() {
+        return this._rootProxy;
+    }
+
     public get initialState() {
         return this._initialState;
     }
 
     public set state(state: ContextState) {
         this._state = state;
-        console.log('state', state);
+
+        if(state !== this.initialState)
+            console.log('state', state);
     }
 }

@@ -35,7 +35,7 @@ var InitialState = /** @class */ (function () {
         var _this = this;
         if (typeof property === 'symbol') {
             if (property === Symbol.toPrimitive)
-                return function () { return void 0; };
+                return function () { return '{SubstituteJS fake}'; };
             if (property === Symbol.toStringTag)
                 return void 0;
         }
@@ -46,7 +46,7 @@ var InitialState = /** @class */ (function () {
         if (property === 'inspect')
             return function () { return '{SubstituteJS fake}'; };
         if (property === 'constructor')
-            return function () { return context.proxy; };
+            return function () { return context.rootProxy; };
         if (property === 'then')
             return void 0;
         if (property === 'received') {

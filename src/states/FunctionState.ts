@@ -31,7 +31,7 @@ export class FunctionState implements ContextState {
         this.callCount++;
 
         if(this.returns === Nothing)
-            return context.proxy;
+            return context.rootProxy;
 
         return this.returns[this.callCount - 1];
     }
@@ -49,7 +49,7 @@ export class FunctionState implements ContextState {
 
                 this.returns = returns;
                 this.callCount--;
-                
+
                 context.state = context.initialState;
             };
         }

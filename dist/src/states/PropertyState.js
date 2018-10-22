@@ -28,6 +28,7 @@ var PropertyState = /** @class */ (function () {
         this._property = _property;
         this.returns = Nothing;
         this.recordedFunctionStates = [];
+        this.callCount = 0;
     }
     Object.defineProperty(PropertyState.prototype, "isFunction", {
         get: function () {
@@ -61,6 +62,7 @@ var PropertyState = /** @class */ (function () {
         var functionState = new (FunctionState_1.FunctionState.bind.apply(FunctionState_1.FunctionState, __spread([void 0, this._property], args)))();
         context.state = functionState;
         this.recordedFunctionStates.push(functionState);
+        console.log('states', this.recordedFunctionStates);
         return context.apply(args);
     };
     PropertyState.prototype.set = function (context, property, value) {

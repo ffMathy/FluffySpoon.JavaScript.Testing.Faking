@@ -21,6 +21,7 @@ export class PropertyState implements ContextState {
     constructor(private _property: PropertyKey) {
         this.returns = Nothing;
         this.recordedFunctionStates = [];
+        this.callCount = 0;
     }
 
     apply(context: Context, args: any[]) {
@@ -47,6 +48,8 @@ export class PropertyState implements ContextState {
         context.state = functionState;
 
         this.recordedFunctionStates.push(functionState);
+
+        console.log('states', this.recordedFunctionStates);
 
         return context.apply(args);
     }

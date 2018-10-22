@@ -17,6 +17,20 @@ var Context = /** @class */ (function () {
                 return _this_1.get(property);
             }
         });
+        this._rootProxy = new Proxy(function () { }, {
+            apply: function (_target, _this, args) {
+                _this_1.state = _this_1.initialState;
+                return _this_1.apply(args);
+            },
+            set: function (_target, property, value) {
+                _this_1.state = _this_1.initialState;
+                return _this_1.set(property, value);
+            },
+            get: function (_target, property) {
+                _this_1.state = _this_1.initialState;
+                return _this_1.get(property);
+            }
+        });
     }
     Context.prototype.apply = function (args) {
         console.log('apply', args);
@@ -29,7 +43,8 @@ var Context = /** @class */ (function () {
     Context.prototype.get = function (property) {
         var uninterestingProperties = [
             '$$typeof',
-            'constructor'
+            'constructor',
+            'name'
         ];
         if (typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
             console.log('get', property);
@@ -38,6 +53,13 @@ var Context = /** @class */ (function () {
     Object.defineProperty(Context.prototype, "proxy", {
         get: function () {
             return this._proxy;
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(Context.prototype, "rootProxy", {
+        get: function () {
+            return this._rootProxy;
         },
         enumerable: true,
         configurable: true
@@ -52,7 +74,8 @@ var Context = /** @class */ (function () {
     Object.defineProperty(Context.prototype, "state", {
         set: function (state) {
             this._state = state;
-            console.log('state', state);
+            if (state !== this.initialState)
+                console.log('state', state);
         },
         enumerable: true,
         configurable: true

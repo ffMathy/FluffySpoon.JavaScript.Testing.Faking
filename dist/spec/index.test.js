@@ -48,8 +48,8 @@ ava_1.default.beforeEach(function () {
 ava_1.default('class method returns with specific args', function (t) {
     substitute.c("hi", "there").returns("blah", "haha");
     t.is(substitute.c("hi", "there"), 'blah');
-    t.is(substitute.c("hi", "there"), 'haha');
     t.is(substitute.c("hi", "the1re"), substitute);
+    t.is(substitute.c("hi", "there"), 'haha');
     t.is(substitute.c("hi", "there"), void 0);
     t.is(substitute.c("hi", "there"), void 0);
 });

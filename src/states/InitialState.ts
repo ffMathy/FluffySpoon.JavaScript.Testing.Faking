@@ -38,7 +38,7 @@ export class InitialState implements ContextState {
     get(context: Context, property: PropertyKey) {
         if (typeof property === 'symbol') {
             if (property === Symbol.toPrimitive)
-                return () => void 0;
+                return () => '{SubstituteJS fake}';
             
             if(property === Symbol.toStringTag)
                 return void 0;
@@ -52,9 +52,9 @@ export class InitialState implements ContextState {
 
         if (property === 'inspect')
             return () => '{SubstituteJS fake}';
-
+ 
         if (property === 'constructor')
-            return () => context.proxy;
+            return () => context.rootProxy;
 
         if(property === 'then')
             return void 0;

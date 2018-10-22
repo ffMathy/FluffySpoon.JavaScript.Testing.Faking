@@ -33,7 +33,7 @@ var FunctionState = /** @class */ (function () {
         }
         this.callCount++;
         if (this.returns === Nothing)
-            return context.proxy;
+            return context.rootProxy;
         return this.returns[this.callCount - 1];
     };
     FunctionState.prototype.set = function (context, property, value) {
