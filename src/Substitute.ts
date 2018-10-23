@@ -3,7 +3,7 @@ import { Context } from "./Context";
 export class Substitute {
     static for<T>(): any {
         const objectContext = new Context();
-        return objectContext.proxy;
+        return objectContext.rootProxy;
     }
 
     // private static assertCallMatchCount(
