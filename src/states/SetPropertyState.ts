@@ -26,11 +26,14 @@ export class SetPropertyState implements ContextState {
     }
 
     set(context: Context, property: PropertyKey, value: any) {
+        console.log('prop', property, value, this.callCount);
+
         if(!context.initialState.doesCallCountMatchExpectations(this.callCount)) {
-            throw new Error('Expected ' + context.initialState.expectedCount);
+            throw new Error('Expected ' + context.initialState.expectedCount + ' got ' + this.callCount);
         }
 
-        this.callCount++;
+        if(!context.initialState.hasExpectations)
+            this.callCount++;
     }
 
     get(context: Context, property: PropertyKey) {

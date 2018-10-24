@@ -39,10 +39,10 @@ export class InitialState implements ContextState {
     }
 
     set(context: Context, property: PropertyKey, value: any) {
-        const existingSetState = this.recordedSetPropertyStates.find(x => areArgumentArraysEqual(x.arguments, [value]));;
+        const existingSetState = this.recordedSetPropertyStates.find(x => x.arguments[0] === value);;
         if (existingSetState) {
-            context.state = existingSetState;
-            return context.set(property, value);
+            console.log('ex-prop');
+            return existingSetState.set(context, property, value);
         }
 
         if (this.hasExpectations)
@@ -52,6 +52,10 @@ export class InitialState implements ContextState {
         context.state = setPropertyState;
 
         this.recordedSetPropertyStates.push(setPropertyState);
+
+        console.log('states', this.recordedSetPropertyStates);
+
+        return setPropertyState.set(context, property, value);
     }
 
     get(context: Context, property: PropertyKey) {

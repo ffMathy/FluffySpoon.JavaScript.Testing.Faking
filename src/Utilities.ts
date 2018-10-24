@@ -5,15 +5,7 @@ export function stringifyArguments(args: any[]) {
 };
 
 export function areArgumentArraysEqual(a: any[], b: any[]) {
-    if(b.length !== a.length)
-        return false;
-
-    for(var i=0;i<b.length;i++) {
-        if(!areArgumentsEqual(b[i], a[i]))
-            return false;
-    }
-
-    return true;
+    return areArgumentsEqual(a, b);
 }
 
 export function areArgumentsEqual(a: any, b: any) {

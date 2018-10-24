@@ -29,10 +29,12 @@ var SetPropertyState = /** @class */ (function () {
         return void 0;
     };
     SetPropertyState.prototype.set = function (context, property, value) {
+        console.log('prop', property, value, this.callCount);
         if (!context.initialState.doesCallCountMatchExpectations(this.callCount)) {
-            throw new Error('Expected ' + context.initialState.expectedCount);
+            throw new Error('Expected ' + context.initialState.expectedCount + ' got ' + this.callCount);
         }
-        this.callCount++;
+        if (!context.initialState.hasExpectations)
+            this.callCount++;
     };
     SetPropertyState.prototype.get = function (context, property) {
         return void 0;

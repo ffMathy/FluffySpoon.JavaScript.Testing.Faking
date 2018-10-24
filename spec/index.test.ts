@@ -44,27 +44,27 @@ test.beforeEach(() => {
 	substitute = Substitute.for<Example>();
 });
 
-test('class method returns with specific args', t => {
-	substitute.c("hi", "there").returns("blah", "haha");
+// test('class method returns with specific args', t => {
+// 	substitute.c("hi", "there").returns("blah", "haha");
 
-	t.is(substitute.c("hi", "there"), 'blah');
-	t.is(substitute.c("hi", "there"), 'haha');
-	t.is(substitute.c("hi", "there"), void 0);
-	t.is(substitute.c("hi", "there"), void 0);
-});
+// 	t.is(substitute.c("hi", "there"), 'blah');
+// 	t.is(substitute.c("hi", "there"), 'haha');
+// 	t.is(substitute.c("hi", "there"), void 0);
+// 	t.is(substitute.c("hi", "there"), void 0);
+// });
 
-test('returning other fake from promise works', async t => {
-	const otherSubstitute = Substitute.for<Dummy>();
-	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
+// test('returning other fake from promise works', async t => {
+// 	const otherSubstitute = Substitute.for<Dummy>();
+// 	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
 
-	t.is(otherSubstitute, await substitute.returnPromise());
-});
+// 	t.is(otherSubstitute, await substitute.returnPromise());
+// });
 
-test('returning resolved promises works', async t => {
-	substitute.returnPromise().returns(Promise.resolve(1338));
+// test('returning resolved promises works', async t => {
+// 	substitute.returnPromise().returns(Promise.resolve(1338));
 
-	t.is(1338, await substitute.returnPromise());
-});
+// 	t.is(1338, await substitute.returnPromise());
+// });
 
 test('class string field set received', t => {
 	substitute.v = undefined;
@@ -73,16 +73,16 @@ test('class string field set received', t => {
 	substitute.v = 'hello';
 	substitute.v = 'world';
 	
-	t.notThrows(() => substitute.received().v = 'hello');
 	t.notThrows(() => substitute.received(5).v = Arg.any());
-	t.notThrows(() => substitute.received().v = Arg.any());
-	t.notThrows(() => substitute.received(2).v = 'hello');
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
+	// t.notThrows(() => substitute.received().v = 'hello');
+	// t.notThrows(() => substitute.received().v = Arg.any());
+	// t.notThrows(() => substitute.received(2).v = 'hello');
+	// t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1));
 
-	t.throws(() => substitute.received(2).v = Arg.any());
-	t.throws(() => substitute.received(1).v = Arg.any());
-	t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1));
-	t.throws(() => substitute.received(3).v = 'hello');
+	// t.throws(() => substitute.received(2).v = Arg.any());
+	// t.throws(() => substitute.received(1).v = Arg.any());
+	// t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1));
+	// t.throws(() => substitute.received(3).v = 'hello');
 });
 
 // test('partial mocks using function mimicks with specific args', t => {

@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 var GetPropertyState_1 = require("./GetPropertyState");
 var SetPropertyState_1 = require("./SetPropertyState");
-var Utilities_1 = require("../Utilities");
 var InitialState = /** @class */ (function () {
     function InitialState() {
         this.recordedGetPropertyStates = new Map();
@@ -33,17 +32,19 @@ var InitialState = /** @class */ (function () {
     InitialState.prototype.apply = function (context, args) {
     };
     InitialState.prototype.set = function (context, property, value) {
-        var existingSetState = this.recordedSetPropertyStates.find(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, [value]); });
+        var existingSetState = this.recordedSetPropertyStates.find(function (x) { return x.arguments[0] === value; });
         ;
         if (existingSetState) {
-            context.state = existingSetState;
-            return context.set(property, value);
+            console.log('ex-prop');
+            return existingSetState.set(context, property, value);
         }
         if (this.hasExpectations)
             throw new Error('No calls were made to property ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
         var setPropertyState = new SetPropertyState_1.SetPropertyState(property, value);
         context.state = setPropertyState;
         this.recordedSetPropertyStates.push(setPropertyState);
+        console.log('states', this.recordedSetPropertyStates);
+        return setPropertyState.set(context, property, value);
     };
     InitialState.prototype.get = function (context, property) {
         var _this = this;
