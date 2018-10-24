@@ -1,196 +1,92 @@
-import { areArgumentsEqual } from "./Utilities";
-import { AllArguments } from "./Arguments";
+import { ContextState } from "./states/ContextState";
+import { InitialState } from "./states/InitialState";
+import { HandlerKey } from "./Substitute";
 
-export abstract class ProxyPropertyContextBase {
-    name: string;
+export class Context {
+    private _initialState: InitialState;
 
-    type: 'function' | 'object';
-
-    constructor() {
-        this.name = null;
-        this.type = null;
-    }
-}
-
-export class ProxyPropertyContext extends ProxyPropertyContextBase {
-    type: 'object';
+    private _proxy: any;
+    private _rootProxy: any;
     
-    mimicks: Function;
-    returnValues: any[];
+    private _state: ContextState;
 
     constructor() {
-        super();
-    }
+        this._initialState = new InitialState();
+        this._state = this._initialState;
 
-    promoteToMethod(): ProxyMethodPropertyContext {
-        const methodContext = this as any as ProxyMethodPropertyContext;
-        methodContext.method = new ProxyMethodContext();
-        methodContext.type = 'function';
-
-        return methodContext;
-    }
-}
-
-export class ProxyMethodPropertyContext extends ProxyPropertyContextBase {
-    method: ProxyMethodContext;
-
-    type: 'function';
-
-    constructor() {
-        super();
-
-        this.method = new ProxyMethodContext();
-    }
-}
-
-export class ProxyMethodContext {
-    arguments: any[];
-    returnValues: any[];
-    mimicks: Function;
-
-    constructor() {
-        this.arguments = [];
-    }
-}
-
-export class ProxyCallRecords {
-    expected: ProxyExpectation;
-    actual: ProxyCallRecord[];
-
-    constructor() {
-        this.expected = null;
-        this.actual = [];
-    }
-}
-
-export class ProxyExpectation {
-    callCount: number;
-    negated: boolean;
-    propertyName: string;
-    arguments: Array<any>;
-
-    constructor() {
-        this.callCount = void 0;
-        this.negated = false;
-    }
-}
-
-export class ProxyObjectContext {
-    property: ProxyPropertyContext|ProxyMethodPropertyContext;
-    calls: ProxyCallRecords;
-
-    constructor() {
-        this.calls = new ProxyCallRecords();
-        this.property = new ProxyPropertyContext();
-    }
-
-    setExpectations(count: number, negated: boolean) {
-        const call = new ProxyExpectation();
-        call.callCount = count;
-        call.negated = negated;
-        call.propertyName = null;
-
-        this.calls.expected = call;
-    }
-
-    findActualPropertyCalls(propertyName: string) {
-        return this.calls.actual.filter(x => 
-            x.property.name === propertyName);
-    }
-
-    findActualMethodCalls(propertyName: string, args?: any[]) {
-        let result = this.calls
-            .actual
-            .filter(x => x.property.name === propertyName)
-            .filter(x => {
-                if(args === void 0)
-                    return true;
-
-                if(x.property.type !== 'function') return false;
-                
-                const args1 = x.argumentsSnapshot;
-                const args2 = args;
-
-                if(!args1 || !args2)
-                    return false;
-
-                const firstArg1 = args1[0];
-                const firstArg2 = args2[0];
-                if(firstArg1 instanceof AllArguments || firstArg2 instanceof AllArguments)
-                    return true;
-
-                if(args1.length !== args2.length)
-                    return false;
-
-                for(let i=0;i<args1.length;i++) {
-                    const arg1 = args1[i];
-                    const arg2 = args2[i];
-
-                    if(!areArgumentsEqual(arg1, arg2)) 
-                        return false;
-                }
-
+        this._proxy = new Proxy(() => { }, {
+            apply: (_target, _this, args) => {
+                return this.apply(args);
+            },
+            set: (_target, property, value) => {
+                this.set(property, value);
                 return true;
-            });
+            },
+            get: (_target, property) => {
+                return this.get(property);
+            }
+        });
 
-        return result;
+        this._rootProxy = new Proxy(() => { }, {
+            apply: (_target, _this, args) => {
+                return this.initialState.apply(this, args);
+            },
+            set: (_target, property, value) => {
+                this.initialState.set(this, property, value);
+                return true;
+            },
+            get: (_target, property) => {
+                return this.initialState.get(this, property);
+            }
+        });
     }
 
-    getLastCall() {
-        return this.calls.actual[this.calls.actual.length-1];
+    apply(args: any[]) {
+        // console.log('apply', args);
+        return this._state.apply(this, args);
     }
 
-    removeActualPropertyCall(call: ProxyCallRecord) {
-        const callIndex = this.calls.actual.indexOf(call);
-        this.calls.actual.splice(callIndex, 1);
+    set(property: PropertyKey, value: any) {
+        // console.log('set', property, value);
+        return this._state.set(this, property, value);
     }
 
-    addActualPropertyCall() {
-        let existingCall: ProxyCallRecord;
+    get(property: PropertyKey) {
+        if(property === HandlerKey)
+            return this;
 
-        const existingCallCandidates = this.calls.actual.filter(x => 
-            x.property.name === this.property.name);
+        // const uninterestingProperties = [
+        //     '$$typeof',
+        //     'constructor',
+        //     'name',
+        //     'call'
+        // ];
+        // if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
+        //     console.log('get', property);
 
-        const thisProperty = this.property;
-        if(thisProperty.type === 'function') {
-            existingCall = existingCallCandidates.filter(x => 
-                x.property.type === thisProperty.type && 
-                areArgumentsEqual(x.argumentsSnapshot, thisProperty.method.arguments))[0];
-        } else {
-            existingCall = existingCallCandidates[0];
-        }
-            
-        if(!existingCall) {
-            existingCall = new ProxyCallRecord(this.property);
-            this.calls.actual.push(existingCall);
-        } else if(thisProperty.type === 'function') {
-            existingCall.argumentsSnapshot = thisProperty.method.arguments;
-        }
-
-        existingCall.callCount++;
-
-        return existingCall;
+        return this._state.get(this, property);
     }
 
-    fixExistingCallArguments() {
-        const actualCalls = this.calls.actual;
-        for(let existingCall of [...actualCalls]) {
-            const existingCallProperty = existingCall.property;
-            if(existingCallProperty.type === 'function' && existingCall.argumentsSnapshot === null)
-                this.calls.actual.splice(this.calls.actual.indexOf(existingCall), 1);
-        }
+    public get proxy() {
+        return this._proxy;
     }
-}
 
-export class ProxyCallRecord {
-    callCount: number;
+    public get rootProxy() {
+        return this._rootProxy;
+    }
 
-    property: ProxyPropertyContext | ProxyMethodPropertyContext;
-    argumentsSnapshot: any[];
+    public get initialState() {
+        return this._initialState;
+    }
 
-    constructor(property?: ProxyPropertyContext | ProxyMethodPropertyContext) {
-        this.callCount = 0;
-        this.property = property || null;
-        this.argumentsSnapshot = property && property.type === 'function' ? property.method.arguments : null;
+    public set state(state: ContextState) {
+        if(this._state === state)
+            return;
+
+        this._state = state;
+        if(state.onSwitchedTo)
+            state.onSwitchedTo(this);
+
+        // console.log('state', state);
     }
 }

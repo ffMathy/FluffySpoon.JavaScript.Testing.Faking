@@ -16,6 +16,14 @@ function stringifyArguments(args) {
 }
 exports.stringifyArguments = stringifyArguments;
 ;
+function areArgumentArraysEqual(a, b) {
+    for (var i = 0; i < Math.min(b.length, a.length); i++) {
+        if (!areArgumentsEqual(b[i], a[i]))
+            return false;
+    }
+    return true;
+}
+exports.areArgumentArraysEqual = areArgumentArraysEqual;
 function stringifyCalls(calls) {
     var e_1, _a;
     calls = calls.filter(function (x) { return x.callCount > 0; });
@@ -27,8 +35,8 @@ function stringifyCalls(calls) {
             var call = calls_1_1.value;
             output += '\n-> ' + call.callCount + ' call';
             output += call.callCount !== 1 ? 's' : '';
-            if (call.property.type === 'function')
-                output += ' with ' + stringifyArguments(call.argumentsSnapshot);
+            if (call.arguments)
+                output += ' with ' + stringifyArguments(call.arguments);
         }
     }
     catch (e_1_1) { e_1 = { error: e_1_1 }; }
