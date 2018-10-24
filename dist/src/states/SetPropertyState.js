@@ -46,7 +46,7 @@ var SetPropertyState = /** @class */ (function () {
                 .map(function (x) { return x._callCount; })
                 .reduce(function (a, b) { return a + b; }, 0);
         }
-        console.log('prop', property, value, callCount);
+        // console.log('prop', property, value, callCount);
         context.initialState.assertCallCountMatchesExpectations(context.initialState.setPropertyStates, callCount, 'property', this.property, this.arguments);
         if (!hasExpectations)
             this._callCount++;

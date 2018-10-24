@@ -52,7 +52,7 @@ var FunctionState = /** @class */ (function () {
         if (this.returns === Nothing)
             return context.proxy;
         var returnValue = this.returns[this._callCount - 1];
-        console.log('result', returnValue);
+        // console.log('result', returnValue);
         return returnValue;
     };
     FunctionState.prototype.set = function (context, property, value) {
@@ -63,7 +63,7 @@ var FunctionState = /** @class */ (function () {
             return void 0;
         if (property === 'mimicks') {
             return function (input) {
-                console.log('mimicks', input);
+                // console.log('mimicks', input);
                 _this.mimicks = input;
                 _this._callCount--;
                 context.state = context.initialState;
@@ -73,11 +73,11 @@ var FunctionState = /** @class */ (function () {
             if (this.returns !== Nothing)
                 throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + Utilities_1.stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
             return function () {
+                // console.log('returns', returns);
                 var returns = [];
                 for (var _i = 0; _i < arguments.length; _i++) {
                     returns[_i] = arguments[_i];
                 }
-                console.log('returns', returns);
                 _this.returns = returns;
                 _this._callCount--;
                 context.state = context.initialState;

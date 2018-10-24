@@ -62,13 +62,13 @@ var GetPropertyState = /** @class */ (function () {
         this._callCount = 0;
         var matchingFunctionState = this._recordedFunctionStates.find(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
         if (matchingFunctionState) {
-            console.log('ex-func');
+            // console.log('ex-func');
             return matchingFunctionState.apply(context, args);
         }
         var functionState = new (FunctionState_1.FunctionState.bind.apply(FunctionState_1.FunctionState, __spread([void 0, this], args)))();
         context.state = functionState;
         this._recordedFunctionStates.push(functionState);
-        console.log('states', this._recordedFunctionStates);
+        // console.log('states', this._recordedFunctionStates);
         return context.apply(args);
     };
     GetPropertyState.prototype.set = function (context, property, value) {
@@ -82,7 +82,7 @@ var GetPropertyState = /** @class */ (function () {
             return context.proxy;
         if (property === 'mimicks') {
             return function (input) {
-                console.log('mimicks', input);
+                // console.log('mimicks', input);
                 _this.mimicks = input;
                 _this._callCount--;
                 context.state = context.initialState;
@@ -92,11 +92,11 @@ var GetPropertyState = /** @class */ (function () {
             if (this.returns !== Nothing)
                 throw new Error('The return value for the property ' + this._property.toString() + ' has already been set to ' + this.returns);
             return function () {
+                // console.log('returns', returns);
                 var returns = [];
                 for (var _i = 0; _i < arguments.length; _i++) {
                     returns[_i] = arguments[_i];
                 }
-                console.log('returns', returns);
                 _this.returns = returns;
                 _this._callCount--;
                 context.state = context.initialState;
@@ -105,7 +105,7 @@ var GetPropertyState = /** @class */ (function () {
         if (!hasExpectations) {
             this._callCount++;
             if (this.mimicks) {
-                console.log('mim-invoke');
+                // console.log('mim-invoke');
                 return this.mimicks.apply(this.mimicks);
             }
             if (this.returns !== Nothing)

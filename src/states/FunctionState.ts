@@ -58,7 +58,7 @@ export class FunctionState implements ContextState {
             return context.proxy;
 
         const returnValue = this.returns[this._callCount - 1];
-        console.log('result', returnValue);
+        // console.log('result', returnValue);
 
         return returnValue;
     }
@@ -72,7 +72,7 @@ export class FunctionState implements ContextState {
 
         if(property === 'mimicks') {
             return (input: Function) => {
-                console.log('mimicks', input);
+                // console.log('mimicks', input);
 
                 this.mimicks = input;
                 this._callCount--;
@@ -86,7 +86,7 @@ export class FunctionState implements ContextState {
                 throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
 
             return (...returns: any[]) => {
-                console.log('returns', returns);
+                // console.log('returns', returns);
 
                 this.returns = returns;
                 this._callCount--;

@@ -42,12 +42,12 @@ export class Context {
     }
 
     apply(args: any[]) {
-        console.log('apply', args);
+        // console.log('apply', args);
         return this._state.apply(this, args);
     }
 
     set(property: PropertyKey, value: any) {
-        console.log('set', property, value);
+        // console.log('set', property, value);
         return this._state.set(this, property, value);
     }
 
@@ -55,14 +55,14 @@ export class Context {
         if(property === HandlerKey)
             return this;
 
-        const uninterestingProperties = [
-            '$$typeof',
-            'constructor',
-            'name',
-            'call'
-        ];
-        if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
-            console.log('get', property);
+        // const uninterestingProperties = [
+        //     '$$typeof',
+        //     'constructor',
+        //     'name',
+        //     'call'
+        // ];
+        // if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
+        //     console.log('get', property);
 
         return this._state.get(this, property);
     }
@@ -87,6 +87,6 @@ export class Context {
         if(state.onSwitchedTo)
             state.onSwitchedTo(this);
 
-        console.log('state', state);
+        // console.log('state', state);
     }
 }

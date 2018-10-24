@@ -41,7 +41,7 @@ export class SetPropertyState implements ContextState {
                 .reduce((a, b) => a + b, 0);
         }
 
-        console.log('prop', property, value, callCount);
+        // console.log('prop', property, value, callCount);
 
         context.initialState.assertCallCountMatchesExpectations(
             context.initialState.setPropertyStates,
