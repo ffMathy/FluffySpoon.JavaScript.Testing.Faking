@@ -18,7 +18,8 @@ export class Context {
                 return this.apply(args);
             },
             set: (_target, property, value) => {
-                return this.set(property, value);
+                this.set(property, value);
+                return true;
             },
             get: (_target, property) => {
                 return this.get(property);
@@ -27,16 +28,14 @@ export class Context {
 
         this._rootProxy = new Proxy(() => { }, {
             apply: (_target, _this, args) => {
-                this.state = this.initialState;
-                return this.apply(args);
+                return this.initialState.apply(this, args);
             },
             set: (_target, property, value) => {
-                this.state = this.initialState;
-                return this.set(property, value);
+                this.initialState.set(this, property, value);
+                return true;
             },
             get: (_target, property) => {
-                this.state = this.initialState;
-                return this.get(property);
+                return this.initialState.get(this, property);
             }
         });
     }
@@ -55,7 +54,8 @@ export class Context {
         const uninterestingProperties = [
             '$$typeof',
             'constructor',
-            'name'
+            'name',
+            'call'
         ];
         if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
             console.log('get', property);
@@ -76,9 +76,11 @@ export class Context {
     }
 
     public set state(state: ContextState) {
+        if(this._state === state)
+            return;
+
         this._state = state;
 
-        if(state !== this.initialState)
-            console.log('state', state);
+        console.log('state', state);
     }
 }

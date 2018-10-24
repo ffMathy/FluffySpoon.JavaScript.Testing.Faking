@@ -1,9 +1,13 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { PropertyState } from "./PropertyState";
+import { GetPropertyState } from "./GetPropertyState";
+import { SetPropertyState } from "./SetPropertyState";
+import { areArgumentArraysEqual } from "../Utilities";
 
 export class InitialState implements ContextState {
-    private recordedGetStates: Map<PropertyKey, PropertyState>;
+    private recordedGetPropertyStates: Map<PropertyKey, GetPropertyState>;
+    private recordedSetPropertyStates: SetPropertyState[];
+    
     private _expectedCount: number;
 
     public get expectedCount() {
@@ -15,15 +19,17 @@ export class InitialState implements ContextState {
     }
 
     constructor() {
-        this.recordedGetStates = new Map();
+        this.recordedGetPropertyStates = new Map();
+        this.recordedSetPropertyStates = [];
+
         this._expectedCount = void 0;
     }
 
     doesCallCountMatchExpectations(callCount: number) {
-        if(!this.hasExpectations)
+        if (!this.hasExpectations)
             return true;
 
-        if(this.expectedCount === null && callCount > 0)
+        if (this.expectedCount === null && callCount > 0)
             return true;
 
         return this.expectedCount === callCount;
@@ -33,33 +39,55 @@ export class InitialState implements ContextState {
     }
 
     set(context: Context, property: PropertyKey, value: any) {
+        const existingSetState = this.recordedSetPropertyStates.find(x => areArgumentArraysEqual(x.arguments, [value]));;
+        if (existingSetState) {
+            context.state = existingSetState;
+            return context.set(property, value);
+        }
+
+        if (this.hasExpectations)
+            throw new Error('No calls were made to property ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
+
+        const setPropertyState = new SetPropertyState(property, value);
+        context.state = setPropertyState;
+
+        this.recordedSetPropertyStates.push(setPropertyState);
     }
 
     get(context: Context, property: PropertyKey) {
         if (typeof property === 'symbol') {
             if (property === Symbol.toPrimitive)
                 return () => '{SubstituteJS fake}';
-            
-            if(property === Symbol.toStringTag)
+
+            if (property === Symbol.iterator)
+                return void 0;
+
+            if (property === Symbol.toStringTag)
+                return 'Substitute';
+
+            if(property.toString() === 'Symbol(util.inspect.custom)')
                 return void 0;
         }
 
         if (property === 'valueOf')
-            return void 0;
+            return '{SubstituteJS fake}';
+
+        if (property === '$$typeof')
+            return '{SubstituteJS fake}';
+
+        if (property === 'length')
+            return '{SubstituteJS fake}';
 
         if (property === 'toString')
             return '{SubstituteJS fake}';
 
         if (property === 'inspect')
             return () => '{SubstituteJS fake}';
- 
+
         if (property === 'constructor')
             return () => context.rootProxy;
 
-        if(property === 'then')
-            return void 0;
-            
-        if(property === 'received') {
+        if (property === 'received') {
             return (count?: number) => {
                 console.log('expectation', count);
 
@@ -68,19 +96,19 @@ export class InitialState implements ContextState {
             };
         }
 
-        const existingGetState = this.recordedGetStates.get(property);
-        if(existingGetState) {
+        const existingGetState = this.recordedGetPropertyStates.get(property);
+        if (existingGetState) {
             context.state = existingGetState;
             return context.get(property);
         }
 
-        if(this.hasExpectations)
+        if (this.hasExpectations)
             throw new Error('No calls were made to property or method ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
 
-        const getState = new PropertyState(property);
+        const getState = new GetPropertyState(property);
         context.state = getState;
 
-        this.recordedGetStates.set(property, getState);
+        this.recordedGetPropertyStates.set(property, getState);
 
         return context.get(property);
     }

@@ -7,7 +7,7 @@ export declare class Context {
     private _state;
     constructor();
     apply(args: any[]): any;
-    set(property: PropertyKey, value: any): any;
+    set(property: PropertyKey, value: any): void;
     get(property: PropertyKey): any;
     readonly proxy: any;
     readonly rootProxy: any;

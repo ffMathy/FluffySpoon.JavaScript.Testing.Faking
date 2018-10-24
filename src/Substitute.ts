@@ -1,7 +1,8 @@
 import { Context } from "./Context";
+import { ObjectSubstitute, OmitProxyMethods } from "./Transformations";
 
 export class Substitute {
-    static for<T>(): any {
+    static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> {
         const objectContext = new Context();
         return objectContext.rootProxy;
     }

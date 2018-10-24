@@ -6,6 +6,16 @@ function stringifyArguments(args) {
 }
 exports.stringifyArguments = stringifyArguments;
 ;
+function areArgumentArraysEqual(a, b) {
+    if (b.length !== a.length)
+        return false;
+    for (var i = 0; i < b.length; i++) {
+        if (!areArgumentsEqual(b[i], a[i]))
+            return false;
+    }
+    return true;
+}
+exports.areArgumentArraysEqual = areArgumentArraysEqual;
 function areArgumentsEqual(a, b) {
     if (a instanceof Arguments_1.AllArguments || b instanceof Arguments_1.AllArguments)
         return true;

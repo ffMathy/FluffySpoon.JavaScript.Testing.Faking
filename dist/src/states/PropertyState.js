@@ -69,6 +69,8 @@ var PropertyState = /** @class */ (function () {
     };
     PropertyState.prototype.get = function (context, property) {
         var _this = this;
+        if (property === 'then')
+            return void 0;
         if (this.isFunction)
             return context.proxy;
         if (!context.initialState.doesCallCountMatchExpectations(this.callCount)) {

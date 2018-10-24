@@ -4,6 +4,18 @@ export function stringifyArguments(args: any[]) {
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
 };
 
+export function areArgumentArraysEqual(a: any[], b: any[]) {
+    if(b.length !== a.length)
+        return false;
+
+    for(var i=0;i<b.length;i++) {
+        if(!areArgumentsEqual(b[i], a[i]))
+            return false;
+    }
+
+    return true;
+}
+
 export function areArgumentsEqual(a: any, b: any) {
     if(a instanceof AllArguments || b instanceof AllArguments)
         return true;

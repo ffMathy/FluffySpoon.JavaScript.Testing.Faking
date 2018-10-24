@@ -33,13 +33,17 @@ var FunctionState = /** @class */ (function () {
         }
         this.callCount++;
         if (this.returns === Nothing)
-            return context.rootProxy;
-        return this.returns[this.callCount - 1];
+            return context.proxy;
+        var returnValue = this.returns[this.callCount - 1];
+        console.log('result', returnValue);
+        return returnValue;
     };
     FunctionState.prototype.set = function (context, property, value) {
     };
     FunctionState.prototype.get = function (context, property) {
         var _this = this;
+        if (property === 'then')
+            return void 0;
         if (property === 'returns') {
             if (this.returns !== Nothing)
                 throw new Error('The return value for the function ' + this._property.toString() + ' with ' + Utilities_1.stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);

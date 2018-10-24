@@ -6,7 +6,7 @@ var Substitute = /** @class */ (function () {
     }
     Substitute.for = function () {
         var objectContext = new Context_1.Context();
-        return objectContext.proxy;
+        return objectContext.rootProxy;
     };
     return Substitute;
 }());

@@ -31,15 +31,21 @@ export class FunctionState implements ContextState {
         this.callCount++;
 
         if(this.returns === Nothing)
-            return context.rootProxy;
+            return context.proxy;
 
-        return this.returns[this.callCount - 1];
+        const returnValue = this.returns[this.callCount - 1];
+        console.log('result', returnValue);
+
+        return returnValue;
     }
 
     set(context: Context, property: PropertyKey, value: any) {
     }
 
     get(context: Context, property: PropertyKey) {
+        if (property === 'then')
+            return void 0;
+
         if(property === 'returns') {
             if(this.returns !== Nothing)
                 throw new Error('The return value for the function ' + this._property.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);

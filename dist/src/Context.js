@@ -11,7 +11,8 @@ var Context = /** @class */ (function () {
                 return _this_1.apply(args);
             },
             set: function (_target, property, value) {
-                return _this_1.set(property, value);
+                _this_1.set(property, value);
+                return true;
             },
             get: function (_target, property) {
                 return _this_1.get(property);
@@ -19,16 +20,14 @@ var Context = /** @class */ (function () {
         });
         this._rootProxy = new Proxy(function () { }, {
             apply: function (_target, _this, args) {
-                _this_1.state = _this_1.initialState;
-                return _this_1.apply(args);
+                return _this_1.initialState.apply(_this_1, args);
             },
             set: function (_target, property, value) {
-                _this_1.state = _this_1.initialState;
-                return _this_1.set(property, value);
+                _this_1.initialState.set(_this_1, property, value);
+                return true;
             },
             get: function (_target, property) {
-                _this_1.state = _this_1.initialState;
-                return _this_1.get(property);
+                return _this_1.initialState.get(_this_1, property);
             }
         });
     }
@@ -44,7 +43,8 @@ var Context = /** @class */ (function () {
         var uninterestingProperties = [
             '$$typeof',
             'constructor',
-            'name'
+            'name',
+            'call'
         ];
         if (typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
             console.log('get', property);
@@ -73,9 +73,10 @@ var Context = /** @class */ (function () {
     });
     Object.defineProperty(Context.prototype, "state", {
         set: function (state) {
+            if (this._state === state)
+                return;
             this._state = state;
-            if (state !== this.initialState)
-                console.log('state', state);
+            console.log('state', state);
         },
         enumerable: true,
         configurable: true

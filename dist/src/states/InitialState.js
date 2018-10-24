@@ -1,9 +1,12 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-var PropertyState_1 = require("./PropertyState");
+var GetPropertyState_1 = require("./GetPropertyState");
+var SetPropertyState_1 = require("./SetPropertyState");
+var Utilities_1 = require("../Utilities");
 var InitialState = /** @class */ (function () {
     function InitialState() {
-        this.recordedGetStates = new Map();
+        this.recordedGetPropertyStates = new Map();
+        this.recordedSetPropertyStates = [];
         this._expectedCount = void 0;
     }
     Object.defineProperty(InitialState.prototype, "expectedCount", {
@@ -30,25 +33,42 @@ var InitialState = /** @class */ (function () {
     InitialState.prototype.apply = function (context, args) {
     };
     InitialState.prototype.set = function (context, property, value) {
+        var existingSetState = this.recordedSetPropertyStates.find(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, [value]); });
+        ;
+        if (existingSetState) {
+            context.state = existingSetState;
+            return context.set(property, value);
+        }
+        if (this.hasExpectations)
+            throw new Error('No calls were made to property ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
+        var setPropertyState = new SetPropertyState_1.SetPropertyState(property, value);
+        context.state = setPropertyState;
+        this.recordedSetPropertyStates.push(setPropertyState);
     };
     InitialState.prototype.get = function (context, property) {
         var _this = this;
         if (typeof property === 'symbol') {
             if (property === Symbol.toPrimitive)
                 return function () { return '{SubstituteJS fake}'; };
+            if (property === Symbol.iterator)
+                return void 0;
             if (property === Symbol.toStringTag)
+                return 'Substitute';
+            if (property.toString() === 'Symbol(util.inspect.custom)')
                 return void 0;
         }
         if (property === 'valueOf')
-            return void 0;
+            return '{SubstituteJS fake}';
+        if (property === '$$typeof')
+            return '{SubstituteJS fake}';
+        if (property === 'length')
+            return '{SubstituteJS fake}';
         if (property === 'toString')
             return '{SubstituteJS fake}';
         if (property === 'inspect')
             return function () { return '{SubstituteJS fake}'; };
         if (property === 'constructor')
             return function () { return context.rootProxy; };
-        if (property === 'then')
-            return void 0;
         if (property === 'received') {
             return function (count) {
                 console.log('expectation', count);
@@ -56,16 +76,16 @@ var InitialState = /** @class */ (function () {
                 return context.proxy;
             };
         }
-        var existingGetState = this.recordedGetStates.get(property);
+        var existingGetState = this.recordedGetPropertyStates.get(property);
         if (existingGetState) {
             context.state = existingGetState;
             return context.get(property);
         }
         if (this.hasExpectations)
             throw new Error('No calls were made to property or method ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
-        var getState = new PropertyState_1.PropertyState(property);
+        var getState = new GetPropertyState_1.GetPropertyState(property);
         context.state = getState;
-        this.recordedGetStates.set(property, getState);
+        this.recordedGetPropertyStates.set(property, getState);
         return context.get(property);
     };
     return InitialState;

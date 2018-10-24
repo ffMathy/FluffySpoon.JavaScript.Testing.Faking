@@ -1,7 +1,8 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 export declare class InitialState implements ContextState {
-    private recordedGetStates;
+    private recordedGetPropertyStates;
+    private recordedSetPropertyStates;
     private _expectedCount;
     readonly expectedCount: number;
     readonly hasExpectations: boolean;
