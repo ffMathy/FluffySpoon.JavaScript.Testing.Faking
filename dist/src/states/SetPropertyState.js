@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+var Utilities_1 = require("../Utilities");
 var Nothing = Symbol();
 var SetPropertyState = /** @class */ (function () {
     function SetPropertyState(_property) {
@@ -9,7 +10,7 @@ var SetPropertyState = /** @class */ (function () {
         }
         this._property = _property;
         this._arguments = args;
-        this.callCount = 0;
+        this._callCount = 0;
     }
     Object.defineProperty(SetPropertyState.prototype, "arguments", {
         get: function () {
@@ -25,16 +26,30 @@ var SetPropertyState = /** @class */ (function () {
         enumerable: true,
         configurable: true
     });
+    Object.defineProperty(SetPropertyState.prototype, "callCount", {
+        get: function () {
+            return this._callCount;
+        },
+        enumerable: true,
+        configurable: true
+    });
     SetPropertyState.prototype.apply = function (context) {
         return void 0;
     };
     SetPropertyState.prototype.set = function (context, property, value) {
-        console.log('prop', property, value, this.callCount);
-        if (!context.initialState.doesCallCountMatchExpectations(this.callCount)) {
-            throw new Error('Expected ' + context.initialState.expectedCount + ' got ' + this.callCount);
+        var callCount = this._callCount;
+        var hasExpectations = context.initialState.hasExpectations;
+        if (hasExpectations) {
+            callCount = context.initialState
+                .setPropertyStates
+                .filter(function (x) { return Utilities_1.areArgumentsEqual(x.arguments[0], value); })
+                .map(function (x) { return x._callCount; })
+                .reduce(function (a, b) { return a + b; }, 0);
         }
-        if (!context.initialState.hasExpectations)
-            this.callCount++;
+        console.log('prop', property, value, callCount);
+        context.initialState.assertCallCountMatchesExpectations(context.initialState.setPropertyStates, callCount, 'property', this.property, this.arguments);
+        if (!hasExpectations)
+            this._callCount++;
     };
     SetPropertyState.prototype.get = function (context, property) {
         return void 0;

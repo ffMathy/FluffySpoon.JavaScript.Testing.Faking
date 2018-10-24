@@ -2,13 +2,15 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
-import { areArgumentArraysEqual } from "../Utilities";
+import { stringifyArguments, stringifyCalls, Call } from "../Utilities";
+import { AreProxiesDisabledKey } from "../Substitute";
 
 export class InitialState implements ContextState {
     private recordedGetPropertyStates: Map<PropertyKey, GetPropertyState>;
     private recordedSetPropertyStates: SetPropertyState[];
     
     private _expectedCount: number;
+    private _areProxiesDisabled: boolean;
 
     public get expectedCount() {
         return this._expectedCount;
@@ -18,6 +20,14 @@ export class InitialState implements ContextState {
         return this._expectedCount !== void 0;
     }
 
+    public get setPropertyStates() {
+        return [...this.recordedSetPropertyStates];
+    }
+
+    public get getPropertyStates() {
+        return [...this.recordedGetPropertyStates.values()];
+    }
+
     constructor() {
         this.recordedGetPropertyStates = new Map();
         this.recordedSetPropertyStates = [];
@@ -25,28 +35,42 @@ export class InitialState implements ContextState {
         this._expectedCount = void 0;
     }
 
-    doesCallCountMatchExpectations(callCount: number) {
-        if (!this.hasExpectations)
+    assertCallCountMatchesExpectations(calls: Call[], callCount: number, type: string, property: PropertyKey, args: any[]) {
+        const expectedCount = this._expectedCount;
+        console.log('exp-match', expectedCount, callCount);
+
+        this.clearExpectations();
+
+        if(this.doesCallCountMatchExpectations(expectedCount, callCount))
+            return;
+
+        throw new Error('Expected ' + expectedCount + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls));
+    }
+
+    private doesCallCountMatchExpectations(expectedCount: number, actualCount: number) {
+        if (expectedCount === void 0)
             return true;
 
-        if (this.expectedCount === null && callCount > 0)
+        if (expectedCount === null && actualCount > 0)
             return true;
 
-        return this.expectedCount === callCount;
+        return expectedCount === actualCount;
     }
 
     apply(context: Context, args: any[]) {
     }
 
     set(context: Context, property: PropertyKey, value: any) {
+        if(property === AreProxiesDisabledKey) {
+            this._areProxiesDisabled = value;
+            return;
+        }
+
         const existingSetState = this.recordedSetPropertyStates.find(x => x.arguments[0] === value);;
         if (existingSetState) {
             console.log('ex-prop');
             return existingSetState.set(context, property, value);
         }
-
-        if (this.hasExpectations)
-            throw new Error('No calls were made to property ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
 
         const setPropertyState = new SetPropertyState(property, value);
         context.state = setPropertyState;
@@ -55,11 +79,14 @@ export class InitialState implements ContextState {
 
         console.log('states', this.recordedSetPropertyStates);
 
-        return setPropertyState.set(context, property, value);
+        setPropertyState.set(context, property, value);
     }
 
     get(context: Context, property: PropertyKey) {
         if (typeof property === 'symbol') {
+            if(property === AreProxiesDisabledKey)
+                return this._areProxiesDisabled;
+
             if (property === Symbol.toPrimitive)
                 return () => '{SubstituteJS fake}';
 
@@ -106,14 +133,20 @@ export class InitialState implements ContextState {
             return context.get(property);
         }
 
-        if (this.hasExpectations)
-            throw new Error('No calls were made to property or method ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
-
         const getState = new GetPropertyState(property);
         context.state = getState;
 
         this.recordedGetPropertyStates.set(property, getState);
 
         return context.get(property);
+    }
+
+    private clearExpectations() {
+        console.log('reset-exp');
+        this._expectedCount = void 0;
+    }
+
+    onSwitchedTo() {
+        this.clearExpectations();
     }
 }

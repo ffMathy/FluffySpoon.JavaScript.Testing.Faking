@@ -1,7 +1,29 @@
 "use strict";
+var __read = (this && this.__read) || function (o, n) {
+    var m = typeof Symbol === "function" && o[Symbol.iterator];
+    if (!m) return o;
+    var i = m.call(o), r, ar = [], e;
+    try {
+        while ((n === void 0 || n-- > 0) && !(r = i.next()).done) ar.push(r.value);
+    }
+    catch (error) { e = { error: error }; }
+    finally {
+        try {
+            if (r && !r.done && (m = i["return"])) m.call(i);
+        }
+        finally { if (e) throw e.error; }
+    }
+    return ar;
+};
+var __spread = (this && this.__spread) || function () {
+    for (var ar = [], i = 0; i < arguments.length; i++) ar = ar.concat(__read(arguments[i]));
+    return ar;
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 var GetPropertyState_1 = require("./GetPropertyState");
 var SetPropertyState_1 = require("./SetPropertyState");
+var Utilities_1 = require("../Utilities");
+var Substitute_1 = require("../Substitute");
 var InitialState = /** @class */ (function () {
     function InitialState() {
         this.recordedGetPropertyStates = new Map();
@@ -22,33 +44,59 @@ var InitialState = /** @class */ (function () {
         enumerable: true,
         configurable: true
     });
-    InitialState.prototype.doesCallCountMatchExpectations = function (callCount) {
-        if (!this.hasExpectations)
+    Object.defineProperty(InitialState.prototype, "setPropertyStates", {
+        get: function () {
+            return __spread(this.recordedSetPropertyStates);
+        },
+        enumerable: true,
+        configurable: true
+    });
+    Object.defineProperty(InitialState.prototype, "getPropertyStates", {
+        get: function () {
+            return __spread(this.recordedGetPropertyStates.values());
+        },
+        enumerable: true,
+        configurable: true
+    });
+    InitialState.prototype.assertCallCountMatchesExpectations = function (calls, callCount, type, property, args) {
+        var expectedCount = this._expectedCount;
+        console.log('exp-match', expectedCount, callCount);
+        this.clearExpectations();
+        if (this.doesCallCountMatchExpectations(expectedCount, callCount))
+            return;
+        throw new Error('Expected ' + expectedCount + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + Utilities_1.stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + Utilities_1.stringifyCalls(calls));
+    };
+    InitialState.prototype.doesCallCountMatchExpectations = function (expectedCount, actualCount) {
+        if (expectedCount === void 0)
             return true;
-        if (this.expectedCount === null && callCount > 0)
+        if (expectedCount === null && actualCount > 0)
             return true;
-        return this.expectedCount === callCount;
+        return expectedCount === actualCount;
     };
     InitialState.prototype.apply = function (context, args) {
     };
     InitialState.prototype.set = function (context, property, value) {
+        if (property === Substitute_1.AreProxiesDisabledKey) {
+            this._areProxiesDisabled = value;
+            return;
+        }
         var existingSetState = this.recordedSetPropertyStates.find(function (x) { return x.arguments[0] === value; });
         ;
         if (existingSetState) {
             console.log('ex-prop');
             return existingSetState.set(context, property, value);
         }
-        if (this.hasExpectations)
-            throw new Error('No calls were made to property ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
         var setPropertyState = new SetPropertyState_1.SetPropertyState(property, value);
         context.state = setPropertyState;
         this.recordedSetPropertyStates.push(setPropertyState);
         console.log('states', this.recordedSetPropertyStates);
-        return setPropertyState.set(context, property, value);
+        setPropertyState.set(context, property, value);
     };
     InitialState.prototype.get = function (context, property) {
         var _this = this;
         if (typeof property === 'symbol') {
+            if (property === Substitute_1.AreProxiesDisabledKey)
+                return this._areProxiesDisabled;
             if (property === Symbol.toPrimitive)
                 return function () { return '{SubstituteJS fake}'; };
             if (property === Symbol.iterator)
@@ -82,12 +130,17 @@ var InitialState = /** @class */ (function () {
             context.state = existingGetState;
             return context.get(property);
         }
-        if (this.hasExpectations)
-            throw new Error('No calls were made to property or method ' + property.toString() + ' but ' + this._expectedCount + ' calls were expected.');
         var getState = new GetPropertyState_1.GetPropertyState(property);
         context.state = getState;
         this.recordedGetPropertyStates.set(property, getState);
         return context.get(property);
+    };
+    InitialState.prototype.clearExpectations = function () {
+        console.log('reset-exp');
+        this._expectedCount = void 0;
+    };
+    InitialState.prototype.onSwitchedTo = function () {
+        this.clearExpectations();
     };
     return InitialState;
 }());

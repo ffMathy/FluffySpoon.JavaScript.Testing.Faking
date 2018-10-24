@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var InitialState_1 = require("./states/InitialState");
+var Substitute_1 = require("./Substitute");
 var Context = /** @class */ (function () {
     function Context() {
         var _this_1 = this;
@@ -40,6 +41,8 @@ var Context = /** @class */ (function () {
         return this._state.set(this, property, value);
     };
     Context.prototype.get = function (property) {
+        if (property === Substitute_1.HandlerKey)
+            return this;
         var uninterestingProperties = [
             '$$typeof',
             'constructor',
@@ -76,6 +79,8 @@ var Context = /** @class */ (function () {
             if (this._state === state)
                 return;
             this._state = state;
+            if (state.onSwitchedTo)
+                state.onSwitchedTo(this);
             console.log('state', state);
         },
         enumerable: true,

@@ -1,5 +1,8 @@
 import { Context } from "./Context";
-import { ObjectSubstitute, OmitProxyMethods } from "./Transformations";
+import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from "./Transformations";
+
+export const HandlerKey = Symbol();
+export const AreProxiesDisabledKey = Symbol();
 
 export class Substitute {
     static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> {
@@ -7,95 +10,23 @@ export class Substitute {
         return objectContext.rootProxy;
     }
 
-    // private static assertCallMatchCount(
-    //     type: 'property' | 'method', 
-    //     thisProxy: any,
-    //     objectContext: ProxyObjectContext, 
-    //     allCalls: ProxyCallRecord[],
-    //     matchingCalls: ProxyCallRecord[]): void 
-    // {
-    //     const expected = objectContext.calls.expected;
-    //     objectContext.property = null;
-    //     objectContext.calls.expected = null;
-                        
-    //     thisProxy[areProxiesDisabledKey] = false;
+    static disableFor<T extends ObjectSubstitute<OmitProxyMethods<any>>>(substitute: T): DisabledSubstituteObject<T> {
+        const thisProxy = substitute as any;
+        const thisExposedProxy = thisProxy[HandlerKey];
 
-    //     const getCallCounts = (calls: ProxyCallRecord[]) => {
-    //         const callCounts = calls.map(x => x.callCount);
-    //         const totalCallCount = callCounts.length === 0 ? 0 : callCounts.reduce((accumulator, value) => accumulator + value);
-    //         return totalCallCount;
-    //     }
+        const disableProxy = <K extends Function>(f: K): K => {
+            return function() {
+                thisProxy[AreProxiesDisabledKey] = true;
+                const returnValue = f.call(thisExposedProxy, ...arguments);
+                thisProxy[AreProxiesDisabledKey] = false;
+                return returnValue;
+            } as any;
+        };
 
-    //     const matchingCallsCount = getCallCounts(matchingCalls);
-
-    //     const isMatch = 
-    //     !(
-    //         (
-    //             !expected.negated && (
-    //                 (expected.callCount === null && matchingCallsCount === 0) ||
-    //                 (expected.callCount !== null && expected.callCount !== matchingCallsCount)
-    //             )
-    //         ) ||
-    //         (
-    //             expected.negated && (
-    //                 (expected.callCount === null && matchingCallsCount !== 0) ||
-    //                 (expected.callCount !== null && expected.callCount === matchingCallsCount)
-    //             )
-    //         )
-    //     );
-        
-    //     if (!isMatch) {
-    //         let errorMessage = '';
-
-    //         errorMessage += expected.negated ? 'Did not expect' : 'Expected';
-    //         errorMessage += ' ';
-    //         errorMessage += expected.callCount === null ? 'one or more' : expected.callCount;
-    //         errorMessage += ' call';
-    //         errorMessage += (expected.callCount === null || expected.callCount !== 1) ? 's' : '';
-    //         errorMessage += ' to the ';
-    //         errorMessage += type;
-    //         errorMessage += ' ';
-    //         errorMessage += expected.propertyName;
-
-    //         if(expected.arguments) {
-    //             if(type === 'property') {
-    //                 errorMessage += ' with value ';
-
-    //                 const value = expected.arguments[0];
-    //                 if(value === null)
-    //                     errorMessage += 'null';
-                    
-    //                 if(value === void 0)
-    //                     errorMessage += 'undefined';
-
-    //                 if(value)
-    //                     errorMessage += value;
-    //             } else if(type === 'method') {
-    //                 errorMessage += ' with ';
-    //                 errorMessage += stringifyArguments(expected.arguments);
-    //             }
-    //         }
-
-    //         errorMessage += ', but received ';
-    //         errorMessage += matchingCallsCount === 0 ? 'none' : matchingCallsCount;
-
-    //         if(expected.arguments) {
-    //             errorMessage += ' of such call';
-    //             errorMessage += matchingCallsCount !== 1 ? 's' : '';
-    //         }
-
-    //         errorMessage += '.';
-
-    //         if(expected.arguments) {
-    //             errorMessage += '\nAll calls received to ';
-    //             errorMessage += type;
-    //             errorMessage += ' ';
-    //             errorMessage += expected.propertyName;
-    //             errorMessage += ':';
-    //             errorMessage += stringifyCalls(allCalls);
-    //         }
-
-    //         throw new Error(errorMessage);
-    //     }
-    // }
+        return new Proxy(() => { }, {
+            apply: disableProxy(thisExposedProxy.apply),
+            set: disableProxy(thisExposedProxy.set),
+            get: disableProxy(thisExposedProxy.get)
+        }) as any;
+    }
 }

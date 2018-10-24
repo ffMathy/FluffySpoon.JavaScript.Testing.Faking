@@ -1,11 +1,11 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { stringifyArguments } from "../Utilities";
+import { stringifyArguments, areArgumentsEqual } from "../Utilities";
 
 const Nothing = Symbol();
 
 export class SetPropertyState implements ContextState {
-    private callCount: number;
+    private _callCount: number;
     private _arguments: any[];
 
     public get arguments() {
@@ -16,9 +16,14 @@ export class SetPropertyState implements ContextState {
         return this._property;
     }
 
+    public get callCount() {
+        return this._callCount;
+    }
+
     constructor(private _property: PropertyKey, ...args: any[]) {
         this._arguments = args;
-        this.callCount = 0;
+
+        this._callCount = 0;
     }
 
     apply(context: Context) {
@@ -26,14 +31,27 @@ export class SetPropertyState implements ContextState {
     }
 
     set(context: Context, property: PropertyKey, value: any) {
-        console.log('prop', property, value, this.callCount);
-
-        if(!context.initialState.doesCallCountMatchExpectations(this.callCount)) {
-            throw new Error('Expected ' + context.initialState.expectedCount + ' got ' + this.callCount);
+        let callCount = this._callCount;
+        const hasExpectations = context.initialState.hasExpectations;
+        if(hasExpectations) {
+            callCount = context.initialState
+                .setPropertyStates
+                .filter(x => areArgumentsEqual(x.arguments[0], value))
+                .map(x => x._callCount)
+                .reduce((a, b) => a + b, 0);
         }
 
-        if(!context.initialState.hasExpectations)
-            this.callCount++;
+        console.log('prop', property, value, callCount);
+
+        context.initialState.assertCallCountMatchesExpectations(
+            context.initialState.setPropertyStates,
+            callCount,
+            'property',
+            this.property,
+            this.arguments);
+
+        if(!hasExpectations)
+            this._callCount++;
     }
 
     get(context: Context, property: PropertyKey) {

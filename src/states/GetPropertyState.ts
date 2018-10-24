@@ -7,38 +7,48 @@ const Nothing = Symbol();
 
 export class GetPropertyState implements ContextState {
     private returns: any[]|Symbol;
-    private callCount: number;
-    private recordedFunctionStates: FunctionState[];
+    private mimicks: Function;
+
+    private _callCount: number;
+    private _recordedFunctionStates: FunctionState[];
 
     private get isFunction() {
-        return this.recordedFunctionStates.length > 0;
+        return this._recordedFunctionStates.length > 0;
     }
 
     public get property() {
         return this._property;
     }
 
+    public get callCount() {
+        return this._callCount;
+    }
+
+    public get recordedFunctionStates() {
+        return [...this._recordedFunctionStates];
+    }
+
     constructor(private _property: PropertyKey) {
         this.returns = Nothing;
-        this.recordedFunctionStates = [];
-        this.callCount = 0;
+        this._recordedFunctionStates = [];
+        this._callCount = 0;
     }
 
     apply(context: Context, args: any[]) {
-        this.callCount = 0;
+        this._callCount = 0;
 
-        const matchingFunctionState = this.recordedFunctionStates.find(x => areArgumentArraysEqual(x.arguments, args));
+        const matchingFunctionState = this._recordedFunctionStates.find(x => areArgumentArraysEqual(x.arguments, args));
         if(matchingFunctionState) {
             console.log('ex-func');
-            return matchingFunctionState.apply(context);
+            return matchingFunctionState.apply(context, args);
         }
 
-        var functionState = new FunctionState(this._property, ...args);
+        var functionState = new FunctionState(this, ...args);
         context.state = functionState;
 
-        this.recordedFunctionStates.push(functionState);
+        this._recordedFunctionStates.push(functionState);
 
-        console.log('states', this.recordedFunctionStates);
+        console.log('states', this._recordedFunctionStates);
 
         return context.apply(args);
     }
@@ -47,34 +57,57 @@ export class GetPropertyState implements ContextState {
     }
 
     get(context: Context, property: PropertyKey) {
+        const hasExpectations = context.initialState.hasExpectations;
+
         if (property === 'then')
             return void 0;
 
         if(this.isFunction)
             return context.proxy;
 
-        if(!context.initialState.doesCallCountMatchExpectations(this.callCount)) {
-            throw new Error('Expected ' + context.initialState.expectedCount);
+        if(property === 'mimicks') {
+            return (input: Function) => {
+                console.log('mimicks', input);
+
+                this.mimicks = input;
+                this._callCount--;
+
+                context.state = context.initialState;
+            }
         }
 
         if(property === 'returns') {
             if(this.returns !== Nothing)
                 throw new Error('The return value for the property ' + this._property.toString() + ' has already been set to ' + this.returns);
 
-            return (returns: any) => {
+            return (...returns: any[]) => {
                 console.log('returns', returns);
 
                 this.returns = returns;
-                this.callCount--;
+                this._callCount--;
 
                 context.state = context.initialState;
             };
         }
 
-        this.callCount++;
+        if(!hasExpectations) {
+            this._callCount++;
 
-        if(this.returns !== Nothing)
-            return this.returns[this.callCount-1];
+            if(this.mimicks) {
+                console.log('mim-invoke');
+                return this.mimicks.apply(this.mimicks);
+            }
+
+            if(this.returns !== Nothing)
+                return this.returns[this._callCount-1];
+        }
+
+        context.initialState.assertCallCountMatchesExpectations(
+            context.initialState.getPropertyStates,
+            this.callCount,
+            'property',
+            this.property,
+            []);
 
         return context.proxy;
     }

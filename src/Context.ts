@@ -1,5 +1,6 @@
 import { ContextState } from "./states/ContextState";
 import { InitialState } from "./states/InitialState";
+import { HandlerKey } from "./Substitute";
 
 export class Context {
     private _initialState: InitialState;
@@ -51,6 +52,9 @@ export class Context {
     }
 
     get(property: PropertyKey) {
+        if(property === HandlerKey)
+            return this;
+
         const uninterestingProperties = [
             '$$typeof',
             'constructor',
@@ -80,6 +84,8 @@ export class Context {
             return;
 
         this._state = state;
+        if(state.onSwitchedTo)
+            state.onSwitchedTo(this);
 
         console.log('state', state);
     }
