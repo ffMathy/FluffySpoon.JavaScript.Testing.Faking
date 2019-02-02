@@ -51,9 +51,10 @@ var FunctionState = /** @class */ (function () {
             return this.mimicks.apply(this.mimicks, args);
         if (this.returns === Nothing)
             return context.proxy;
-        var returnValue = this.returns[this._callCount - 1];
-        // console.log('result', returnValue);
-        return returnValue;
+        var returnsArray = this.returns;
+        if (returnsArray.length === 1)
+            return returnsArray[0];
+        return returnsArray[this._callCount - 1];
     };
     FunctionState.prototype.set = function (context, property, value) {
     };

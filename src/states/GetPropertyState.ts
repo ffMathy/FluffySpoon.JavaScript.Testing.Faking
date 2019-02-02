@@ -98,8 +98,13 @@ export class GetPropertyState implements ContextState {
                 return this.mimicks.apply(this.mimicks);
             }
 
-            if(this.returns !== Nothing)
-                return this.returns[this._callCount-1];
+            if(this.returns !== Nothing) {
+                var returnsArray = this.returns as any[];
+                if(returnsArray.length === 1)
+                    return returnsArray[0];
+        
+                return returnsArray[this._callCount-1];
+            }
         }
 
         context.initialState.assertCallCountMatchesExpectations(

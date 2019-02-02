@@ -57,10 +57,11 @@ export class FunctionState implements ContextState {
         if(this.returns === Nothing)
             return context.proxy;
 
-        const returnValue = this.returns[this._callCount - 1];
-        // console.log('result', returnValue);
+        var returnsArray = this.returns as any[];
+        if(returnsArray.length === 1)
+            return returnsArray[0];
 
-        return returnValue;
+        return returnsArray[this._callCount-1];
     }
 
     set(context: Context, property: PropertyKey, value: any) {

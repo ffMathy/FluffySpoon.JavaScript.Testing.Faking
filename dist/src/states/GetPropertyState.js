@@ -108,8 +108,12 @@ var GetPropertyState = /** @class */ (function () {
                 // console.log('mim-invoke');
                 return this.mimicks.apply(this.mimicks);
             }
-            if (this.returns !== Nothing)
-                return this.returns[this._callCount - 1];
+            if (this.returns !== Nothing) {
+                var returnsArray = this.returns;
+                if (returnsArray.length === 1)
+                    return returnsArray[0];
+                return returnsArray[this._callCount - 1];
+            }
         }
         context.initialState.assertCallCountMatchesExpectations(context.initialState.getPropertyStates, this.callCount, 'property', this.property, []);
         return context.proxy;
