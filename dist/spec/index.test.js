@@ -60,7 +60,6 @@ var Example = /** @class */ (function () {
     });
     Object.defineProperty(Example.prototype, "v", {
         set: function (x) {
-            console.log('define: ' + x);
         },
         enumerable: true,
         configurable: true
@@ -78,30 +77,44 @@ var Example = /** @class */ (function () {
 exports.Example = Example;
 var instance;
 var substitute;
-ava_1.default.beforeEach(function () {
+function initialize() {
     instance = new Example();
     substitute = Index_1.Substitute.for();
+}
+;
+ava_1.default('can call received twice', function (t) {
+    initialize();
+    substitute.c('blah', 'fuzz');
+    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
+    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
+});
+ava_1.default('class string field get returns', function (t) {
+    initialize();
+    substitute.a.returns("foo", "bar");
+    t.deepEqual(substitute.a, 'foo');
+    t.deepEqual(substitute.a, 'bar');
+    t.deepEqual(substitute.a, void 0);
+    t.deepEqual(substitute.a, void 0);
 });
 ava_1.default('class with method called "received" can be used for call count verification when proxies are suspended', function (t) {
+    initialize();
     Index_1.Substitute.disableFor(substitute).received(2);
     t.throws(function () { return substitute.received(2).received(2); });
     t.notThrows(function () { return substitute.received(1).received(2); });
 });
 ava_1.default('class with method called "received" can be used for call count verification', function (t) {
+    initialize();
     Index_1.Substitute.disableFor(substitute).received('foo');
     t.notThrows(function () { return substitute.received(1).received('foo'); });
     t.throws(function () { return substitute.received(2).received('foo'); });
 });
 ava_1.default('partial mocks using function mimicks with all args', function (t) {
+    initialize();
     substitute.c(Index_1.Arg.all()).mimicks(instance.c);
     t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
 });
-ava_1.default('can call received twice', function (t) {
-    substitute.c('blah', 'fuzz');
-    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
-    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
-});
 ava_1.default('class string field get received', function (t) {
+    initialize();
     void substitute.a;
     void substitute.a;
     void substitute.a;
@@ -111,6 +124,7 @@ ava_1.default('class string field get received', function (t) {
     t.notThrows(function () { return substitute.received(4).a; });
 });
 ava_1.default('class string field set received', function (t) {
+    initialize();
     substitute.v = undefined;
     substitute.v = null;
     substitute.v = 'hello';
@@ -127,6 +141,7 @@ ava_1.default('class string field set received', function (t) {
     t.throws(function () { return substitute.received(3).v = 'hello'; });
 });
 ava_1.default('class method returns with placeholder args', function (t) {
+    initialize();
     substitute.c(Index_1.Arg.any(), "there").returns("blah", "haha");
     t.is(substitute.c("hi", "there"), 'blah');
     t.is(substitute.c("his", "there"), 'haha');
@@ -134,10 +149,12 @@ ava_1.default('class method returns with placeholder args', function (t) {
     t.is(substitute.c("hi", "there"), void 0);
 });
 ava_1.default('partial mocks using function mimicks with specific args', function (t) {
+    initialize();
     substitute.c('a', 'b').mimicks(instance.c);
     t.is(substitute.c('a', 'b'), 'hello a world (b)');
 });
 ava_1.default('class method returns with specific args', function (t) {
+    initialize();
     substitute.c("hi", "there").returns("blah", "haha");
     t.is(substitute.c("hi", "there"), 'blah');
     t.is(substitute.c("hi", "there"), 'haha');
@@ -149,6 +166,7 @@ ava_1.default('returning other fake from promise works', function (t) { return _
     return __generator(this, function (_d) {
         switch (_d.label) {
             case 0:
+                initialize();
                 otherSubstitute = Index_1.Substitute.for();
                 substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
                 _b = (_a = t).is;
@@ -165,6 +183,7 @@ ava_1.default('returning resolved promises works', function (t) { return __await
     return __generator(this, function (_d) {
         switch (_d.label) {
             case 0:
+                initialize();
                 substitute.returnPromise().returns(Promise.resolve(1338));
                 _b = (_a = t).is;
                 _c = [1338];
@@ -176,11 +195,13 @@ ava_1.default('returning resolved promises works', function (t) { return __await
     });
 }); });
 ava_1.default('class void returns', function (t) {
+    initialize();
     substitute.foo().returns(void 0, null);
     t.is(substitute.foo(), void 0);
     t.is(substitute.foo(), null);
 });
 ava_1.default('class method received', function (t) {
+    initialize();
     void substitute.c("hi", "there");
     void substitute.c("hi", "the1re");
     void substitute.c("hi", "there");
@@ -192,6 +213,7 @@ ava_1.default('class method received', function (t) {
     t.throws(function () { return substitute.received(7).c('hi', 'there'); }, "Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.\nAll calls received to method c:\n-> 4 calls with arguments ['hi', 'there']\n-> 1 call with arguments ['hi', 'the1re']");
 });
 ava_1.default('received call matches after partial mocks using property instance mimicks', function (t) {
+    initialize();
     substitute.d.mimicks(function () { return instance.d; });
     substitute.c('lala', 'bar');
     substitute.received(1).c('lala', 'bar');
@@ -201,20 +223,15 @@ ava_1.default('received call matches after partial mocks using property instance
     t.deepEqual(substitute.d, 1337);
 });
 ava_1.default('partial mocks using property instance mimicks', function (t) {
+    initialize();
     substitute.d.mimicks(function () { return instance.d; });
     t.deepEqual(substitute.d, 1337);
 });
 ava_1.default('are arguments equal', function (t) {
+    initialize();
     t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any(), 'hi'));
     t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), ['foo', 'bar']));
     t.false(Utilities_1.areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
     t.false(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), 1337));
-});
-ava_1.default('class string field get returns', function (t) {
-    substitute.a.returns("foo", "bar");
-    t.deepEqual(substitute.a, 'foo');
-    t.deepEqual(substitute.a, 'bar');
-    t.deepEqual(substitute.a, void 0);
-    t.deepEqual(substitute.a, void 0);
 });
 //# sourceMappingURL=index.test.js.map

@@ -1,3 +1,4 @@
 export declare class Example {
-    blocking(): number;
+    a: string;
+    blocking(): Promise<number>;
 }

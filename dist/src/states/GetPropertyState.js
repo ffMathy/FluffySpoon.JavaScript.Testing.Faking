@@ -105,7 +105,6 @@ var GetPropertyState = /** @class */ (function () {
         if (!hasExpectations) {
             this._callCount++;
             if (this.mimicks) {
-                // console.log('mim-invoke');
                 return this.mimicks.apply(this.mimicks);
             }
             if (this.returns !== Nothing) {

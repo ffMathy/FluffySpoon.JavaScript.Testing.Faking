@@ -7,12 +7,7 @@ export interface Example {
     bar: string;
 }
 
-let substitute: ObjectSubstitute<Example>;
-
-test.beforeEach(() => {
-	substitute = Substitute.for<Example>();
-});
-
+let substitute = Substitute.for<Example>();
 
 test('issue 15: can call properties twice', t => {
     const baz = "baz";

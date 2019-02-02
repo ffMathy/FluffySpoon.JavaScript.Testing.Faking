@@ -94,7 +94,6 @@ export class GetPropertyState implements ContextState {
             this._callCount++;
 
             if(this.mimicks) {
-                // console.log('mim-invoke');
                 return this.mimicks.apply(this.mimicks);
             }
 
