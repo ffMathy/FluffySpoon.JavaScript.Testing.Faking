@@ -98,8 +98,8 @@ ava_1.default('partial mocks using function mimicks with all args', function (t)
 });
 ava_1.default('can call received twice', function (t) {
     substitute.c('blah', 'fuzz');
-    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments [foo, bar], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments [blah, fuzz]");
-    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments [foo, bar], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments [blah, fuzz]");
+    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
+    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
 });
 ava_1.default('class string field get received', function (t) {
     void substitute.a;
@@ -189,7 +189,7 @@ ava_1.default('class method received', function (t) {
     t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
     t.notThrows(function () { return substitute.received(1).c('hi', 'the1re'); });
     t.notThrows(function () { return substitute.received().c('hi', 'there'); });
-    t.throws(function () { return substitute.received(7).c('hi', 'there'); }, "Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.\nAll calls received to method c:\n-> 4 calls with arguments [hi, there]\n-> 1 call with arguments [hi, the1re]");
+    t.throws(function () { return substitute.received(7).c('hi', 'there'); }, "Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.\nAll calls received to method c:\n-> 4 calls with arguments ['hi', 'there']\n-> 1 call with arguments ['hi', 'the1re']");
 });
 ava_1.default('received call matches after partial mocks using property instance mimicks', function (t) {
     substitute.d.mimicks(function () { return instance.d; });
@@ -197,7 +197,7 @@ ava_1.default('received call matches after partial mocks using property instance
     substitute.received(1).c('lala', 'bar');
     substitute.received(1).c('lala', 'bar');
     t.notThrows(function () { return substitute.received(1).c('lala', 'bar'); });
-    t.throws(function () { return substitute.received(2).c('lala', 'bar'); }, "Expected 2 calls to the method c with arguments [lala, bar], but received 1 of such call.\nAll calls received to method c:\n-> 1 call with arguments [lala, bar]");
+    t.throws(function () { return substitute.received(2).c('lala', 'bar'); }, "Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.\nAll calls received to method c:\n-> 1 call with arguments ['lala', 'bar']");
     t.deepEqual(substitute.d, 1337);
 });
 ava_1.default('partial mocks using property instance mimicks', function (t) {

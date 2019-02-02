@@ -11,7 +11,9 @@ var __values = (this && this.__values) || function (o) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 var Arguments_1 = require("./Arguments");
+var util = require("util");
 function stringifyArguments(args) {
+    args = args.map(function (x) { return util.inspect(x); });
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
 }
 exports.stringifyArguments = stringifyArguments;

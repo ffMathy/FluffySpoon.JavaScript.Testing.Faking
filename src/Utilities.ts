@@ -1,8 +1,10 @@
 import { Argument, AllArguments } from "./Arguments";
+import util = require('util')
 
 export type Call = {callCount: number, arguments?: any[]};
 
 export function stringifyArguments(args: any[]) {
+    args = args.map(x => util.inspect(x));
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
 };
 

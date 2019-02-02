@@ -68,14 +68,14 @@ test('can call received twice', t => {
 	substitute.c('blah', 'fuzz');
 
 	t.throws(() => substitute.received(1337).c('foo', 'bar'), 
-`Expected 1337 calls to the method c with arguments [foo, bar], but received none of such calls.
+`Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
 All calls received to method c:
--> 1 call with arguments [blah, fuzz]`);
+-> 1 call with arguments ['blah', 'fuzz']`);
 
 	t.throws(() => substitute.received(2117).c('foo', 'bar'),
-`Expected 2117 calls to the method c with arguments [foo, bar], but received none of such calls.
+`Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
 All calls received to method c:
--> 1 call with arguments [blah, fuzz]`);
+-> 1 call with arguments ['blah', 'fuzz']`);
 });
 
 test('class string field get received', t => {
@@ -164,10 +164,10 @@ test('class method received', t => {
 	t.notThrows(() => substitute.received().c('hi', 'there'));
 
 	t.throws(() => substitute.received(7).c('hi', 'there'), 
-`Expected 7 calls to the method c with arguments [hi, there], but received 4 of such calls.
+`Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.
 All calls received to method c:
--> 4 calls with arguments [hi, there]
--> 1 call with arguments [hi, the1re]`);
+-> 4 calls with arguments ['hi', 'there']
+-> 1 call with arguments ['hi', 'the1re']`);
 });
 
 test('received call matches after partial mocks using property instance mimicks', t => {
@@ -179,9 +179,9 @@ test('received call matches after partial mocks using property instance mimicks'
 
 	t.notThrows(() => substitute.received(1).c('lala', 'bar'));
 	t.throws(() => substitute.received(2).c('lala', 'bar'),
-`Expected 2 calls to the method c with arguments [lala, bar], but received 1 of such call.
+`Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.
 All calls received to method c:
--> 1 call with arguments [lala, bar]`);
+-> 1 call with arguments ['lala', 'bar']`);
 	
 	t.deepEqual(substitute.d, 1337);
 });
