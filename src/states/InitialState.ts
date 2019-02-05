@@ -37,7 +37,6 @@ export class InitialState implements ContextState {
 
     assertCallCountMatchesExpectations(calls: Call[], callCount: number, type: string, property: PropertyKey, args: any[]) {
         const expectedCount = this._expectedCount;
-        // console.log('exp-match', expectedCount, callCount);
 
         this.clearExpectations();
 
@@ -68,7 +67,6 @@ export class InitialState implements ContextState {
 
         const existingSetState = this.recordedSetPropertyStates.find(x => x.arguments[0] === value);;
         if (existingSetState) {
-            // console.log('ex-prop');
             return existingSetState.set(context, property, value);
         }
 
@@ -76,8 +74,6 @@ export class InitialState implements ContextState {
         context.state = setPropertyState;
 
         this.recordedSetPropertyStates.push(setPropertyState);
-
-        // console.log('states', this.recordedSetPropertyStates);
 
         setPropertyState.set(context, property, value);
     }
@@ -120,8 +116,6 @@ export class InitialState implements ContextState {
 
         if (property === 'received') {
             return (count?: number) => {
-                // console.log('expectation', count);
-
                 this._expectedCount = count === void 0 ? null : count;
                 return context.proxy;
             };
@@ -142,7 +136,6 @@ export class InitialState implements ContextState {
     }
 
     private clearExpectations() {
-        // console.log('reset-exp');
         this._expectedCount = void 0;
     }
 

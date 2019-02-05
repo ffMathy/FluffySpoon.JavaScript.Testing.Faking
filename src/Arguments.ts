@@ -1,8 +1,11 @@
 export class Argument<T> {
+    encounteredValues: any[];
+
     constructor(
         private description: string,
         private matchingFunction: (arg: T) => boolean
     ) {
+        this.encounteredValues = [];
     }
 
     matches(arg: T) {
@@ -20,7 +23,7 @@ export class Argument<T> {
 
 export class AllArguments extends Argument<any> {
     constructor() {
-        super('{all arguments}', () => true);
+        super('{all}', () => true);
     }
 }
 
@@ -37,7 +40,7 @@ export class Arg {
     static any<T extends 'function'>(type: T): Argument<Function> & Function
     static any<T extends 'string'|'number'|'boolean'|'symbol'|'undefined'|'object'|'function'|'array'>(type: T)
     static any(type?: string): Argument<any> & any {
-        const description = !type ? '{any arg}' : '{arg matching ' + type + '}';
+        const description = !type ? '{any arg}' : '{type ' + type + '}';
         return new Argument<any>(description, x => {
             if(!type)
                 return true;
@@ -53,7 +56,7 @@ export class Arg {
     }
 
     static is<T>(predicate: (input: T) => boolean): Argument<T> & T {
-        return new Argument<T>('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate) as any;
+        return new Argument<T>('{predicate ' + this.toStringify(predicate) + '}', predicate) as any;
     }
 
     private static toStringify(obj: any) {

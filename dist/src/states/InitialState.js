@@ -60,7 +60,6 @@ var InitialState = /** @class */ (function () {
     });
     InitialState.prototype.assertCallCountMatchesExpectations = function (calls, callCount, type, property, args) {
         var expectedCount = this._expectedCount;
-        // console.log('exp-match', expectedCount, callCount);
         this.clearExpectations();
         if (this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
@@ -83,13 +82,11 @@ var InitialState = /** @class */ (function () {
         var existingSetState = this.recordedSetPropertyStates.find(function (x) { return x.arguments[0] === value; });
         ;
         if (existingSetState) {
-            // console.log('ex-prop');
             return existingSetState.set(context, property, value);
         }
         var setPropertyState = new SetPropertyState_1.SetPropertyState(property, value);
         context.state = setPropertyState;
         this.recordedSetPropertyStates.push(setPropertyState);
-        // console.log('states', this.recordedSetPropertyStates);
         setPropertyState.set(context, property, value);
     };
     InitialState.prototype.get = function (context, property) {
@@ -120,7 +117,6 @@ var InitialState = /** @class */ (function () {
             return function () { return context.rootProxy; };
         if (property === 'received') {
             return function (count) {
-                // console.log('expectation', count);
                 _this._expectedCount = count === void 0 ? null : count;
                 return context.proxy;
             };
@@ -136,7 +132,6 @@ var InitialState = /** @class */ (function () {
         return context.get(property);
     };
     InitialState.prototype.clearExpectations = function () {
-        // console.log('reset-exp');
         this._expectedCount = void 0;
     };
     InitialState.prototype.onSwitchedTo = function () {

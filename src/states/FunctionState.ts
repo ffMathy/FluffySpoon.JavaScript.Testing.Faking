@@ -2,6 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { stringifyArguments, stringifyCalls, areArgumentsEqual, areArgumentArraysEqual } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
+import { Argument } from "../Arguments";
 
 const Nothing = Symbol();
 
@@ -33,10 +34,11 @@ export class FunctionState implements ContextState {
     apply(context: Context, args: any[]) {
         let callCount = this._callCount;
         const hasExpectations = context.initialState.hasExpectations;
+        const matchingFunctionStates = this._getPropertyState
+            .recordedFunctionStates
+            .filter(x => areArgumentArraysEqual(x.arguments, args));
         if(hasExpectations) {
-            callCount = this._getPropertyState
-                .recordedFunctionStates
-                .filter(x => areArgumentArraysEqual(x.arguments, args))
+            callCount = matchingFunctionStates
                 .map(x => x.callCount)
                 .reduce((a, b) => a + b, 0);
         }
@@ -48,8 +50,24 @@ export class FunctionState implements ContextState {
             this.property,
             args);
 
-        if(!hasExpectations)
+        if(!hasExpectations) {
             this._callCount++;
+
+            for(let matchingFunctionState of matchingFunctionStates)
+            for(let argument of matchingFunctionState.arguments) {
+                if(!(argument instanceof Argument))
+                    continue;
+
+                const indexOffset = matchingFunctionState
+                    .arguments
+                    .indexOf(argument);
+                const myArg = args[indexOffset];
+                if(myArg instanceof Argument)
+                    continue;
+
+                argument.encounteredValues.push(myArg);
+            }
+        }
 
         if(this.mimicks)
             return this.mimicks.apply(this.mimicks, args);
@@ -73,8 +91,6 @@ export class FunctionState implements ContextState {
 
         if(property === 'mimicks') {
             return (input: Function) => {
-                // console.log('mimicks', input);
-
                 this.mimicks = input;
                 this._callCount--;
 
@@ -87,8 +103,6 @@ export class FunctionState implements ContextState {
                 throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
 
             return (...returns: any[]) => {
-                // console.log('returns', returns);
-
                 this.returns = returns;
                 this._callCount--;
 

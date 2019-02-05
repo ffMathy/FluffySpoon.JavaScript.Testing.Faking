@@ -17,6 +17,7 @@ var Argument = /** @class */ (function () {
     function Argument(description, matchingFunction) {
         this.description = description;
         this.matchingFunction = matchingFunction;
+        this.encounteredValues = [];
     }
     Argument.prototype.matches = function (arg) {
         return this.matchingFunction(arg);
@@ -33,7 +34,7 @@ exports.Argument = Argument;
 var AllArguments = /** @class */ (function (_super) {
     __extends(AllArguments, _super);
     function AllArguments() {
-        return _super.call(this, '{all arguments}', function () { return true; }) || this;
+        return _super.call(this, '{all}', function () { return true; }) || this;
     }
     return AllArguments;
 }(Argument));
@@ -45,7 +46,7 @@ var Arg = /** @class */ (function () {
         return new AllArguments();
     };
     Arg.any = function (type) {
-        var description = !type ? '{any arg}' : '{arg matching ' + type + '}';
+        var description = !type ? '{any arg}' : '{type ' + type + '}';
         return new Argument(description, function (x) {
             if (!type)
                 return true;
@@ -57,7 +58,7 @@ var Arg = /** @class */ (function () {
         });
     };
     Arg.is = function (predicate) {
-        return new Argument('{arg matching predicate ' + this.toStringify(predicate) + '}', predicate);
+        return new Argument('{predicate ' + this.toStringify(predicate) + '}', predicate);
     };
     Arg.toStringify = function (obj) {
         if (typeof obj.inspect === 'function')

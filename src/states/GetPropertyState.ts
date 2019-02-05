@@ -39,7 +39,6 @@ export class GetPropertyState implements ContextState {
 
         const matchingFunctionState = this._recordedFunctionStates.find(x => areArgumentArraysEqual(x.arguments, args));
         if(matchingFunctionState) {
-            // console.log('ex-func');
             return matchingFunctionState.apply(context, args);
         }
 
@@ -47,8 +46,6 @@ export class GetPropertyState implements ContextState {
         context.state = functionState;
 
         this._recordedFunctionStates.push(functionState);
-
-        // console.log('states', this._recordedFunctionStates);
 
         return context.apply(args);
     }
@@ -67,8 +64,6 @@ export class GetPropertyState implements ContextState {
 
         if(property === 'mimicks') {
             return (input: Function) => {
-                // console.log('mimicks', input);
-
                 this.mimicks = input;
                 this._callCount--;
 
@@ -81,8 +76,6 @@ export class GetPropertyState implements ContextState {
                 throw new Error('The return value for the property ' + this._property.toString() + ' has already been set to ' + this.returns);
 
             return (...returns: any[]) => {
-                // console.log('returns', returns);
-
                 this.returns = returns;
                 this._callCount--;
 

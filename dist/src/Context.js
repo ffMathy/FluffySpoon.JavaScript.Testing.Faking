@@ -33,24 +33,14 @@ var Context = /** @class */ (function () {
         });
     }
     Context.prototype.apply = function (args) {
-        // console.log('apply', args);
         return this._state.apply(this, args);
     };
     Context.prototype.set = function (property, value) {
-        // console.log('set', property, value);
         return this._state.set(this, property, value);
     };
     Context.prototype.get = function (property) {
         if (property === Substitute_1.HandlerKey)
             return this;
-        // const uninterestingProperties = [
-        //     '$$typeof',
-        //     'constructor',
-        //     'name',
-        //     'call'
-        // ];
-        // if(typeof property !== 'symbol' && uninterestingProperties.indexOf(property.toString()) === -1)
-        //     console.log('get', property);
         return this._state.get(this, property);
     };
     Object.defineProperty(Context.prototype, "proxy", {
@@ -81,7 +71,6 @@ var Context = /** @class */ (function () {
             this._state = state;
             if (state.onSwitchedTo)
                 state.onSwitchedTo(this);
-            // console.log('state', state);
         },
         enumerable: true,
         configurable: true

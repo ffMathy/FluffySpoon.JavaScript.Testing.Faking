@@ -39,8 +39,19 @@ export function areArgumentsEqual(a: any, b: any) {
     if(a instanceof AllArguments || b instanceof AllArguments)
         return true;
 
-    if(a instanceof Argument && b instanceof Argument)
-        return a.matches(b) && b.matches(a);
+    if(a instanceof Argument && b instanceof Argument) {
+        for(let encounteredValue of a.encounteredValues) {
+            if(!b.matches(encounteredValue))
+                return false;
+        }
+
+        for(let encounteredValue of b.encounteredValues) {
+            if(!a.matches(encounteredValue))
+                return false;
+        }
+
+        return true;
+    }
 
     if(a instanceof Argument) 
         return a.matches(b);

@@ -53,10 +53,40 @@ function stringifyCalls(calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
+    var e_2, _a, e_3, _b;
     if (a instanceof Arguments_1.AllArguments || b instanceof Arguments_1.AllArguments)
         return true;
-    if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument)
-        return a.matches(b) && b.matches(a);
+    if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument) {
+        try {
+            for (var _c = __values(a.encounteredValues), _d = _c.next(); !_d.done; _d = _c.next()) {
+                var encounteredValue = _d.value;
+                if (!b.matches(encounteredValue))
+                    return false;
+            }
+        }
+        catch (e_2_1) { e_2 = { error: e_2_1 }; }
+        finally {
+            try {
+                if (_d && !_d.done && (_a = _c.return)) _a.call(_c);
+            }
+            finally { if (e_2) throw e_2.error; }
+        }
+        try {
+            for (var _e = __values(b.encounteredValues), _f = _e.next(); !_f.done; _f = _e.next()) {
+                var encounteredValue = _f.value;
+                if (!a.matches(encounteredValue))
+                    return false;
+            }
+        }
+        catch (e_3_1) { e_3 = { error: e_3_1 }; }
+        finally {
+            try {
+                if (_f && !_f.done && (_b = _e.return)) _b.call(_e);
+            }
+            finally { if (e_3) throw e_3.error; }
+        }
+        return true;
+    }
     if (a instanceof Arguments_1.Argument)
         return a.matches(b);
     if (b instanceof Arguments_1.Argument)

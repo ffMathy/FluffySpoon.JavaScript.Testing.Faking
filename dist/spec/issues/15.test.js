@@ -2,7 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
 var Index_1 = require("../../src/Index");
-var substitute = Index_1.Substitute.for();
 ava_1.default('issue 15: can call properties twice', function (t) {
     var baz = "baz";
     var foo = Index_1.Substitute.for();

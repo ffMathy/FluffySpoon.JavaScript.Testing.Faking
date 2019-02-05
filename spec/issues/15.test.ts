@@ -1,13 +1,10 @@
 import test from 'ava';
 
 import { Substitute } from '../../src/Index';
-import { ObjectSubstitute } from '../../src/Transformations';
 
 export interface Example {
     bar: string;
 }
-
-let substitute = Substitute.for<Example>();
 
 test('issue 15: can call properties twice', t => {
     const baz = "baz";
