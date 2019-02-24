@@ -8,7 +8,7 @@ const Nothing = Symbol();
 
 export class FunctionState implements ContextState {
     private returns: any[]|Symbol;
-    private mimicks: Function;
+    private mimicks: Function|null;
 
     private _callCount: number;
     private _arguments: any[];
@@ -26,8 +26,10 @@ export class FunctionState implements ContextState {
     }
 
     constructor(private _getPropertyState: GetPropertyState, ...args: any[]) {
-        this._arguments = args;
         this.returns = Nothing;
+        this.mimicks = null;
+
+        this._arguments = args;
         this._callCount = 0;
     }
 

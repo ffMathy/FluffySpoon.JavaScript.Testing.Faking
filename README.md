@@ -146,6 +146,7 @@ console.log(fakeCalculator.divide(9, 5)); //prints 1338
 - Doesn't rely on object instances - you can produce a strong-typed fake from nothing, ensuring that everything is mocked.
 
 # Beware
+## Names that conflict with Substitute.js
 Let's say we have a class with a method called `received`, `didNotReceive` or `mimick` keyword - how do we mock it? 
 
 Simple! We disable the proxy methods temporarily while invoking the method by using the `disableFor` method which disables these special methods.
@@ -167,4 +168,18 @@ Substitute.disableFor(fake).received(1337);
 
 //now we can assert that we received a call to the "received" method.
 fake.received().received(1337);
+```
+
+## Strict mode
+If you have `strict` set to `true` in your `tsconfig.json`, you may need to toggle off strict null checks. The framework does not currently support this.
+
+However, it is only needed for your test projects anyway.
+
+```json
+{
+    "compilerOptions": {
+        "strict": true,
+        "strictNullChecks": false
+    }
+}
 ```

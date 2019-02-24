@@ -28,6 +28,7 @@ var InitialState = /** @class */ (function () {
     function InitialState() {
         this.recordedGetPropertyStates = new Map();
         this.recordedSetPropertyStates = [];
+        this._areProxiesDisabled = false;
         this._expectedCount = void 0;
     }
     Object.defineProperty(InitialState.prototype, "expectedCount", {

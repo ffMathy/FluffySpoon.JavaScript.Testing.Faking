@@ -8,7 +8,7 @@ export declare class SetPropertyState implements ContextState {
     readonly property: string | number | symbol;
     readonly callCount: number;
     constructor(_property: PropertyKey, ...args: any[]);
-    apply(context: Context): any;
+    apply(context: Context): undefined;
     set(context: Context, property: PropertyKey, value: any): void;
-    get(context: Context, property: PropertyKey): any;
+    get(context: Context, property: PropertyKey): undefined;
 }

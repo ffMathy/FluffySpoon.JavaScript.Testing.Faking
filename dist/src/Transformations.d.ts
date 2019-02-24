@@ -1,7 +1,7 @@
 import { AllArguments } from "./Arguments";
 export declare type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>));
 export declare type FunctionSubstitute<TArguments extends any[], TReturnType> = ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) & ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>));
-export declare type PropertySubstitute<TReturnType> = TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>;
+export declare type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
 declare type BaseMockObjectMixin<TReturnType> = {
     returns: (...args: TReturnType[]) => void;
 };

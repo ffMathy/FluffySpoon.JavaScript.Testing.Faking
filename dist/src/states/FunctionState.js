@@ -20,8 +20,9 @@ var FunctionState = /** @class */ (function () {
             args[_i - 1] = arguments[_i];
         }
         this._getPropertyState = _getPropertyState;
-        this._arguments = args;
         this.returns = Nothing;
+        this.mimicks = null;
+        this._arguments = args;
         this._callCount = 0;
     }
     Object.defineProperty(FunctionState.prototype, "arguments", {

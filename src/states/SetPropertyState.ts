@@ -26,7 +26,7 @@ export class SetPropertyState implements ContextState {
         this._callCount = 0;
     }
 
-    apply(context: Context) {
+    apply(context: Context): undefined {
         return void 0;
     }
 
@@ -53,7 +53,7 @@ export class SetPropertyState implements ContextState {
         }
     }
 
-    get(context: Context, property: PropertyKey) {
+    get(context: Context, property: PropertyKey): undefined {
         return void 0;
     }
 }

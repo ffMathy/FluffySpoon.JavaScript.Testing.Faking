@@ -19,7 +19,7 @@ export class Example {
 		return 1337;
 	}
 
-	set v(x: string) {
+	set v(x: string|null|undefined) {
 	}
 
 	received(stuff: number|string) {
@@ -30,7 +30,7 @@ export class Example {
 		return Promise.resolve(new Dummy());
 	}
 
-	foo() {
+	foo(): string|undefined|null {
 		return 'stuff';
 	}
 }

@@ -9,7 +9,7 @@ export class InitialState implements ContextState {
     private recordedGetPropertyStates: Map<PropertyKey, GetPropertyState>;
     private recordedSetPropertyStates: SetPropertyState[];
     
-    private _expectedCount: number;
+    private _expectedCount: number|undefined|null;
     private _areProxiesDisabled: boolean;
 
     public get expectedCount() {
@@ -32,6 +32,7 @@ export class InitialState implements ContextState {
         this.recordedGetPropertyStates = new Map();
         this.recordedSetPropertyStates = [];
 
+        this._areProxiesDisabled = false;
         this._expectedCount = void 0;
     }
 
@@ -46,7 +47,7 @@ export class InitialState implements ContextState {
         throw new Error('Expected ' + expectedCount + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls));
     }
 
-    private doesCallCountMatchExpectations(expectedCount: number, actualCount: number) {
+    private doesCallCountMatchExpectations(expectedCount: number|undefined|null, actualCount: number) {
         if (expectedCount === void 0)
             return true;
 

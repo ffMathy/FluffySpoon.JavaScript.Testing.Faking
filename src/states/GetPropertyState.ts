@@ -7,7 +7,7 @@ const Nothing = Symbol();
 
 export class GetPropertyState implements ContextState {
     private returns: any[]|Symbol;
-    private mimicks: Function;
+    private mimicks: Function|null;
 
     private _callCount: number;
     private _recordedFunctionStates: FunctionState[];
@@ -30,6 +30,8 @@ export class GetPropertyState implements ContextState {
 
     constructor(private _property: PropertyKey) {
         this.returns = Nothing;
+        this.mimicks = null;
+
         this._recordedFunctionStates = [];
         this._callCount = 0;
     }
@@ -86,9 +88,8 @@ export class GetPropertyState implements ContextState {
         if(!hasExpectations) {
             this._callCount++;
 
-            if(this.mimicks) {
+            if(this.mimicks)
                 return this.mimicks.apply(this.mimicks);
-            }
 
             if(this.returns !== Nothing) {
                 var returnsArray = this.returns as any[];

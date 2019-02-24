@@ -27,6 +27,7 @@ var GetPropertyState = /** @class */ (function () {
     function GetPropertyState(_property) {
         this._property = _property;
         this.returns = Nothing;
+        this.mimicks = null;
         this._recordedFunctionStates = [];
         this._callCount = 0;
     }
@@ -100,9 +101,8 @@ var GetPropertyState = /** @class */ (function () {
         }
         if (!hasExpectations) {
             this._callCount++;
-            if (this.mimicks) {
+            if (this.mimicks)
                 return this.mimicks.apply(this.mimicks);
-            }
             if (this.returns !== Nothing) {
                 var returnsArray = this.returns;
                 if (returnsArray.length === 1)
