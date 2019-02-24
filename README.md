@@ -16,6 +16,8 @@ interface Calculator {
   add(a: number, b: number): number;
   subtract(a: number, b: number): number;
   divide(a: number, b: number): number;
+
+  isEnabled: boolean;
 }
 
 //Create:
@@ -49,8 +51,20 @@ console.log(calculator.add(1, 2)); //prints 9
 console.log(calculator.add(1, 2)); //prints undefined
 ```
 
+## Verifying calls
+```typescript
+calculator.enabled = true;
+var foo = calculator.add(1, 2);
+
+//verify call to add(1, 2)
+calculator.received().add(1, 2);
+
+//verify property set to "true"
+calculator.received().enabled = true;
+```
+
 ## Argument matchers
-There are several ways of matching arguments. The examples below also applies to properties and fields.
+There are several ways of matching arguments. The examples below also applies to properties and fields - both when setting up calls and verifying them.
 
 ### Matching specific arguments
 ```typescript
