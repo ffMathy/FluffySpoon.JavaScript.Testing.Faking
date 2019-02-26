@@ -5,7 +5,7 @@ export const HandlerKey = Symbol();
 export const AreProxiesDisabledKey = Symbol();
 
 export class Substitute {
-    static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> {
+    static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> & T {
         const objectContext = new Context();
         return objectContext.rootProxy;
     }
