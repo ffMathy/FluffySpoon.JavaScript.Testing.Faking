@@ -33,7 +33,7 @@ class ClassC {
 	}
 }
 
-test('issue 9: can record method with 0 arguments', async t => {
+test('issue 8: can use substitute in arguments', async t => {
     const classBMock = Substitute.for<ClassB>();
     const classC = new ClassC(classBMock);
     t.not(classC, null);
