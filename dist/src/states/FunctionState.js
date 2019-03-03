@@ -46,13 +46,15 @@ var FunctionState = /** @class */ (function () {
         enumerable: true,
         configurable: true
     });
-    FunctionState.prototype.apply = function (context, args) {
+    FunctionState.prototype.apply = function (context, args, matchingFunctionStates) {
         var e_1, _a, e_2, _b;
         var callCount = this._callCount;
         var hasExpectations = context.initialState.hasExpectations;
-        var matchingFunctionStates = this._getPropertyState
-            .recordedFunctionStates
-            .filter(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
+        if (!matchingFunctionStates) {
+            matchingFunctionStates = this._getPropertyState
+                .recordedFunctionStates
+                .filter(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
+        }
         if (hasExpectations) {
             callCount = matchingFunctionStates
                 .map(function (x) { return x.callCount; })

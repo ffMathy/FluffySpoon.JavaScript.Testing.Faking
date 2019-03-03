@@ -33,12 +33,15 @@ export class FunctionState implements ContextState {
         this._callCount = 0;
     }
 
-    apply(context: Context, args: any[]) {
+    apply(context: Context, args: any[], matchingFunctionStates: FunctionState[]) {
         let callCount = this._callCount;
         const hasExpectations = context.initialState.hasExpectations;
-        const matchingFunctionStates = this._getPropertyState
-            .recordedFunctionStates
-            .filter(x => areArgumentArraysEqual(x.arguments, args));
+        if(!matchingFunctionStates) {
+            matchingFunctionStates = this._getPropertyState
+                .recordedFunctionStates
+                .filter(x => areArgumentArraysEqual(x.arguments, args));
+        }
+
         if(hasExpectations) {
             callCount = matchingFunctionStates
                 .map(x => x.callCount)

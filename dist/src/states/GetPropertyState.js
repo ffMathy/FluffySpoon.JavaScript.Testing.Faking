@@ -61,9 +61,10 @@ var GetPropertyState = /** @class */ (function () {
     });
     GetPropertyState.prototype.apply = function (context, args) {
         this._callCount = 0;
-        var matchingFunctionState = this._recordedFunctionStates.find(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
-        if (matchingFunctionState) {
-            return matchingFunctionState.apply(context, args);
+        var matchingFunctionStates = this._recordedFunctionStates.filter(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
+        if (matchingFunctionStates.length > 0) {
+            var matchingFunctionState = matchingFunctionStates[0];
+            return matchingFunctionState.apply(context, args, matchingFunctionStates);
         }
         var functionState = new (FunctionState_1.FunctionState.bind.apply(FunctionState_1.FunctionState, __spread([void 0, this], args)))();
         context.state = functionState;

@@ -11,7 +11,7 @@ export declare class FunctionState implements ContextState {
     readonly callCount: number;
     readonly property: string | number | symbol;
     constructor(_getPropertyState: GetPropertyState, ...args: any[]);
-    apply(context: Context, args: any[]): any;
+    apply(context: Context, args: any[], matchingFunctionStates: FunctionState[]): any;
     set(context: Context, property: PropertyKey, value: any): void;
     get(context: Context, property: PropertyKey): any;
 }

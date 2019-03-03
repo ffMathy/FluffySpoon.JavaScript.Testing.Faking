@@ -36,44 +36,29 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
-var Index_1 = require("../../src/Index");
 var ava_1 = require("ava");
-var ClassA = /** @class */ (function () {
-    function ClassA() {
+var index_1 = require("../../src/index");
+var RealCalculator = /** @class */ (function () {
+    function RealCalculator() {
     }
-    ClassA.prototype.methodA = function () {
-        return 'abc';
+    RealCalculator.prototype.add = function (addands) {
+        return addands.op1 + addands.op2;
     };
-    return ClassA;
+    return RealCalculator;
 }());
-var ClassB = /** @class */ (function () {
-    function ClassB(classA) {
-        this.classA = classA;
-    }
-    ClassB.prototype.methodB = function () {
-        return this.classA.methodA();
-    };
-    ClassB.prototype.methodB2 = function () {
-        return 'def';
-    };
-    return ClassB;
-}());
-var ClassC = /** @class */ (function () {
-    function ClassC(classB) {
-        this.classB = classB;
-    }
-    ClassC.prototype.methodC = function () {
-        return this.classB.methodB2();
-    };
-    return ClassC;
-}());
-ava_1.default('issue 8: can use substitute in arguments', function (t) { return __awaiter(_this, void 0, void 0, function () {
-    var classBMock, classC;
+ava_1.default('issue 11: arg.is is only called once', function (t) { return __awaiter(_this, void 0, void 0, function () {
+    var mockedCalculator, count;
     return __generator(this, function (_a) {
-        classBMock = Index_1.default.for();
-        classC = new ClassC(classBMock);
-        t.not(classC, null);
+        mockedCalculator = index_1.Substitute.for();
+        mockedCalculator.add(index_1.Arg.any()).returns(4);
+        count = 0;
+        mockedCalculator.add({ op1: 1, op2: 2 });
+        mockedCalculator.received(1).add(index_1.Arg.is(function (a) {
+            count++;
+            return a.op1 === 1 && a.op2 === 2;
+        }));
+        t.is(count, 1);
         return [2 /*return*/];
     });
 }); });
-//# sourceMappingURL=8.test.js.map
+//# sourceMappingURL=11.test.js.map

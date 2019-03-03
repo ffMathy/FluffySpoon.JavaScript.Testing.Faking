@@ -39,9 +39,13 @@ export class GetPropertyState implements ContextState {
     apply(context: Context, args: any[]) {
         this._callCount = 0;
 
-        const matchingFunctionState = this._recordedFunctionStates.find(x => areArgumentArraysEqual(x.arguments, args));
-        if(matchingFunctionState) {
-            return matchingFunctionState.apply(context, args);
+        const matchingFunctionStates = this._recordedFunctionStates.filter(x => areArgumentArraysEqual(x.arguments, args));
+        if(matchingFunctionStates.length > 0) {
+            const matchingFunctionState = matchingFunctionStates[0];
+            return matchingFunctionState.apply(
+                context, 
+                args, 
+                matchingFunctionStates);
         }
 
         var functionState = new FunctionState(this, ...args);
