@@ -43,7 +43,7 @@ var Arg = /** @class */ (function () {
     function Arg() {
     }
     Arg.all = function () {
-        return new AllArguments();
+        return this._all = (this._all || new AllArguments());
     };
     Arg.any = function (type) {
         var description = !type ? '{any arg}' : '{type ' + type + '}';

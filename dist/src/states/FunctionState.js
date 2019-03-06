@@ -57,6 +57,7 @@ var FunctionState = /** @class */ (function () {
         }
         if (hasExpectations) {
             callCount = matchingFunctionStates
+                .filter(function (x) { return x._arguments[0] !== Arguments_1.Arg.all(); })
                 .map(function (x) { return x.callCount; })
                 .reduce(function (a, b) { return a + b; }, 0);
         }
@@ -129,6 +130,15 @@ var FunctionState = /** @class */ (function () {
                 }
                 _this.returns = returns;
                 _this._callCount--;
+                if (_this._callCount === 0) {
+                    var indexOfSelf = _this
+                        ._getPropertyState
+                        .recordedFunctionStates
+                        .indexOf(_this);
+                    _this._getPropertyState
+                        .recordedFunctionStates
+                        .splice(indexOfSelf, 1);
+                }
                 context.state = context.initialState;
             };
         }

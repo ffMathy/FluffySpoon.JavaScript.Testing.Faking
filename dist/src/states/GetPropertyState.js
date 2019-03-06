@@ -54,14 +54,15 @@ var GetPropertyState = /** @class */ (function () {
     });
     Object.defineProperty(GetPropertyState.prototype, "recordedFunctionStates", {
         get: function () {
-            return __spread(this._recordedFunctionStates);
+            return this._recordedFunctionStates;
         },
         enumerable: true,
         configurable: true
     });
     GetPropertyState.prototype.apply = function (context, args) {
         this._callCount = 0;
-        var matchingFunctionStates = this._recordedFunctionStates.filter(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
+        var matchingFunctionStates = this._recordedFunctionStates
+            .filter(function (x) { return Utilities_1.areArgumentArraysEqual(x.arguments, args); });
         if (matchingFunctionStates.length > 0) {
             var matchingFunctionState = matchingFunctionStates[0];
             return matchingFunctionState.apply(context, args, matchingFunctionStates);

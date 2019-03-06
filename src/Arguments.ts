@@ -28,8 +28,10 @@ export class AllArguments extends Argument<any> {
 }
 
 export class Arg {
+    private static _all: AllArguments;
+
     static all() {
-        return new AllArguments();
+        return this._all = (this._all || new AllArguments());
     }
 
     static any(): Argument<any> & any

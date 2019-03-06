@@ -2,7 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { stringifyArguments, stringifyCalls, areArgumentsEqual, areArgumentArraysEqual } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
-import { Argument } from "../Arguments";
+import { Argument, Arg } from "../Arguments";
 
 const Nothing = Symbol();
 
@@ -44,6 +44,7 @@ export class FunctionState implements ContextState {
 
         if(hasExpectations) {
             callCount = matchingFunctionStates
+                .filter(x => x._arguments[0] !== Arg.all())
                 .map(x => x.callCount)
                 .reduce((a, b) => a + b, 0);
         }
@@ -110,6 +111,16 @@ export class FunctionState implements ContextState {
             return (...returns: any[]) => {
                 this.returns = returns;
                 this._callCount--;
+
+                if(this._callCount === 0) {
+                    var indexOfSelf = this
+                        ._getPropertyState
+                        .recordedFunctionStates
+                        .indexOf(this);
+                    this._getPropertyState
+                        .recordedFunctionStates
+                        .splice(indexOfSelf, 1);
+                }
 
                 context.state = context.initialState;
             };

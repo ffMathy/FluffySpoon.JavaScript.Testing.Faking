@@ -11,6 +11,7 @@ export declare class AllArguments extends Argument<any> {
     constructor();
 }
 export declare class Arg {
+    private static _all;
     static all(): AllArguments;
     static any(): Argument<any> & any;
     static any<T extends 'string'>(type: T): Argument<string> & string;

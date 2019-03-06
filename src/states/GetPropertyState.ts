@@ -2,6 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { FunctionState } from "./FunctionState";
 import { areArgumentsEqual, areArgumentArraysEqual } from "../Utilities";
+import { Arg } from "../Arguments";
 
 const Nothing = Symbol();
 
@@ -25,7 +26,7 @@ export class GetPropertyState implements ContextState {
     }
 
     public get recordedFunctionStates() {
-        return [...this._recordedFunctionStates];
+        return this._recordedFunctionStates;
     }
 
     constructor(private _property: PropertyKey) {
@@ -39,7 +40,8 @@ export class GetPropertyState implements ContextState {
     apply(context: Context, args: any[]) {
         this._callCount = 0;
 
-        const matchingFunctionStates = this._recordedFunctionStates.filter(x => areArgumentArraysEqual(x.arguments, args));
+        const matchingFunctionStates = this._recordedFunctionStates
+            .filter(x => areArgumentArraysEqual(x.arguments, args));
         if(matchingFunctionStates.length > 0) {
             const matchingFunctionState = matchingFunctionStates[0];
             return matchingFunctionState.apply(
