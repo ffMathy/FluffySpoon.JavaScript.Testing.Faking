@@ -113,13 +113,13 @@ export class FunctionState implements ContextState {
                 this._callCount--;
 
                 if(this._callCount === 0) {
-                    var indexOfSelf = this
-                        ._getPropertyState
-                        .recordedFunctionStates
-                        .indexOf(this);
-                    this._getPropertyState
-                        .recordedFunctionStates
-                        .splice(indexOfSelf, 1);
+                    // var indexOfSelf = this
+                    //     ._getPropertyState
+                    //     .recordedFunctionStates
+                    //     .indexOf(this);
+                    // this._getPropertyState
+                    //     .recordedFunctionStates
+                    //     .splice(indexOfSelf, 1);
                 }
 
                 context.state = context.initialState;

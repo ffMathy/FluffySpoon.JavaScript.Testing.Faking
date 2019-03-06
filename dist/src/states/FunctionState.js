@@ -131,13 +131,13 @@ var FunctionState = /** @class */ (function () {
                 _this.returns = returns;
                 _this._callCount--;
                 if (_this._callCount === 0) {
-                    var indexOfSelf = _this
-                        ._getPropertyState
-                        .recordedFunctionStates
-                        .indexOf(_this);
-                    _this._getPropertyState
-                        .recordedFunctionStates
-                        .splice(indexOfSelf, 1);
+                    // var indexOfSelf = this
+                    //     ._getPropertyState
+                    //     .recordedFunctionStates
+                    //     .indexOf(this);
+                    // this._getPropertyState
+                    //     .recordedFunctionStates
+                    //     .splice(indexOfSelf, 1);
                 }
                 context.state = context.initialState;
             };
