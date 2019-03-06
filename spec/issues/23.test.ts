@@ -9,13 +9,15 @@ interface CalculatorInterface {
     isEnabled: boolean
 }
 
-test('issue 18: receive with arg', t => {
+test('issue 23: mimick received should not call method', t => {
     const mockedCalculator = Substitute.for<CalculatorInterface>();
-    mockedCalculator.add(1, Arg.is(input => input === 2)).returns(4);
 
-    void mockedCalculator.add(1, 2);
+    let result = 0;
+    mockedCalculator.add(Arg.all()).mimicks((a, b) => {
+        return result = a + b;
+    });
 
-    mockedCalculator.received(1).add(1, Arg.is(input => input === 2));
+    t.throws(() => mockedCalculator.received().add(Arg.any(), Arg.any()));
 
-    t.pass();
+    t.is(result, 0);
 });
