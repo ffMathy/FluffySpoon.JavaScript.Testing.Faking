@@ -40,7 +40,6 @@ export class InitialState implements ContextState {
         const expectedCount = this._expectedCount;
 
         this.clearExpectations();
-        console.log('expected', expectedCount, 'actual', callCount)
         if(this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
     

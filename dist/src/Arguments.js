@@ -60,7 +60,6 @@ var Arg = /** @class */ (function () {
         return new Argument('{predicate ' + this.toStringify(predicate) + '}', predicate);
     };
     Arg.toStringify = function (obj) {
-        console.log('toStringify');
         if (typeof obj.inspect === 'function')
             return obj.inspect();
         if (typeof obj.toString === 'function')

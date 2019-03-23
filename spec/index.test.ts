@@ -34,8 +34,8 @@ export class Example {
 		return 'stuff';
     }
     
-    bar (a: number, b?: number) {
-        return 'whatever'
+    bar (a: number, b?: number): number{
+        return a + b || 0
     }
 }
 
@@ -169,12 +169,7 @@ test('returning other fake from promise works', async t => {
 	
 	const otherSubstitute = Substitute.for<Dummy>();
 	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
-    try {
-        t.is(otherSubstitute, await substitute.returnPromise());
-    } catch (e) {
-        console.log(e.stack)
-        throw e
-    }
+    t.is(otherSubstitute, await substitute.returnPromise());
 });
 
 test('returning resolved promises works', async t => {
@@ -256,11 +251,27 @@ test('are arguments equal', t => {
 test('verifying with more arguments fails', t => {
     initialize()
     substitute.bar(1)
+    substitute.received().bar(1)
     t.throws(() => substitute.received().bar(1, 2))
 })
 
 test('verifying with less arguments fails', t => {
     initialize()
     substitute.bar(1, 2)
+    substitute.received().bar(1, 2)
     t.throws(() => substitute.received().bar(1))
+})
+
+test('return with more arguments is not matched fails', t => {
+    initialize()
+    substitute.bar(1, 2).returns(3)
+    t.is(3, substitute.bar(1, 2))
+    t.is(void 0, substitute.bar(1))
+})
+
+test('return  with less arguments is not matched', t => {
+    initialize()
+    substitute.bar(1).returns(3)
+    t.is(3, substitute.bar(1))
+    t.is(void 0, substitute.bar(1, 2))
 })

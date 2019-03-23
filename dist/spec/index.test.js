@@ -73,7 +73,7 @@ var Example = /** @class */ (function () {
         return 'stuff';
     };
     Example.prototype.bar = function (a, b) {
-        return 'whatever';
+        return a + b || 0;
     };
     return Example;
 }());
@@ -165,27 +165,19 @@ ava_1.default('class method returns with specific args', function (t) {
     t.is(substitute.c("hi", "there"), void 0);
 });
 ava_1.default('returning other fake from promise works', function (t) { return __awaiter(_this, void 0, void 0, function () {
-    var otherSubstitute, _a, _b, _c, e_1;
+    var otherSubstitute, _a, _b, _c;
     return __generator(this, function (_d) {
         switch (_d.label) {
             case 0:
                 initialize();
                 otherSubstitute = index_1.Substitute.for();
                 substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
-                _d.label = 1;
-            case 1:
-                _d.trys.push([1, 3, , 4]);
                 _b = (_a = t).is;
                 _c = [otherSubstitute];
                 return [4 /*yield*/, substitute.returnPromise()];
-            case 2:
+            case 1:
                 _b.apply(_a, _c.concat([_d.sent()]));
-                return [3 /*break*/, 4];
-            case 3:
-                e_1 = _d.sent();
-                console.log(e_1.stack);
-                throw e_1;
-            case 4: return [2 /*return*/];
+                return [2 /*return*/];
         }
     });
 }); });
@@ -248,11 +240,25 @@ ava_1.default('are arguments equal', function (t) {
 ava_1.default('verifying with more arguments fails', function (t) {
     initialize();
     substitute.bar(1);
+    substitute.received().bar(1);
     t.throws(function () { return substitute.received().bar(1, 2); });
 });
 ava_1.default('verifying with less arguments fails', function (t) {
     initialize();
     substitute.bar(1, 2);
+    substitute.received().bar(1, 2);
     t.throws(function () { return substitute.received().bar(1); });
+});
+ava_1.default('return with more arguments is not matched fails', function (t) {
+    initialize();
+    substitute.bar(1, 2).returns(3);
+    t.is(3, substitute.bar(1, 2));
+    t.is(void 0, substitute.bar(1));
+});
+ava_1.default('return  with less arguments is not matched', function (t) {
+    initialize();
+    substitute.bar(1).returns(3);
+    t.is(3, substitute.bar(1));
+    t.is(void 0, substitute.bar(1, 2));
 });
 //# sourceMappingURL=index.test.js.map

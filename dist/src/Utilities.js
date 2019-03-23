@@ -13,15 +13,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var Arguments_1 = require("./Arguments");
 var util = require("util");
 function stringifyArguments(args) {
-    console.log('stringifyArguments');
     args = args.map(function (x) { return util.inspect(x); });
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
 }
 exports.stringifyArguments = stringifyArguments;
 ;
 function areArgumentArraysEqual(a, b) {
-    console.log('are equal?', a, b);
-    for (var i = 0; i < Math.min(b.length, a.length); i++) { // @TODO should be Math.max I think -- domasx2
+    for (var i = 0; i < Math.max(b.length, a.length); i++) { // @TODO should be Math.max I think -- domasx2
         if (!areArgumentsEqual(b[i], a[i]))
             return false;
     }
@@ -60,6 +58,7 @@ function areArgumentsEqual(a, b) {
         return a.matches(b);
     if (b instanceof Arguments_1.Argument)
         return b.matches(a);
+    // I think this is surprising behaviour. null !== undefined, test lib should be strict about it -- domasx2
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;
     return a === b;

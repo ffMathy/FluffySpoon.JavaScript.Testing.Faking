@@ -39,11 +39,9 @@ export class GetPropertyState implements ContextState {
         this._callCount = 0;
 
         if (this.functionState) {
-            console.log('got matching function state')
             return this.functionState.apply(context, args);
         }
 
-        // console.log('creating new function state', args)
         var functionState = new FunctionState(this);
         context.state = functionState;
         this._functionState = functionState

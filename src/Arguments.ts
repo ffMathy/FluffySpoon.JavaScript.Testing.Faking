@@ -59,7 +59,6 @@ export class Arg {
     }
 
     private static toStringify(obj: any) {
-        console.log('toStringify')
         if(typeof obj.inspect === 'function')
             return obj.inspect();
 

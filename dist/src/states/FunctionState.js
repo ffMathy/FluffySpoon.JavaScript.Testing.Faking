@@ -35,7 +35,6 @@ var FunctionState = /** @class */ (function () {
     };
     FunctionState.prototype.apply = function (context, args) {
         var hasExpectations = context.initialState.hasExpectations;
-        console.log('hasExpectactions', hasExpectations);
         this._lastArgs = args;
         context.initialState.assertCallCountMatchesExpectations(this._calls, this.getCallCount(args), 'method', this.property, args);
         if (!hasExpectations) {

@@ -40,10 +40,8 @@ var GetPropertyState = /** @class */ (function () {
     GetPropertyState.prototype.apply = function (context, args) {
         this._callCount = 0;
         if (this.functionState) {
-            console.log('got matching function state');
             return this.functionState.apply(context, args);
         }
-        // console.log('creating new function state', args)
         var functionState = new FunctionState_1.FunctionState(this);
         context.state = functionState;
         this._functionState = functionState;

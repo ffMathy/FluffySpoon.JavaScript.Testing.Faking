@@ -43,7 +43,6 @@ export class FunctionState implements ContextState {
 
     apply(context: Context, args: any[]) {
         const hasExpectations = context.initialState.hasExpectations;
-        console.log('hasExpectactions', hasExpectations)
         this._lastArgs = args
 
         context.initialState.assertCallCountMatchesExpectations(
