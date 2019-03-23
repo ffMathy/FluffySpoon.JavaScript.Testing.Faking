@@ -6,11 +6,11 @@ export declare class GetPropertyState implements ContextState {
     private returns;
     private mimicks;
     private _callCount;
-    private _recordedFunctionStates;
+    private _functionState?;
     private readonly isFunction;
     readonly property: string | number | symbol;
     readonly callCount: number;
-    readonly recordedFunctionStates: FunctionState[];
+    readonly functionState: FunctionState | undefined;
     constructor(_property: PropertyKey);
     apply(context: Context, args: any[]): any;
     set(context: Context, property: PropertyKey, value: any): void;

@@ -37,7 +37,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
-var Index_1 = require("../src/Index");
+var index_1 = require("../src/index");
 var Utilities_1 = require("../src/Utilities");
 var Dummy = /** @class */ (function () {
     function Dummy() {
@@ -72,6 +72,9 @@ var Example = /** @class */ (function () {
     Example.prototype.foo = function () {
         return 'stuff';
     };
+    Example.prototype.bar = function (a, b) {
+        return 'whatever';
+    };
     return Example;
 }());
 exports.Example = Example;
@@ -79,14 +82,14 @@ var instance;
 var substitute;
 function initialize() {
     instance = new Example();
-    substitute = Index_1.Substitute.for();
+    substitute = index_1.Substitute.for();
 }
 ;
 ava_1.default('can call received twice', function (t) {
     initialize();
     substitute.c('blah', 'fuzz');
-    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
-    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> 1 call with arguments ['blah', 'fuzz']");
+    t.throws(function () { return substitute.received(1337).c('foo', 'bar'); }, "Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> call with arguments ['blah', 'fuzz']");
+    t.throws(function () { return substitute.received(2117).c('foo', 'bar'); }, "Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.\nAll calls received to method c:\n-> call with arguments ['blah', 'fuzz']");
 });
 ava_1.default('class string field get returns', function (t) {
     initialize();
@@ -98,19 +101,19 @@ ava_1.default('class string field get returns', function (t) {
 });
 ava_1.default('class with method called "received" can be used for call count verification when proxies are suspended', function (t) {
     initialize();
-    Index_1.Substitute.disableFor(substitute).received(2);
+    index_1.Substitute.disableFor(substitute).received(2);
     t.throws(function () { return substitute.received(2).received(2); });
     t.notThrows(function () { return substitute.received(1).received(2); });
 });
 ava_1.default('class with method called "received" can be used for call count verification', function (t) {
     initialize();
-    Index_1.Substitute.disableFor(substitute).received('foo');
+    index_1.Substitute.disableFor(substitute).received('foo');
     t.notThrows(function () { return substitute.received(1).received('foo'); });
     t.throws(function () { return substitute.received(2).received('foo'); });
 });
 ava_1.default('partial mocks using function mimicks with all args', function (t) {
     initialize();
-    substitute.c(Index_1.Arg.all()).mimicks(instance.c);
+    substitute.c(index_1.Arg.all()).mimicks(instance.c);
     t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
 });
 ava_1.default('class string field get received', function (t) {
@@ -131,18 +134,18 @@ ava_1.default('class string field set received', function (t) {
     substitute.v = 'hello';
     substitute.v = 'world';
     t.notThrows(function () { return substitute.received().v = 'hello'; });
-    t.notThrows(function () { return substitute.received(5).v = Index_1.Arg.any(); });
-    t.notThrows(function () { return substitute.received().v = Index_1.Arg.any(); });
+    t.notThrows(function () { return substitute.received(5).v = index_1.Arg.any(); });
+    t.notThrows(function () { return substitute.received().v = index_1.Arg.any(); });
     t.notThrows(function () { return substitute.received(2).v = 'hello'; });
-    t.notThrows(function () { return substitute.received(2).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
-    t.throws(function () { return substitute.received(2).v = Index_1.Arg.any(); });
-    t.throws(function () { return substitute.received(1).v = Index_1.Arg.any(); });
-    t.throws(function () { return substitute.received(1).v = Index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
+    t.notThrows(function () { return substitute.received(2).v = index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
+    t.throws(function () { return substitute.received(2).v = index_1.Arg.any(); });
+    t.throws(function () { return substitute.received(1).v = index_1.Arg.any(); });
+    t.throws(function () { return substitute.received(1).v = index_1.Arg.is(function (x) { return x && x.indexOf('ll') > -1; }); });
     t.throws(function () { return substitute.received(3).v = 'hello'; });
 });
 ava_1.default('class method returns with placeholder args', function (t) {
     initialize();
-    substitute.c(Index_1.Arg.any(), "there").returns("blah", "haha");
+    substitute.c(index_1.Arg.any(), "there").returns("blah", "haha");
     t.is(substitute.c("hi", "there"), 'blah');
     t.is(substitute.c("his", "there"), 'haha');
     t.is(substitute.c("his", "there"), void 0);
@@ -162,19 +165,27 @@ ava_1.default('class method returns with specific args', function (t) {
     t.is(substitute.c("hi", "there"), void 0);
 });
 ava_1.default('returning other fake from promise works', function (t) { return __awaiter(_this, void 0, void 0, function () {
-    var otherSubstitute, _a, _b, _c;
+    var otherSubstitute, _a, _b, _c, e_1;
     return __generator(this, function (_d) {
         switch (_d.label) {
             case 0:
                 initialize();
-                otherSubstitute = Index_1.Substitute.for();
+                otherSubstitute = index_1.Substitute.for();
                 substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
+                _d.label = 1;
+            case 1:
+                _d.trys.push([1, 3, , 4]);
                 _b = (_a = t).is;
                 _c = [otherSubstitute];
                 return [4 /*yield*/, substitute.returnPromise()];
-            case 1:
+            case 2:
                 _b.apply(_a, _c.concat([_d.sent()]));
-                return [2 /*return*/];
+                return [3 /*break*/, 4];
+            case 3:
+                e_1 = _d.sent();
+                console.log(e_1.stack);
+                throw e_1;
+            case 4: return [2 /*return*/];
         }
     });
 }); });
@@ -210,7 +221,7 @@ ava_1.default('class method received', function (t) {
     t.notThrows(function () { return substitute.received(4).c('hi', 'there'); });
     t.notThrows(function () { return substitute.received(1).c('hi', 'the1re'); });
     t.notThrows(function () { return substitute.received().c('hi', 'there'); });
-    t.throws(function () { return substitute.received(7).c('hi', 'there'); }, "Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.\nAll calls received to method c:\n-> 4 calls with arguments ['hi', 'there']\n-> 1 call with arguments ['hi', 'the1re']");
+    t.throws(function () { return substitute.received(7).c('hi', 'there'); }, "Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.\nAll calls received to method c:\n-> call with arguments ['hi', 'there']\n-> call with arguments ['hi', 'the1re']\n-> call with arguments ['hi', 'there']\n-> call with arguments ['hi', 'there']\n-> call with arguments ['hi', 'there']");
 });
 ava_1.default('received call matches after partial mocks using property instance mimicks', function (t) {
     initialize();
@@ -219,7 +230,7 @@ ava_1.default('received call matches after partial mocks using property instance
     substitute.received(1).c('lala', 'bar');
     substitute.received(1).c('lala', 'bar');
     t.notThrows(function () { return substitute.received(1).c('lala', 'bar'); });
-    t.throws(function () { return substitute.received(2).c('lala', 'bar'); }, "Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.\nAll calls received to method c:\n-> 1 call with arguments ['lala', 'bar']");
+    t.throws(function () { return substitute.received(2).c('lala', 'bar'); }, "Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.\nAll calls received to method c:\n-> call with arguments ['lala', 'bar']");
     t.deepEqual(substitute.d, 1337);
 });
 ava_1.default('partial mocks using property instance mimicks', function (t) {
@@ -229,9 +240,19 @@ ava_1.default('partial mocks using property instance mimicks', function (t) {
 });
 ava_1.default('are arguments equal', function (t) {
     initialize();
-    t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any(), 'hi'));
-    t.true(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), ['foo', 'bar']));
+    t.true(Utilities_1.areArgumentsEqual(index_1.Arg.any(), 'hi'));
+    t.true(Utilities_1.areArgumentsEqual(index_1.Arg.any('array'), ['foo', 'bar']));
     t.false(Utilities_1.areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
-    t.false(Utilities_1.areArgumentsEqual(Index_1.Arg.any('array'), 1337));
+    t.false(Utilities_1.areArgumentsEqual(index_1.Arg.any('array'), 1337));
+});
+ava_1.default('verifying with more arguments fails', function (t) {
+    initialize();
+    substitute.bar(1);
+    t.throws(function () { return substitute.received().bar(1, 2); });
+});
+ava_1.default('verifying with less arguments fails', function (t) {
+    initialize();
+    substitute.bar(1, 2);
+    t.throws(function () { return substitute.received().bar(1); });
 });
 //# sourceMappingURL=index.test.js.map

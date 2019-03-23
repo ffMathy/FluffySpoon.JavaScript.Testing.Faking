@@ -8,5 +8,6 @@ export declare class Example {
     received(stuff: number | string): void;
     returnPromise(): Promise<Dummy>;
     foo(): string | undefined | null;
+    bar(a: number, b?: number): string;
 }
 export {};

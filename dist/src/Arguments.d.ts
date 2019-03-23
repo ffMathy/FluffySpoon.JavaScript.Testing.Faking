@@ -1,7 +1,6 @@
 export declare class Argument<T> {
     private description;
     private matchingFunction;
-    encounteredValues: any[];
     constructor(description: string, matchingFunction: (arg: T) => boolean);
     matches(arg: T): boolean;
     toString(): string;

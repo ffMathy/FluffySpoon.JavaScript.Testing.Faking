@@ -1,14 +1,15 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
-var Index_1 = require("../../src/Index");
+var index_1 = require("../../src/index");
 ava_1.default("issue 23: mimick received should not call method", function (t) {
-    var mockedCalculator = Index_1.Substitute.for();
-    mockedCalculator.add(Index_1.Arg.all()).mimicks(function (a, b) {
-        t.deepEqual(a, 1);
+    var mockedCalculator = index_1.Substitute.for();
+    var calls = 0;
+    mockedCalculator.add(index_1.Arg.all()).mimicks(function (a, b) {
+        t.deepEqual(++calls, 1, 'mimick called twice');
         return a + b;
     });
     mockedCalculator.add(1, 1); // ok
-    mockedCalculator.received(1).add(2, 1); // not ok, calls mimick func
+    mockedCalculator.received(1).add(1, 1); // not ok, calls mimick func
 });
 //# sourceMappingURL=23.test.js.map

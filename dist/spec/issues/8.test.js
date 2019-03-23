@@ -36,7 +36,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 };
 var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
-var Index_1 = require("../../src/Index");
+var index_1 = require("../../src/index");
 var ava_1 = require("ava");
 var ClassA = /** @class */ (function () {
     function ClassA() {
@@ -70,7 +70,7 @@ var ClassC = /** @class */ (function () {
 ava_1.default('issue 8: can use substitute in arguments', function (t) { return __awaiter(_this, void 0, void 0, function () {
     var classBMock, classC;
     return __generator(this, function (_a) {
-        classBMock = Index_1.default.for();
+        classBMock = index_1.default.for();
         classC = new ClassC(classBMock);
         t.not(classC, null);
         return [2 /*return*/];

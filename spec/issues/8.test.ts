@@ -1,4 +1,4 @@
-import Substitute from "../../src/Index";
+import Substitute from "../../src/index";
 import test from 'ava';
 
 class ClassA {

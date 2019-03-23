@@ -62,6 +62,7 @@ var InitialState = /** @class */ (function () {
     InitialState.prototype.assertCallCountMatchesExpectations = function (calls, callCount, type, property, args) {
         var expectedCount = this._expectedCount;
         this.clearExpectations();
+        console.log('expected', expectedCount, 'actual', callCount);
         if (this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
         throw new Error('Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + Utilities_1.stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + Utilities_1.stringifyCalls(calls));

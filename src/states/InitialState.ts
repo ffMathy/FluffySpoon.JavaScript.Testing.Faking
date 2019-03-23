@@ -40,10 +40,10 @@ export class InitialState implements ContextState {
         const expectedCount = this._expectedCount;
 
         this.clearExpectations();
-
+        console.log('expected', expectedCount, 'actual', callCount)
         if(this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
-
+    
         throw new Error('Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls));
     }
 
@@ -92,7 +92,6 @@ export class InitialState implements ContextState {
 
             if (property === Symbol.toStringTag)
                 return 'Substitute';
-
             if(property.toString() === 'Symbol(util.inspect.custom)')
                 return void 0;
         }

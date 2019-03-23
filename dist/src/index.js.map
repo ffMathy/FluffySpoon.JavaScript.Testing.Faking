@@ -1,0 +1,1 @@
+{"version":3,"file":"index.js","sourceRoot":"","sources":["../../src/index.ts"],"names":[],"mappings":";;AAAA,2CAA0C;AAGjC,qBAHA,uBAAU,CAGA;AADnB,yCAAkC;AAAzB,0BAAA,GAAG,CAAA;AAGZ,kBAAe,uBAAU,CAAC","sourcesContent":["import { Substitute } from './Substitute';\n\nexport { Arg } from './Arguments';\nexport { Substitute };\n\nexport default Substitute;"]}
