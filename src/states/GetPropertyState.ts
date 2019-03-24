@@ -39,6 +39,7 @@ export class GetPropertyState implements ContextState {
         this._callCount = 0;
 
         if (this.functionState) {
+            context.state = this.functionState
             return this.functionState.apply(context, args);
         }
 

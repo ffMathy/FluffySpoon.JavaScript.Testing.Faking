@@ -31,12 +31,13 @@ export function stringifyCalls(calls: Call[]) {
 };
 
 export function areArgumentsEqual(a: any, b: any) {
+    
+    if(a instanceof Argument && b instanceof Argument) {
+        return false;
+    }
+
     if(a instanceof AllArguments || b instanceof AllArguments)
         return true;
-
-    if(a instanceof Argument && b instanceof Argument) {
-        throw new Error("`Argument` should only be used to set up value or verify, not in the implementation.")
-    }
 
     if(a instanceof Argument) 
         return a.matches(b);

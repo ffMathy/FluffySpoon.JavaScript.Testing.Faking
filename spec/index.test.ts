@@ -266,12 +266,38 @@ test('return with more arguments is not matched fails', t => {
     initialize()
     substitute.bar(1, 2).returns(3)
     t.is(3, substitute.bar(1, 2))
-    t.is(void 0, substitute.bar(1))
+    t.is('function', typeof(substitute.bar(1)))
 })
 
-test('return  with less arguments is not matched', t => {
+test('return with less arguments is not matched', t => {
     initialize()
     substitute.bar(1).returns(3)
     t.is(3, substitute.bar(1))
-    t.is(void 0, substitute.bar(1, 2))
+    t.is('function', typeof(substitute.bar(1, 2).toString))
+})
+
+test('can stub multiple primitive return values', t => {
+    initialize()
+    substitute.bar(1).returns(2)
+    substitute.bar(2).returns(3)
+    t.is(2, substitute.bar(1))
+    t.is(3, substitute.bar(2))
+})
+
+test('can stub multiple Arg values', t => {
+    initialize()
+    substitute.bar(Arg.is(x => x % 2 === 0)).returns(1)
+    substitute.bar(Arg.is(x => x % 2 !== 0)).returns(2)
+    t.is(1, substitute.bar(4))
+    t.is(2, substitute.bar(5))
+})
+
+
+test.skip('can stub primitive & Arg values', t => {
+    initialize()
+    substitute.bar(1).returns(2)
+    substitute.bar(Arg.any()).returns(3) // throws 'substitute.bar(...).returns is not a function'
+    t.is(5, substitute.bar(2))
+    t.is(2, substitute.bar(1))
+    t.is(3, substitute.bar(2))
 })
