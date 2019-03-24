@@ -253,12 +253,34 @@ ava_1.default('return with more arguments is not matched fails', function (t) {
     initialize();
     substitute.bar(1, 2).returns(3);
     t.is(3, substitute.bar(1, 2));
-    t.is(void 0, substitute.bar(1));
+    t.is('function', typeof (substitute.bar(1)));
 });
-ava_1.default('return  with less arguments is not matched', function (t) {
+ava_1.default('return with less arguments is not matched', function (t) {
     initialize();
     substitute.bar(1).returns(3);
     t.is(3, substitute.bar(1));
-    t.is(void 0, substitute.bar(1, 2));
+    t.is('function', typeof (substitute.bar(1, 2).toString));
+});
+ava_1.default('can stub multiple primitive return values', function (t) {
+    initialize();
+    substitute.bar(1).returns(2);
+    substitute.bar(2).returns(3);
+    t.is(2, substitute.bar(1));
+    t.is(3, substitute.bar(2));
+});
+ava_1.default('can stub multiple Arg values', function (t) {
+    initialize();
+    substitute.bar(index_1.Arg.is(function (x) { return x % 2 === 0; })).returns(1);
+    substitute.bar(index_1.Arg.is(function (x) { return x % 2 !== 0; })).returns(2);
+    t.is(1, substitute.bar(4));
+    t.is(2, substitute.bar(5));
+});
+ava_1.default.skip('can stub primitive & Arg values', function (t) {
+    initialize();
+    substitute.bar(1).returns(2);
+    substitute.bar(index_1.Arg.any()).returns(3); // throws 'substitute.bar(...).returns is not a function'
+    t.is(5, substitute.bar(2));
+    t.is(2, substitute.bar(1));
+    t.is(3, substitute.bar(2));
 });
 //# sourceMappingURL=index.test.js.map

@@ -49,11 +49,11 @@ function stringifyCalls(calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
+    if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument) {
+        return false;
+    }
     if (a instanceof Arguments_1.AllArguments || b instanceof Arguments_1.AllArguments)
         return true;
-    if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument) {
-        throw new Error("`Argument` should only be used to set up value or verify, not in the implementation.");
-    }
     if (a instanceof Arguments_1.Argument)
         return a.matches(b);
     if (b instanceof Arguments_1.Argument)

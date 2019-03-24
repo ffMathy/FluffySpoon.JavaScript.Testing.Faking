@@ -62,7 +62,6 @@ export class FunctionState implements ContextState {
 
             if(!this.returns.length)
                 return context.proxy;
-            
             const returns = this.returns.find(r => areArgumentArraysEqual(r.args, args))
 
             if (returns) {
@@ -77,7 +76,7 @@ export class FunctionState implements ContextState {
                 //throw Error(`${String(this._getPropertyState.property)} with ${stringifyArguments(returns.args)} called ${returns.returnIndex + 1} times, but only ${returnValues.length} return values were set up`)
             }
         }
-        return void 0
+        return context.proxy
     }
 
     set(context: Context, property: PropertyKey, value: any) {
@@ -97,10 +96,6 @@ export class FunctionState implements ContextState {
         }
 
         if(property === 'returns') {
-            if (this.returns.length) // I don't think this can happen -- domasx2
-                throw new Error('BUT HOW?')
-                //throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
-
             return (...returns: any[]) => {
                 if (!this._lastArgs) {
                     throw new Error('Eh, there\'s a bug, no args recorded for this return :/')
