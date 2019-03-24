@@ -1,7 +1,7 @@
 import { Argument, AllArguments } from "./Arguments";
 import util = require('util')
 
-export type Call = {callCount: number, arguments?: any[]};
+export type Call = any[] // list of args
 
 export function stringifyArguments(args: any[]) {
     args = args.map(x => util.inspect(x));
@@ -9,7 +9,7 @@ export function stringifyArguments(args: any[]) {
 };
 
 export function areArgumentArraysEqual(a: any[], b: any[]) {
-    for(var i=0;i<Math.min(b.length, a.length);i++) {
+    for(var i=0;i<Math.max(b.length, a.length);i++) { // @TODO should be Math.max I think -- domasx2
         if(!areArgumentsEqual(b[i], a[i]))
             return false;
     }
@@ -18,18 +18,13 @@ export function areArgumentArraysEqual(a: any[], b: any[]) {
 }
 
 export function stringifyCalls(calls: Call[]) {
-    calls = calls.filter(x => x.callCount > 0);
 
     if(calls.length === 0)
         return ' (no calls)';
 
     let output = '';
     for (let call of calls) {
-        output += '\n-> ' + call.callCount + ' call';
-        output += call.callCount !== 1 ? 's' : '';
-
-        if(call.arguments) 
-            output += ' with ' + stringifyArguments(call.arguments);
+        output += '\n-> call with ' + (call.length ? stringifyArguments(call) : '(no arguments)')
     }
 
     return output;
@@ -40,17 +35,7 @@ export function areArgumentsEqual(a: any, b: any) {
         return true;
 
     if(a instanceof Argument && b instanceof Argument) {
-        for(let encounteredValue of a.encounteredValues) {
-            if(!b.matches(encounteredValue))
-                return false;
-        }
-
-        for(let encounteredValue of b.encounteredValues) {
-            if(!a.matches(encounteredValue))
-                return false;
-        }
-
-        return true;
+        throw new Error("`Argument` should only be used to set up value or verify, not in the implementation.")
     }
 
     if(a instanceof Argument) 
@@ -59,6 +44,7 @@ export function areArgumentsEqual(a: any, b: any) {
     if(b instanceof Argument)
         return b.matches(a);
 
+    // I think this is surprising behaviour. null !== undefined, test lib should be strict about it -- domasx2
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;
 

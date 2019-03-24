@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import { Substitute } from '../../src/Index';
+import { Substitute } from '../../src/index';
 import { ObjectSubstitute } from '../../src/Transformations';
 
 export class Example {

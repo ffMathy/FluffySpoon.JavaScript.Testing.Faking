@@ -37,7 +37,7 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
-var Index_1 = require("../../src/Index");
+var index_1 = require("../../src/index");
 var Example = /** @class */ (function () {
     function Example() {
         this.a = "1337";
@@ -52,7 +52,7 @@ var Example = /** @class */ (function () {
     return Example;
 }());
 exports.Example = Example;
-var substitute = Index_1.Substitute.for();
+var substitute = index_1.Substitute.for();
 ava_1.default('issue 9: can record method with 0 arguments', function (t) { return __awaiter(_this, void 0, void 0, function () {
     function service() {
         return __awaiter(this, void 0, void 0, function () {

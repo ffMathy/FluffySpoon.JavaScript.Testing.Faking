@@ -1,12 +1,9 @@
 export class Argument<T> {
-    encounteredValues: any[];
 
     constructor(
         private description: string,
         private matchingFunction: (arg: T) => boolean
-    ) {
-        this.encounteredValues = [];
-    }
+    ){}
 
     matches(arg: T) {
         return this.matchingFunction(arg);

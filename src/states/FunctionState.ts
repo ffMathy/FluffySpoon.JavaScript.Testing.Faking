@@ -1,91 +1,83 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { stringifyArguments, stringifyCalls, areArgumentsEqual, areArgumentArraysEqual } from "../Utilities";
+import { stringifyArguments, stringifyCalls, areArgumentsEqual, areArgumentArraysEqual, Call } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
 import { Argument, Arg } from "../Arguments";
 
-const Nothing = Symbol();
+const Nothing = Symbol()
+
+interface ReturnMock {
+    args: Call
+    returnValues: any[] | Symbol // why symbol, what
+    returnIndex: 0
+}
 
 export class FunctionState implements ContextState {
-    private returns: any[]|Symbol;
+    private returns: ReturnMock[];
     private mimicks: Function|null;
 
-    private _callCount: number;
-    private _arguments: any[];
+    private _calls: Call[]; // list of lists of arguments this was called with
+    private _lastArgs?: Call // bit of a hack
 
-    public get arguments() {
-        return this._arguments;
+    public get calls(): Call[] {
+        return this._calls
     }
 
     public get callCount() {
-        return this._callCount;
+        return this._calls.length;
     }
 
     public get property() {
         return this._getPropertyState.property;
     }
 
-    constructor(private _getPropertyState: GetPropertyState, ...args: any[]) {
-        this.returns = Nothing;
+    constructor(private _getPropertyState: GetPropertyState) {
+        this.returns = [];
         this.mimicks = null;
-
-        this._arguments = args;
-        this._callCount = 0;
+        this._calls = [];
     }
 
-    apply(context: Context, args: any[], matchingFunctionStates: FunctionState[]) {
-        let callCount = this._callCount;
-        const hasExpectations = context.initialState.hasExpectations;
-        if(!matchingFunctionStates) {
-            matchingFunctionStates = this._getPropertyState
-                .recordedFunctionStates
-                .filter(x => areArgumentArraysEqual(x.arguments, args));
-        }
+    private getCallCount(args: Call): number {
+        return this._calls.reduce((count, cargs) => areArgumentArraysEqual(cargs, args) ? count + 1 : count, 0)
+    }
 
-        if(hasExpectations) {
-            callCount = matchingFunctionStates
-                .filter(x => x._arguments[0] !== Arg.all())
-                .map(x => x.callCount)
-                .reduce((a, b) => a + b, 0);
-        }
+    apply(context: Context, args: any[]) {
+        const hasExpectations = context.initialState.hasExpectations;
+        this._lastArgs = args
 
         context.initialState.assertCallCountMatchesExpectations(
-            this._getPropertyState.recordedFunctionStates,
-            callCount,
+            this._calls,
+            this.getCallCount(args),
             'method',
             this.property,
             args);
 
         if(!hasExpectations) {
-            this._callCount++;
-
-            for(let matchingFunctionState of matchingFunctionStates)
-            for(let argument of matchingFunctionState.arguments) {
-                if(!(argument instanceof Argument))
-                    continue;
-
-                const indexOffset = matchingFunctionState
-                    .arguments
-                    .indexOf(argument);
-                const myArg = args[indexOffset];
-                if(myArg instanceof Argument)
-                    continue;
-
-                argument.encounteredValues.push(myArg);
-            }
+            this._calls.push(args)
         }
 
-        if(this.mimicks)
-            return this.mimicks.apply(this.mimicks, args);
+        if (!hasExpectations) {
+            if(this.mimicks)
+                return this.mimicks.apply(this.mimicks, args);
 
-        if(this.returns === Nothing)
-            return context.proxy;
+            if(!this.returns.length)
+                return context.proxy;
+            
+            const returns = this.returns.find(r => areArgumentArraysEqual(r.args, args))
 
-        var returnsArray = this.returns as any[];
-        if(returnsArray.length === 1)
-            return returnsArray[0];
-
-        return returnsArray[this._callCount-1];
+            if (returns) {
+                const returnValues = returns.returnValues as any[]
+                if (returnValues.length === 1) {
+                    return returnValues[0]
+                }
+                if (returnValues.length > returns.returnIndex) {
+                    return returnValues[returns.returnIndex++]
+                }
+                return void 0 // probably a test setup error, imho throwin is more helpful -- domasx2
+                //throw Error(`${String(this._getPropertyState.property)} with ${stringifyArguments(returns.args)} called ${returns.returnIndex + 1} times, but only ${returnValues.length} return values were set up`)
+            }
+        }
+        return void 0
     }
 
     set(context: Context, property: PropertyKey, value: any) {
@@ -98,21 +90,29 @@ export class FunctionState implements ContextState {
         if(property === 'mimicks') {
             return (input: Function) => {
                 this.mimicks = input;
-                this._callCount--;
+                this._calls.pop()
 
                 context.state = context.initialState;
             }
         }
 
         if(property === 'returns') {
-            if(this.returns !== Nothing)
-                throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
+            if (this.returns.length) // I don't think this can happen -- domasx2
+                throw new Error('BUT HOW?')
+                //throw new Error('The return value for the function ' + this._getPropertyState.toString() + ' with ' + stringifyArguments(this._arguments) + ' has already been set to ' + this.returns);
 
             return (...returns: any[]) => {
-                this.returns = returns;
-                this._callCount--;
+                if (!this._lastArgs) {
+                    throw new Error('Eh, there\'s a bug, no args recorded for this return :/')
+                }
+                this.returns.push({
+                    returnValues: returns,
+                    returnIndex: 0,
+                    args: this._lastArgs
+                })
+                this._calls.pop()
 
-                if(this._callCount === 0) {
+                if(this.callCount === 0) {
                     // var indexOfSelf = this
                     //     ._getPropertyState
                     //     .recordedFunctionStates

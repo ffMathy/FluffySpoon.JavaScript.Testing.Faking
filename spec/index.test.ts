@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import { Substitute, Arg } from '../src/Index';
+import { Substitute, Arg } from '../src/index';
 import { areArgumentsEqual } from '../src/Utilities';
 import { OmitProxyMethods, ObjectSubstitute } from '../src/Transformations';
 
@@ -32,7 +32,11 @@ export class Example {
 
 	foo(): string|undefined|null {
 		return 'stuff';
-	}
+    }
+    
+    bar (a: number, b?: number): number{
+        return a + b || 0
+    }
 }
 
 let instance: Example;
@@ -51,12 +55,12 @@ test('can call received twice', t => {
 	t.throws(() => substitute.received(1337).c('foo', 'bar'), 
 `Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
 All calls received to method c:
--> 1 call with arguments ['blah', 'fuzz']`);
+-> call with arguments ['blah', 'fuzz']`);
 
 	t.throws(() => substitute.received(2117).c('foo', 'bar'),
 `Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
 All calls received to method c:
--> 1 call with arguments ['blah', 'fuzz']`);
+-> call with arguments ['blah', 'fuzz']`);
 });
 
 test('class string field get returns', t => {
@@ -165,8 +169,7 @@ test('returning other fake from promise works', async t => {
 	
 	const otherSubstitute = Substitute.for<Dummy>();
 	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
-
-	t.is(otherSubstitute, await substitute.returnPromise());
+    t.is(otherSubstitute, await substitute.returnPromise());
 });
 
 test('returning resolved promises works', async t => {
@@ -202,8 +205,11 @@ test('class method received', t => {
 	t.throws(() => substitute.received(7).c('hi', 'there'), 
 `Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.
 All calls received to method c:
--> 4 calls with arguments ['hi', 'there']
--> 1 call with arguments ['hi', 'the1re']`);
+-> call with arguments ['hi', 'there']
+-> call with arguments ['hi', 'the1re']
+-> call with arguments ['hi', 'there']
+-> call with arguments ['hi', 'there']
+-> call with arguments ['hi', 'there']`);
 });
 
 test('received call matches after partial mocks using property instance mimicks', t => {
@@ -219,7 +225,7 @@ test('received call matches after partial mocks using property instance mimicks'
 	t.throws(() => substitute.received(2).c('lala', 'bar'),
 `Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.
 All calls received to method c:
--> 1 call with arguments ['lala', 'bar']`);
+-> call with arguments ['lala', 'bar']`);
 	
 	t.deepEqual(substitute.d, 1337);
 });
@@ -241,3 +247,31 @@ test('are arguments equal', t => {
 	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
 	t.false(areArgumentsEqual(Arg.any('array'), 1337));
 });
+
+test('verifying with more arguments fails', t => {
+    initialize()
+    substitute.bar(1)
+    substitute.received().bar(1)
+    t.throws(() => substitute.received().bar(1, 2))
+})
+
+test('verifying with less arguments fails', t => {
+    initialize()
+    substitute.bar(1, 2)
+    substitute.received().bar(1, 2)
+    t.throws(() => substitute.received().bar(1))
+})
+
+test('return with more arguments is not matched fails', t => {
+    initialize()
+    substitute.bar(1, 2).returns(3)
+    t.is(3, substitute.bar(1, 2))
+    t.is(void 0, substitute.bar(1))
+})
+
+test('return  with less arguments is not matched', t => {
+    initialize()
+    substitute.bar(1).returns(3)
+    t.is(3, substitute.bar(1))
+    t.is(void 0, substitute.bar(1, 2))
+})

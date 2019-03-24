@@ -19,7 +19,7 @@ function stringifyArguments(args) {
 exports.stringifyArguments = stringifyArguments;
 ;
 function areArgumentArraysEqual(a, b) {
-    for (var i = 0; i < Math.min(b.length, a.length); i++) {
+    for (var i = 0; i < Math.max(b.length, a.length); i++) { // @TODO should be Math.max I think -- domasx2
         if (!areArgumentsEqual(b[i], a[i]))
             return false;
     }
@@ -28,17 +28,13 @@ function areArgumentArraysEqual(a, b) {
 exports.areArgumentArraysEqual = areArgumentArraysEqual;
 function stringifyCalls(calls) {
     var e_1, _a;
-    calls = calls.filter(function (x) { return x.callCount > 0; });
     if (calls.length === 0)
         return ' (no calls)';
     var output = '';
     try {
         for (var calls_1 = __values(calls), calls_1_1 = calls_1.next(); !calls_1_1.done; calls_1_1 = calls_1.next()) {
             var call = calls_1_1.value;
-            output += '\n-> ' + call.callCount + ' call';
-            output += call.callCount !== 1 ? 's' : '';
-            if (call.arguments)
-                output += ' with ' + stringifyArguments(call.arguments);
+            output += '\n-> call with ' + (call.length ? stringifyArguments(call) : '(no arguments)');
         }
     }
     catch (e_1_1) { e_1 = { error: e_1_1 }; }
@@ -53,44 +49,16 @@ function stringifyCalls(calls) {
 exports.stringifyCalls = stringifyCalls;
 ;
 function areArgumentsEqual(a, b) {
-    var e_2, _a, e_3, _b;
     if (a instanceof Arguments_1.AllArguments || b instanceof Arguments_1.AllArguments)
         return true;
     if (a instanceof Arguments_1.Argument && b instanceof Arguments_1.Argument) {
-        try {
-            for (var _c = __values(a.encounteredValues), _d = _c.next(); !_d.done; _d = _c.next()) {
-                var encounteredValue = _d.value;
-                if (!b.matches(encounteredValue))
-                    return false;
-            }
-        }
-        catch (e_2_1) { e_2 = { error: e_2_1 }; }
-        finally {
-            try {
-                if (_d && !_d.done && (_a = _c.return)) _a.call(_c);
-            }
-            finally { if (e_2) throw e_2.error; }
-        }
-        try {
-            for (var _e = __values(b.encounteredValues), _f = _e.next(); !_f.done; _f = _e.next()) {
-                var encounteredValue = _f.value;
-                if (!a.matches(encounteredValue))
-                    return false;
-            }
-        }
-        catch (e_3_1) { e_3 = { error: e_3_1 }; }
-        finally {
-            try {
-                if (_f && !_f.done && (_b = _e.return)) _b.call(_e);
-            }
-            finally { if (e_3) throw e_3.error; }
-        }
-        return true;
+        throw new Error("`Argument` should only be used to set up value or verify, not in the implementation.");
     }
     if (a instanceof Arguments_1.Argument)
         return a.matches(b);
     if (b instanceof Arguments_1.Argument)
         return b.matches(a);
+    // I think this is surprising behaviour. null !== undefined, test lib should be strict about it -- domasx2
     if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
         return true;
     return a === b;

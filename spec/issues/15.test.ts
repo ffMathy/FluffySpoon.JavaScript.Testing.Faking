@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import { Substitute } from '../../src/Index';
+import { Substitute } from '../../src/index';
 
 export interface Example {
     bar: string;

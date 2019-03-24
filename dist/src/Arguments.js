@@ -17,7 +17,6 @@ var Argument = /** @class */ (function () {
     function Argument(description, matchingFunction) {
         this.description = description;
         this.matchingFunction = matchingFunction;
-        this.encounteredValues = [];
     }
     Argument.prototype.matches = function (arg) {
         return this.matchingFunction(arg);

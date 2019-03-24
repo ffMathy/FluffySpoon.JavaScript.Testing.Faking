@@ -11,10 +11,10 @@ export class GetPropertyState implements ContextState {
     private mimicks: Function|null;
 
     private _callCount: number;
-    private _recordedFunctionStates: FunctionState[];
+    private _functionState?: FunctionState;
 
-    private get isFunction() {
-        return this._recordedFunctionStates.length > 0;
+    private get isFunction(): boolean {
+        return !!this._functionState
     }
 
     public get property() {
@@ -25,35 +25,26 @@ export class GetPropertyState implements ContextState {
         return this._callCount;
     }
 
-    public get recordedFunctionStates() {
-        return this._recordedFunctionStates;
+    public get functionState(): FunctionState | undefined {
+        return this._functionState
     }
 
     constructor(private _property: PropertyKey) {
         this.returns = Nothing;
         this.mimicks = null;
-
-        this._recordedFunctionStates = [];
         this._callCount = 0;
     }
 
     apply(context: Context, args: any[]) {
         this._callCount = 0;
 
-        const matchingFunctionStates = this._recordedFunctionStates
-            .filter(x => areArgumentArraysEqual(x.arguments, args));
-        if(matchingFunctionStates.length > 0) {
-            const matchingFunctionState = matchingFunctionStates[0];
-            return matchingFunctionState.apply(
-                context, 
-                args, 
-                matchingFunctionStates);
+        if (this.functionState) {
+            return this.functionState.apply(context, args);
         }
 
-        var functionState = new FunctionState(this, ...args);
+        var functionState = new FunctionState(this);
         context.state = functionState;
-
-        this._recordedFunctionStates.push(functionState);
+        this._functionState = functionState
 
         return context.apply(args);
     }
@@ -107,7 +98,7 @@ export class GetPropertyState implements ContextState {
         }
 
         context.initialState.assertCallCountMatchesExpectations(
-            context.initialState.getPropertyStates,
+            [[]],  // I'm not sure what this was supposed to mean
             this.callCount,
             'property',
             this.property,

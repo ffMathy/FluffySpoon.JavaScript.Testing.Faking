@@ -1,6 +1,6 @@
 import test from "ava";
 
-import { Substitute, Arg } from "../../src/Index";
+import { Substitute, Arg } from "../../src/index";
 
 interface CalculatorInterface {
   add(a: number, b: number): number;
@@ -12,12 +12,14 @@ interface CalculatorInterface {
 test("issue 23: mimick received should not call method", t => {
   const mockedCalculator = Substitute.for<CalculatorInterface>();
 
+  let calls = 0
+
   mockedCalculator.add(Arg.all()).mimicks((a, b) => {
-    t.deepEqual(a, 1);
+    t.deepEqual(++calls, 1, 'mimick called twice')
     return a + b;
   });
 
   mockedCalculator.add(1, 1); // ok
 
-  mockedCalculator.received(1).add(2, 1); // not ok, calls mimick func
+  mockedCalculator.received(1).add(1, 1) // not ok, calls mimick func
 });

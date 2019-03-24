@@ -1,7 +1,4 @@
-export declare type Call = {
-    callCount: number;
-    arguments?: any[];
-};
+export declare type Call = any[];
 export declare function stringifyArguments(args: any[]): string;
 export declare function areArgumentArraysEqual(a: any[], b: any[]): boolean;
 export declare function stringifyCalls(calls: Call[]): string;

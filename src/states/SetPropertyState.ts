@@ -42,7 +42,7 @@ export class SetPropertyState implements ContextState {
         }
 
         context.initialState.assertCallCountMatchesExpectations(
-            context.initialState.setPropertyStates,
+            [[]], // not sure what this was supposed to do
             callCount,
             'property',
             this.property,
