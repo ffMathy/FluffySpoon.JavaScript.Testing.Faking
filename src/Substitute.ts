@@ -4,8 +4,10 @@ import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from "./
 export const HandlerKey = Symbol();
 export const AreProxiesDisabledKey = Symbol();
 
+export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T;
+
 export class Substitute {
-    static for<T>(): ObjectSubstitute<OmitProxyMethods<T>, T> & T {
+    static for<T>(): SubstituteOf<T> {
         const objectContext = new Context();
         return objectContext.rootProxy;
     }
