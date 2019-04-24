@@ -1,7 +1,6 @@
 import test from 'ava';
 
 import { Substitute, Arg } from '../src/index';
-import { areArgumentsEqual } from '../src/Utilities';
 import { OmitProxyMethods, ObjectSubstitute } from '../src/Transformations';
 
 class Dummy {
@@ -236,16 +235,6 @@ test('partial mocks using property instance mimicks', t => {
 	substitute.d.mimicks(() => instance.d);
 
 	t.deepEqual(substitute.d, 1337);
-});
-
-test('are arguments equal', t => {
-	initialize();
-	
-	t.true(areArgumentsEqual(Arg.any(), 'hi'));
-	t.true(areArgumentsEqual(Arg.any('array'), ['foo', 'bar']));
-
-	t.false(areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
-	t.false(areArgumentsEqual(Arg.any('array'), 1337));
 });
 
 test('verifying with more arguments fails', t => {
