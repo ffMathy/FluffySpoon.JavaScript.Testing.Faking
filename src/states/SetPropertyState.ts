@@ -1,6 +1,6 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { stringifyArguments, areArgumentsEqual } from "../Utilities";
+import { areArgumentsEqual } from "../Utilities";
 
 const Nothing = Symbol();
 

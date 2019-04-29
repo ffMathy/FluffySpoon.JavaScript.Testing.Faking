@@ -19,9 +19,13 @@ function stringifyArguments(args) {
 exports.stringifyArguments = stringifyArguments;
 ;
 function areArgumentArraysEqual(a, b) {
-    for (var i = 0; i < Math.max(b.length, a.length); i++) { // @TODO should be Math.max I think -- domasx2
-        if (!areArgumentsEqual(b[i], a[i]))
+    if (a.find(function (x) { return x instanceof Arguments_1.AllArguments; }) || b.find(function (b) { return b instanceof Arguments_1.AllArguments; })) {
+        return true;
+    }
+    for (var i = 0; i < Math.max(b.length, a.length); i++) {
+        if (!areArgumentsEqual(b[i], a[i])) {
             return false;
+        }
     }
     return true;
 }
@@ -58,9 +62,6 @@ function areArgumentsEqual(a, b) {
         return a.matches(b);
     if (b instanceof Arguments_1.Argument)
         return b.matches(a);
-    // I think this is surprising behaviour. null !== undefined, test lib should be strict about it -- domasx2
-    if ((typeof a === 'undefined' || a === null) && (typeof b === 'undefined' || b === null))
-        return true;
     return a === b;
 }
 exports.areArgumentsEqual = areArgumentsEqual;

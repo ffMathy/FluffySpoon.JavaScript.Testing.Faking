@@ -38,7 +38,6 @@ var _this = this;
 Object.defineProperty(exports, "__esModule", { value: true });
 var ava_1 = require("ava");
 var index_1 = require("../src/index");
-var Utilities_1 = require("../src/Utilities");
 var Dummy = /** @class */ (function () {
     function Dummy() {
     }
@@ -229,13 +228,6 @@ ava_1.default('partial mocks using property instance mimicks', function (t) {
     initialize();
     substitute.d.mimicks(function () { return instance.d; });
     t.deepEqual(substitute.d, 1337);
-});
-ava_1.default('are arguments equal', function (t) {
-    initialize();
-    t.true(Utilities_1.areArgumentsEqual(index_1.Arg.any(), 'hi'));
-    t.true(Utilities_1.areArgumentsEqual(index_1.Arg.any('array'), ['foo', 'bar']));
-    t.false(Utilities_1.areArgumentsEqual(['foo', 'bar'], ['foo', 'bar']));
-    t.false(Utilities_1.areArgumentsEqual(index_1.Arg.any('array'), 1337));
 });
 ava_1.default('verifying with more arguments fails', function (t) {
     initialize();
