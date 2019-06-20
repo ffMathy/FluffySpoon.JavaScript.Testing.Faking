@@ -4,7 +4,11 @@
     "description": "",
     "main": "dist/src/index.js",
     "typings": "./dist/src/index.d.ts",
+    "files": [
+        "dist/src/**/*"
+    ],
     "scripts": {
+        "prepack": "npm i && tsc",
         "test": "tsc && ava",
         "build": "tsc"
     },
