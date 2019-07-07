@@ -36,8 +36,8 @@ type TerminatingObject<T> = {
 
 type ObjectSubstituteTransformation<T extends Object> = {
     [P in keyof T]:
-    T[P] extends () => infer R ? NoArgumentFunctionSubstitute<R> :
     T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> :
+    T[P] extends () => infer R ? NoArgumentFunctionSubstitute<R> :
     PropertySubstitute<T[P]>;
 }
 
