@@ -2,6 +2,8 @@
 
 *You can read an in-depth comparison of `substitute.js` versus other popular TypeScript mocking frameworks here: https://medium.com/@mathiaslykkegaardlorenzen/with-typescript-3-and-substitute-js-you-are-already-missing-out-when-mocking-or-faking-a3b3240c4607*
 
+**PRs are very welcome! We currently have some issues that need fixing, and help is much appreciated.**
+
 # Installing
 `npm install @fluffy-spoon/substitute --save-dev`
 
