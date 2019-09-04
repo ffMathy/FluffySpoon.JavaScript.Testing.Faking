@@ -122,7 +122,7 @@ var fakeCalculator = Substitute.for<Calculator>();
 //let the subtract method always use the real method
 fakeCalculator.subtract(Arg.all()).mimicks(realCalculator.subtract);
 console.log(fakeCalculator.subtract(20, 10)); //prints 10
-console.log(fakeCalculator.subtract(1, 2)); //prints 10
+console.log(fakeCalculator.subtract(1, 2)); //prints -1
 
 //for the add method, we only use the real method when the first arg is less than 10
 //else, we always return 1337
