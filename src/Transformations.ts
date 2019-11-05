@@ -29,7 +29,7 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
 
 type TerminatingObject<T> = {
     [P in keyof T]:
-    // T[P] extends () => infer R ? () => void :
+    T[P] extends () => infer R ? () => void :
     T[P] extends (...args: infer F) => infer R ? (...args: F) => void : 
     T[P];
 }
