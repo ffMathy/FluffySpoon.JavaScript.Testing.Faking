@@ -51,7 +51,13 @@ export class InitialState implements ContextState {
         if(this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
     
-        throw new Error('Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls));
+        throw new Error(
+            'Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + 
+            ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + 
+            ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + 
+            ' of such call' + (callCount === 1 ? '' : 's') + 
+            '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls)
+        );
     }
 
     private doesCallCountMatchExpectations(expectedCount: number|undefined|null, actualCount: number) {
