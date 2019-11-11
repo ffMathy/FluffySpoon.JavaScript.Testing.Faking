@@ -7,8 +7,10 @@ export class Context {
 
     private _proxy: any;
     private _rootProxy: any;
+    private _receivedProxy: any;
     
     private _state: ContextState;
+    private _receivedState: ContextState;
 
     constructor() {
         this._initialState = new InitialState();
@@ -39,6 +41,22 @@ export class Context {
                 return this.initialState.get(this, property);
             }
         });
+
+        this._receivedProxy = new Proxy(() => { }, {
+            apply: (_target, _this, args) => {
+                return this._receivedState.apply(this, args)
+            },
+            set: (_target, property, value) => {
+                throw new Error('you cant set any value while checking received arguments')
+            },
+            get: (_target, property) => {
+                console.log(this.initialState.getPropertyStates)
+                const state = this.initialState.getPropertyStates.find(getPropertyState => getPropertyState.property === property)
+                if (state === void 0) throw new Error(`there are no mock for property: ${String(property)}`)
+                this._receivedState = state
+                return this.receivedProxy;
+            }
+        });
     }
 
     apply(args: any[]) {
@@ -62,6 +80,10 @@ export class Context {
 
     public get rootProxy() {
         return this._rootProxy;
+    }
+
+    public get receivedProxy() {
+        return this._receivedProxy;
     }
 
     public get initialState() {

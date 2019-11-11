@@ -130,7 +130,7 @@ export class InitialState implements ContextState {
         if (property === 'received') {
             return (count?: number) => {
                 this._expectedCount = count === void 0 ? null : count;
-                return context.proxy;
+                return context.receivedProxy;
             };
         }
 
