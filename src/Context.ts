@@ -17,38 +17,20 @@ export class Context {
         this._state = this._initialState;
 
         this._proxy = new Proxy(() => { }, {
-            apply: (_target, _this, args) => {
-                return this.apply(args);
-            },
-            set: (_target, property, value) => {
-                this.set(property, value);
-                return true;
-            },
-            get: (_target, property) => {
-                return this.get(property);
-            }
+            apply: (_target, _this, args) => this.apply(args),
+            set: (_target, property, value) => (this.set(property, value), true),
+            get: (_target, property) => this.get(property)
         });
 
         this._rootProxy = new Proxy(() => { }, {
-            apply: (_target, _this, args) => {
-                return this.initialState.apply(this, args);
-            },
-            set: (_target, property, value) => {
-                this.initialState.set(this, property, value);
-                return true;
-            },
-            get: (_target, property) => {
-                return this.initialState.get(this, property);
-            }
+            apply: (_target, _this, args) => this.initialState.apply(this, args),
+            set: (_target, property, value) => (this.initialState.set(this, property, value), true),
+            get: (_target, property) => this.initialState.get(this, property)
         });
 
         this._receivedProxy = new Proxy(() => { }, {
-            apply: (_target, _this, args) => {
-                return this._receivedState.apply(this, args)
-            },
-            set: (_target, property, value) => {
-                throw new Error('you cant set any value while checking received arguments')
-            },
+            apply: (_target, _this, args) => this._receivedState.apply(this, args),
+            set: (_target, property, value) => (this.set(property, value), true),
             get: (_target, property) => {
                 console.log(this.initialState.getPropertyStates)
                 const state = this.initialState.getPropertyStates.find(getPropertyState => getPropertyState.property === property)
