@@ -1,6 +1,7 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { FunctionState } from "./FunctionState";
+import { Type } from "../Utilities";
 
 const Nothing = Symbol();
 
@@ -99,7 +100,7 @@ export class GetPropertyState implements ContextState {
         context.initialState.assertCallCountMatchesExpectations(
             [[]],  // I'm not sure what this was supposed to mean
             this.callCount,
-            'property',
+            Type.property,
             this.property,
             []);
 

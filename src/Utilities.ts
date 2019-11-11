@@ -3,6 +3,11 @@ import util = require('util')
 
 export type Call = any[] // list of args
 
+export enum Type {
+  method = 'method',
+  property = 'property'
+}
+
 export function stringifyArguments(args: any[]) {
     args = args.map(x => util.inspect(x));
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';

@@ -1,6 +1,6 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { areArgumentsEqual } from "../Utilities";
+import { areArgumentsEqual, Type } from "../Utilities";
 
 const Nothing = Symbol();
 
@@ -27,7 +27,7 @@ export class SetPropertyState implements ContextState {
     }
 
     apply(context: Context): undefined {
-        return void 0;
+        return void 0; // TODO:  probably better throw error since this should never happen
     }
 
     set(context: Context, property: PropertyKey, value: any) {
@@ -44,7 +44,7 @@ export class SetPropertyState implements ContextState {
         context.initialState.assertCallCountMatchesExpectations(
             [[]], // not sure what this was supposed to do
             callCount,
-            'property',
+            Type.property,
             this.property,
             this.arguments);
 
@@ -54,6 +54,6 @@ export class SetPropertyState implements ContextState {
     }
 
     get(context: Context, property: PropertyKey): undefined {
-        return void 0;
+        return void 0; // TODO:  probably better throw error since this should never happen
     }
 }

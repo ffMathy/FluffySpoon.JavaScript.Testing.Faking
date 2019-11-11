@@ -2,7 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
-import { stringifyArguments, stringifyCalls, Call } from "../Utilities";
+import {stringifyArguments, stringifyCalls, Call, Type} from "../Utilities";
 import { AreProxiesDisabledKey } from "../Substitute";
 
 export class InitialState implements ContextState {
@@ -13,6 +13,8 @@ export class InitialState implements ContextState {
     private _areProxiesDisabled: boolean;
 
     public get expectedCount() {
+        // expected count of calls,
+        // being assigned with received() method call
         return this._expectedCount;
     }
 
@@ -36,7 +38,13 @@ export class InitialState implements ContextState {
         this._expectedCount = void 0;
     }
 
-    assertCallCountMatchesExpectations(calls: Call[], callCount: number, type: string, property: PropertyKey, args: any[]) {
+    assertCallCountMatchesExpectations(
+      calls: Call[], // list of arguments
+      callCount: number,
+      type: Type, // method or property
+      property: PropertyKey,
+      args: any[]
+    ) {
         const expectedCount = this._expectedCount;
 
         this.clearExpectations();

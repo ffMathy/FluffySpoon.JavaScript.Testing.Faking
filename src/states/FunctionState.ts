@@ -1,8 +1,7 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { stringifyArguments, stringifyCalls, areArgumentsEqual, areArgumentArraysEqual, Call } from "../Utilities";
+import { areArgumentArraysEqual, Call, Type } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
-import { Argument, Arg } from "../Arguments";
 
 const Nothing = Symbol()
 
@@ -48,7 +47,7 @@ export class FunctionState implements ContextState {
         context.initialState.assertCallCountMatchesExpectations(
             this._calls,
             this.getCallCount(args),
-            'method',
+            Type.method,
             this.property,
             args);
 
