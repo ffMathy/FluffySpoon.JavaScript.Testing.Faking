@@ -14,8 +14,7 @@ test('issue 51 - All functions shares the same state', async t => {
     t.is(result, 4);
     try {
         calculator.received().divide(1, 2);
-        t.fail('Expected to have failed.');
     } catch (e) {
-        t.regex(e.toString(), /Expected 1 or more calls to the property divide with no arguments/);
+        t.regex(e.toString(), /Error: there are no mock for property: divide/);
     }
 });
