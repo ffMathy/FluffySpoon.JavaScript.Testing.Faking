@@ -27,7 +27,7 @@ export class SetPropertyState implements ContextState {
     }
 
     apply(context: Context): undefined {
-        return void 0; // TODO:  probably better throw error since this should never happen
+        throw new Error('Calling apply of setPropertyState is not normal behaviour, something gone wrong')
     }
 
     set(context: Context, property: PropertyKey, value: any) {
@@ -54,6 +54,6 @@ export class SetPropertyState implements ContextState {
     }
 
     get(context: Context, property: PropertyKey): undefined {
-        return void 0; // TODO:  probably better throw error since this should never happen
+        throw new Error('Calling get of setPropertyState is not normal behaviour, something gone wrong')
     }
 }
