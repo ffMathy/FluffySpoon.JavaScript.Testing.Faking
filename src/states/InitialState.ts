@@ -2,7 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
-import {stringifyArguments, stringifyCalls, Call, Type} from "../Utilities";
+import { stringifyArguments, stringifyCalls, Call, Type, Get } from "../Utilities";
 import { AreProxiesDisabledKey } from "../Substitute";
 
 export class InitialState implements ContextState {
@@ -28,6 +28,14 @@ export class InitialState implements ContextState {
 
     public get getPropertyStates() {
         return [...this.recordedGetPropertyStates.values()];
+    }
+
+    public recordGetPropertyState(property: PropertyKey, getState: GetPropertyState) {
+        this.recordedGetPropertyStates.set(property, getState);
+    }
+
+    public recordSetPropertyState(setState: SetPropertyState) {
+        this.recordedSetPropertyStates.push(setState);
     }
 
     constructor() {
@@ -134,18 +142,7 @@ export class InitialState implements ContextState {
             };
         }
 
-        const existingGetState = this.recordedGetPropertyStates.get(property);
-        if (existingGetState) {
-            context.state = existingGetState;
-            return context.get(property);
-        }
-
-        const getState = new GetPropertyState(property);
-        context.state = getState;
-
-        this.recordedGetPropertyStates.set(property, getState);
-
-        return context.get(property);
+        return Get(this, context, property)
     }
 
     private clearExpectations() {
