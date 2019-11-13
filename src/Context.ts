@@ -7,51 +7,51 @@ export class Context {
 
     private _proxy: any;
     private _rootProxy: any;
+    private _receivedProxy: any;
     
     private _state: ContextState;
+    private _receivedState: ContextState;
 
     constructor() {
         this._initialState = new InitialState();
         this._state = this._initialState;
 
         this._proxy = new Proxy(() => { }, {
-            apply: (_target, _this, args) => {
-                return this.apply(args);
-            },
-            set: (_target, property, value) => {
-                this.set(property, value);
-                return true;
-            },
-            get: (_target, property) => {
-                return this.get(property);
-            }
+            apply: (_target, _this, args) => this.apply(_target, _this, args),
+            set: (_target, property, value) => (this.set(_target, property, value), true),
+            get: (_target, property) => this.get(_target, property)
         });
 
         this._rootProxy = new Proxy(() => { }, {
-            apply: (_target, _this, args) => {
-                return this.initialState.apply(this, args);
-            },
-            set: (_target, property, value) => {
-                this.initialState.set(this, property, value);
-                return true;
-            },
+            apply: (_target, _this, args) => this.initialState.apply(this, args),
+            set: (_target, property, value) => (this.initialState.set(this, property, value), true),
+            get: (_target, property) => this.initialState.get(this, property)
+        });
+
+        this._receivedProxy = new Proxy(() => { }, {
+            apply: (_target, _this, args) => this._receivedState.apply(this, args),
+            set: (_target, property, value) => (this.set(_target, property, value), true),
             get: (_target, property) => {
-                return this.initialState.get(this, property);
+                const state = this.initialState.getPropertyStates.find(getPropertyState => getPropertyState.property === property)
+                if (state === void 0) throw new Error(`there are no mock for property: ${String(property)}`)
+                this._receivedState = state
+                return this.receivedProxy;
             }
         });
     }
 
-    apply(args: any[]) {
+    apply(_target: any, _this: any, args: any[]) {
         return this._state.apply(this, args);
     }
 
-    set(property: PropertyKey, value: any) {
+    set(_target: any, property: PropertyKey, value: any) {
         return this._state.set(this, property, value);
     }
 
-    get(property: PropertyKey) {
-        if(property === HandlerKey)
+    get(_target: any, property: PropertyKey) {
+        if(property === HandlerKey) {
             return this;
+        }
 
         return this._state.get(this, property);
     }
@@ -62,6 +62,10 @@ export class Context {
 
     public get rootProxy() {
         return this._rootProxy;
+    }
+
+    public get receivedProxy() {
+        return this._receivedProxy;
     }
 
     public get initialState() {
