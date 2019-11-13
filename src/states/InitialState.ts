@@ -2,7 +2,7 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
-import { stringifyArguments, stringifyCalls, Call } from "../Utilities";
+import { stringifyArguments, stringifyCalls, Call, Type, Get } from "../Utilities";
 import { AreProxiesDisabledKey } from "../Substitute";
 
 export class InitialState implements ContextState {
@@ -13,6 +13,8 @@ export class InitialState implements ContextState {
     private _areProxiesDisabled: boolean;
 
     public get expectedCount() {
+        // expected count of calls,
+        // being assigned with received() method call
         return this._expectedCount;
     }
 
@@ -28,6 +30,14 @@ export class InitialState implements ContextState {
         return [...this.recordedGetPropertyStates.values()];
     }
 
+    public recordGetPropertyState(property: PropertyKey, getState: GetPropertyState) {
+        this.recordedGetPropertyStates.set(property, getState);
+    }
+
+    public recordSetPropertyState(setState: SetPropertyState) {
+        this.recordedSetPropertyStates.push(setState);
+    }
+
     constructor() {
         this.recordedGetPropertyStates = new Map();
         this.recordedSetPropertyStates = [];
@@ -36,14 +46,26 @@ export class InitialState implements ContextState {
         this._expectedCount = void 0;
     }
 
-    assertCallCountMatchesExpectations(calls: Call[], callCount: number, type: string, property: PropertyKey, args: any[]) {
+    assertCallCountMatchesExpectations(
+      calls: Call[], // list of arguments
+      callCount: number,
+      type: Type, // method or property
+      property: PropertyKey,
+      args: any[]
+    ) {
         const expectedCount = this._expectedCount;
 
         this.clearExpectations();
         if(this.doesCallCountMatchExpectations(expectedCount, callCount))
             return;
     
-        throw new Error('Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + ' of such call' + (callCount === 1 ? '' : 's') + '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls));
+        throw new Error(
+            'Expected ' + (expectedCount === null ? '1 or more' : expectedCount) + 
+            ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() + 
+            ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) + 
+            ' of such call' + (callCount === 1 ? '' : 's') + 
+            '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls)
+        );
     }
 
     private doesCallCountMatchExpectations(expectedCount: number|undefined|null, actualCount: number) {
@@ -116,22 +138,11 @@ export class InitialState implements ContextState {
         if (property === 'received') {
             return (count?: number) => {
                 this._expectedCount = count === void 0 ? null : count;
-                return context.proxy;
+                return context.receivedProxy;
             };
         }
 
-        const existingGetState = this.recordedGetPropertyStates.get(property);
-        if (existingGetState) {
-            context.state = existingGetState;
-            return context.get(property);
-        }
-
-        const getState = new GetPropertyState(property);
-        context.state = getState;
-
-        this.recordedGetPropertyStates.set(property, getState);
-
-        return context.get(property);
+        return Get(this, context, property)
     }
 
     private clearExpectations() {

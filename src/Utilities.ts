@@ -1,7 +1,15 @@
 import { Argument, AllArguments } from "./Arguments";
+import { GetPropertyState } from './states/GetPropertyState'
+import { InitialState } from './states/InitialState'
+import { Context } from './Context'
 import util = require('util')
 
 export type Call = any[] // list of args
+
+export enum Type {
+  method = 'method',
+  property = 'property'
+}
 
 export function stringifyArguments(args: any[]) {
     args = args.map(x => util.inspect(x));
@@ -52,3 +60,18 @@ export function areArgumentsEqual(a: any, b: any) {
 
     return a === b;
 };
+
+export function Get(recorder: InitialState, context: Context, property: PropertyKey) {
+    const existingGetState = recorder.getPropertyStates.find(state => state.property === property);
+    if (existingGetState) {
+        context.state = existingGetState;
+        return context.get(void 0, property);
+    }
+
+    const getState = new GetPropertyState(property);
+    context.state = getState;
+
+    recorder.recordGetPropertyState(property, getState);
+
+    return context.get(void 0, property);
+}
