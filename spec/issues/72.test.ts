@@ -14,20 +14,18 @@ test("check didNotReceive and received after not mocking and not calling a metho
   // Do not mock and do not call
 
   calculator.received(0).add(1, 2);
-  t.throws(() => calculator.received(1).add(1, 2));
+  t.throws(() => { calculator.received(1).add(1, 2) });
   calculator.didNotReceive().add(Arg.any(), Arg.any());
   calculator.didNotReceive().add(1, Arg.any());
   calculator.didNotReceive().add(1, 2);
 
   calculator.received(0).mode;
-  t.throws(() => calculator.received(1).mode);
+  t.throws(() => { calculator.received(1).mode });
   calculator.didNotReceive().mode;
 
   calculator.received(0).fakeSetting = true;
-  t.throws(() => calculator.received(1).fakeSetting = true);
+  t.throws(() => { calculator.received(1).fakeSetting = true });
   calculator.didNotReceive().fakeSetting = true;
-
-  t.pass();
 });
 
 test("check didNotReceive and received after not mocking but calling a method or property", t => {
@@ -40,20 +38,18 @@ test("check didNotReceive and received after not mocking but calling a method or
 
   calculator.received(1).add(1, 2);
   calculator.received(0).add(2, 2);
-  t.throws(() => calculator.received(1).add(2, 2));
-  t.throws(() => calculator.didNotReceive().add(Arg.any(), Arg.any()));
-  t.throws(() => calculator.didNotReceive().add(1, Arg.any()));
-  t.throws(() => calculator.didNotReceive().add(1, 2));
+  t.throws(() => { calculator.received(1).add(2, 2) });
+  t.throws(() => { calculator.didNotReceive().add(Arg.any(), Arg.any()) });
+  t.throws(() => { calculator.didNotReceive().add(1, Arg.any()) });
+  t.throws(() => { calculator.didNotReceive().add(1, 2) });
 
   calculator.received(1).mode;
-  t.throws(() => calculator.received(0).mode);
-  t.throws(() => calculator.didNotReceive().mode);
+  t.throws(() => { calculator.received(0).mode });
+  t.throws(() => { calculator.didNotReceive().mode });
 
   calculator.received(1).fakeSetting = true;
-  t.throws(() => calculator.received(0).fakeSetting = true);
-  t.throws(() => calculator.didNotReceive().fakeSetting = true);
-
-  t.pass();
+  t.throws(() => { calculator.received(0).fakeSetting = true });
+  t.throws(() => { calculator.didNotReceive().fakeSetting = true });
 });
 
 test("check didNotReceive and received after mocking but not calling a method or property", t => {
@@ -64,16 +60,14 @@ test("check didNotReceive and received after mocking but not calling a method or
   calculator.mode.returns(true);
 
   calculator.received(0).add(1, 2);
-  t.throws(() => calculator.received(1).add(1, 2));
+  t.throws(() => { calculator.received(1).add(1, 2) });
   calculator.didNotReceive().add(Arg.any(), Arg.any());
   calculator.didNotReceive().add(1, Arg.any());
   calculator.didNotReceive().add(1, 2);
 
   calculator.received(0).mode;
-  t.throws(() => calculator.received(1).mode);
+  t.throws(() => { calculator.received(1).mode });
   calculator.didNotReceive().mode;
-
-  t.pass();
 });
 
 test("check didNotReceive and received after mocking and calling a method or property", t => {
@@ -88,29 +82,17 @@ test("check didNotReceive and received after mocking and calling a method or pro
   calculator.fakeSetting = true;
 
   calculator.received(1).add(1, 2);
-  t.throws(() => calculator.received(0).add(1, 2));
-  t.throws(() => calculator.received(2).add(1, 2));
-  t.throws(() => calculator.didNotReceive().add(Arg.any(), Arg.any()));
-  t.throws(() => calculator.didNotReceive().add(1, Arg.any()));
-  t.throws(() => calculator.didNotReceive().add(1, 2));
+  t.throws(() => { calculator.received(0).add(1, 2) });
+  t.throws(() => { calculator.received(2).add(1, 2) });
+  t.throws(() => { calculator.didNotReceive().add(Arg.any(), Arg.any()) });
+  t.throws(() => { calculator.didNotReceive().add(1, Arg.any()) });
+  t.throws(() => { calculator.didNotReceive().add(1, 2) });
 
   calculator.received(1).mode;
-  t.throws(() => calculator.received(0).mode);
-  t.throws(() => calculator.didNotReceive().mode);
+  t.throws(() => { calculator.received(0).mode });
+  t.throws(() => { calculator.didNotReceive().mode });
 
   calculator.received(1).fakeSetting = true;
-  t.throws(() => calculator.received(0).fakeSetting = true);
-  t.throws(() => calculator.didNotReceive().fakeSetting = true);
-
-  t.pass();
-});
-
-// this test should fail but doesn't
-test("check that received property does both throw and not throw", t => {
-  const calculator = Substitute.for<Calculator>();
-  void calculator.mode;
-  t.throws(() => calculator.received(1).mode);
-  t.notThrows(() => calculator.received(1).mode);
-
-  t.pass();
+  t.throws(() => { calculator.received(0).fakeSetting = true });
+  t.throws(() => { calculator.didNotReceive().fakeSetting = true });
 });
