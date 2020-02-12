@@ -142,6 +142,13 @@ export class InitialState implements ContextState {
             };
         }
 
+        if (property === 'didNotReceive') {
+            return () => {
+                this._expectedCount = 0;
+                return context.receivedProxy;
+            };
+        }
+
         return Get(this, context, property)
     }
 
