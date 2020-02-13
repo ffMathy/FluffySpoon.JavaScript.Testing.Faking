@@ -4,6 +4,8 @@ import { HandlerKey } from "./Substitute";
 import { Type } from "./Utilities";
 import { SetPropertyState } from "./states/SetPropertyState";
 
+class SubstituteJS { }
+
 export class Context {
     private _initialState: InitialState;
 
@@ -20,19 +22,21 @@ export class Context {
         this._setState = this._initialState
         this._getState = this._initialState;
 
-        this._proxy = new Proxy(() => { }, {
+        this._proxy = new Proxy(SubstituteJS, {
             apply: (_target, _this, args) => this.apply(_target, _this, args),
             set: (_target, property, value) => (this.set(_target, property, value), true),
-            get: (_target, property) => this.get(_target, property)
+            get: (_target, property) => this.get(_target, property),
+            getOwnPropertyDescriptor: (obj, prop) => prop === 'constructor' ?
+                { value: obj, configurable: true } : Reflect.getOwnPropertyDescriptor(obj, prop)
         });
 
-        this._rootProxy = new Proxy(() => { }, {
+        this._rootProxy = new Proxy(SubstituteJS, {
             apply: (_target, _this, args) => this.initialState.apply(this, args),
             set: (_target, property, value) => (this.initialState.set(this, property, value), true),
             get: (_target, property) => this.initialState.get(this, property)
         });
 
-        this._receivedProxy = new Proxy(() => { }, {
+        this._receivedProxy = new Proxy(SubstituteJS, {
             apply: (_target, _this, args) => this._receivedState === void 0 ? void 0 : this._receivedState.apply(this, args),
             set: (_target, property, value) => (this.set(_target, property, value), true),
             get: (_target, property) => {
