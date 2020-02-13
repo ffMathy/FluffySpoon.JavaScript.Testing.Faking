@@ -7,8 +7,8 @@ import util = require('util')
 export type Call = any[] // list of args
 
 export enum Type {
-  method = 'method',
-  property = 'property'
+    method = 'method',
+    property = 'property'
 }
 
 export function stringifyArguments(args: any[]) {
@@ -32,7 +32,7 @@ export function areArgumentArraysEqual(a: any[], b: any[]) {
 
 export function stringifyCalls(calls: Call[]) {
 
-    if(calls.length === 0)
+    if (calls.length === 0)
         return ' (no calls)';
 
     let output = '';
@@ -44,22 +44,43 @@ export function stringifyCalls(calls: Call[]) {
 };
 
 export function areArgumentsEqual(a: any, b: any) {
-    
-    if(a instanceof Argument && b instanceof Argument) {
-        return false;
-    }
 
-    if(a instanceof AllArguments || b instanceof AllArguments)
+    if (a instanceof Argument && b instanceof Argument)
+        return false;
+
+    if (a instanceof AllArguments || b instanceof AllArguments)
         return true;
 
-    if(a instanceof Argument) 
+    if (a instanceof Argument)
         return a.matches(b);
 
-    if(b instanceof Argument)
+    if (b instanceof Argument)
         return b.matches(a);
 
-    return a === b;
+    return deepEqual(a, b);
 };
+
+function deepEqual(a: any, b: any): boolean {
+    if (Array.isArray(a)) {
+        if (!Array.isArray(b) || a.length !== b.length)
+            return false;
+        for (let i = 0; i < a.length; i++) {
+            if (!deepEqual(a[i], b[i]))
+                return false;
+        }
+        return true;
+    }
+    if (typeof a === 'object' && a !== null && b !== null) {
+        if (!(typeof b === 'object')) return false;
+        const keys = Object.keys(a);
+        if (keys.length !== Object.keys(b).length) return false;
+        for (const key in a) {
+            if (!deepEqual(a[key], b[key])) return false;
+        }
+        return true;
+    }
+    return a === b;
+}
 
 export function Get(recorder: InitialState, context: Context, property: PropertyKey) {
     const existingGetState = recorder.getPropertyStates.find(state => state.property === property);
