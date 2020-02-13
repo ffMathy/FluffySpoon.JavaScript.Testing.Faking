@@ -23,7 +23,7 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
 
 export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
     received(amount?: number): TerminatingObject<K>;
-    didNotReceive(amount?: number): TerminatingObject<K>;
+    didNotReceive(): TerminatingObject<K>;
     mimick(instance: T): void;
 }
 

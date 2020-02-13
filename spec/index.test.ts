@@ -18,10 +18,10 @@ export class Example {
 		return 1337;
 	}
 
-	set v(x: string|null|undefined) {
+	set v(x: string | null | undefined) {
 	}
 
-	received(stuff: number|string) {
+	received(stuff: number | string) {
 
 	}
 
@@ -29,13 +29,13 @@ export class Example {
 		return Promise.resolve(new Dummy());
 	}
 
-	foo(): string|undefined|null {
+	foo(): string | undefined | null {
 		return 'stuff';
-    }
-    
-    bar (a: number, b?: number): number{
-        return a + b || 0
-    }
+	}
+
+	bar(a: number, b?: number): number {
+		return a + b || 0
+	}
 }
 
 let instance: Example;
@@ -46,20 +46,15 @@ function initialize() {
 	substitute = Substitute.for<Example>();
 };
 
-test('can call received twice', t => { 
+test('can call received twice', t => {
 	initialize();
 
 	substitute.c('blah', 'fuzz');
+	const expectedMessage = 'Expected 1337 calls to the method c with arguments [\'foo\', \'bar\'], but received none of such calls.\nAll calls received to method c:\n-> call with arguments [\'blah\', \'fuzz\']'
+	t.throws(() => substitute.received(1337).c('foo', 'bar'), { message: expectedMessage });
 
-	t.throws(() => substitute.received(1337).c('foo', 'bar'), 
-`Expected 1337 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
-All calls received to method c:
--> call with arguments ['blah', 'fuzz']`);
-
-	t.throws(() => substitute.received(2117).c('foo', 'bar'),
-`Expected 2117 calls to the method c with arguments ['foo', 'bar'], but received none of such calls.
-All calls received to method c:
--> call with arguments ['blah', 'fuzz']`);
+	const expectedMessage2 = 'Expected 2117 calls to the method c with arguments [\'foo\', \'bar\'], but received none of such calls.\nAll calls received to method c:\n-> call with arguments [\'blah\', \'fuzz\']'
+	t.throws(() => substitute.received(2117).c('foo', 'bar'), { message: expectedMessage2 });
 });
 
 test('class string field get returns', t => {
@@ -75,7 +70,7 @@ test('class string field get returns', t => {
 
 test('class with method called "received" can be used for call count verification when proxies are suspended', t => {
 	initialize();
-	
+
 	Substitute.disableFor(substitute).received(2);
 
 	t.throws(() => substitute.received(2).received(2));
@@ -84,7 +79,7 @@ test('class with method called "received" can be used for call count verificatio
 
 test('class with method called "received" can be used for call count verification', t => {
 	initialize();
-	
+
 	Substitute.disableFor(substitute).received('foo');
 
 	t.notThrows(() => substitute.received(1).received('foo'));
@@ -93,7 +88,7 @@ test('class with method called "received" can be used for call count verificatio
 
 test('partial mocks using function mimicks with all args', t => {
 	initialize();
-	
+
 	substitute.c(Arg.all()).mimicks(instance.c);
 
 	t.deepEqual(substitute.c('a', 'b'), 'hello a world (b)');
@@ -101,7 +96,7 @@ test('partial mocks using function mimicks with all args', t => {
 
 test('class string field get received', t => {
 	initialize();
-	
+
 	void substitute.a;
 	void substitute.a;
 	void substitute.a;
@@ -114,13 +109,13 @@ test('class string field get received', t => {
 
 test('class string field set received', t => {
 	initialize();
-	
+
 	substitute.v = undefined;
 	substitute.v = null;
 	substitute.v = 'hello';
 	substitute.v = 'hello';
 	substitute.v = 'world';
-	
+
 	t.notThrows(() => substitute.received().v = 'hello');
 	t.notThrows(() => substitute.received(5).v = Arg.any());
 	t.notThrows(() => substitute.received().v = Arg.any());
@@ -135,9 +130,9 @@ test('class string field set received', t => {
 
 test('class method returns with placeholder args', t => {
 	initialize();
-	
+
 	substitute.c(Arg.any(), "there").returns("blah", "haha");
-	
+
 	t.is(substitute.c("hi", "there"), 'blah');
 	t.is(substitute.c("his", "there"), 'haha');
 	t.is<any>(substitute.c("his", "there"), void 0);
@@ -146,7 +141,7 @@ test('class method returns with placeholder args', t => {
 
 test('partial mocks using function mimicks with specific args', t => {
 	initialize();
-	
+
 	substitute.c('a', 'b').mimicks(instance.c);
 
 	t.is(substitute.c('a', 'b'), 'hello a world (b)');
@@ -154,7 +149,7 @@ test('partial mocks using function mimicks with specific args', t => {
 
 test('class method returns with specific args', t => {
 	initialize();
-	
+
 	substitute.c("hi", "there").returns("blah", "haha");
 
 	t.is(substitute.c("hi", "there"), 'blah');
@@ -165,15 +160,15 @@ test('class method returns with specific args', t => {
 
 test('returning other fake from promise works', async t => {
 	initialize();
-	
+
 	const otherSubstitute = Substitute.for<Dummy>();
 	substitute.returnPromise().returns(Promise.resolve(otherSubstitute));
-    t.is(otherSubstitute, await substitute.returnPromise());
+	t.is(otherSubstitute, await substitute.returnPromise());
 });
 
 test('returning resolved promises works', async t => {
 	initialize();
-	
+
 	substitute.returnPromise().returns(Promise.resolve(1338));
 
 	t.is(1338, await substitute.returnPromise());
@@ -181,16 +176,16 @@ test('returning resolved promises works', async t => {
 
 test('class void returns', t => {
 	initialize();
-	
+
 	substitute.foo().returns(void 0, null);
 
 	t.is(substitute.foo(), void 0);
 	t.is(substitute.foo(), null);
-}); 
+});
 
 test('class method received', t => {
 	initialize();
-	
+
 	void substitute.c("hi", "there");
 	void substitute.c("hi", "the1re");
 	void substitute.c("hi", "there");
@@ -201,19 +196,19 @@ test('class method received', t => {
 	t.notThrows(() => substitute.received(1).c('hi', 'the1re'));
 	t.notThrows(() => substitute.received().c('hi', 'there'));
 
-	t.throws(() => substitute.received(7).c('hi', 'there'), 
-`Expected 7 calls to the method c with arguments ['hi', 'there'], but received 4 of such calls.
-All calls received to method c:
--> call with arguments ['hi', 'there']
--> call with arguments ['hi', 'the1re']
--> call with arguments ['hi', 'there']
--> call with arguments ['hi', 'there']
--> call with arguments ['hi', 'there']`);
+	const expectedMessage = 'Expected 7 calls to the method c with arguments [\'hi\', \'there\'], but received 4 of such calls.\n' +
+		'All calls received to method c:\n' +
+		'-> call with arguments [\'hi\', \'there\']\n' +
+		'-> call with arguments [\'hi\', \'the1re\']\n' +
+		'-> call with arguments [\'hi\', \'there\']\n' +
+		'-> call with arguments [\'hi\', \'there\']\n' +
+		'-> call with arguments [\'hi\', \'there\']'
+	t.throws(() => { substitute.received(7).c('hi', 'there') }, { message: expectedMessage });
 });
 
 test('received call matches after partial mocks using property instance mimicks', t => {
 	initialize();
-	
+
 	substitute.d.mimicks(() => instance.d);
 	substitute.c('lala', 'bar');
 
@@ -221,72 +216,72 @@ test('received call matches after partial mocks using property instance mimicks'
 	substitute.received(1).c('lala', 'bar');
 
 	t.notThrows(() => substitute.received(1).c('lala', 'bar'));
-	t.throws(() => substitute.received(2).c('lala', 'bar'),
-`Expected 2 calls to the method c with arguments ['lala', 'bar'], but received 1 of such call.
-All calls received to method c:
--> call with arguments ['lala', 'bar']`);
-	
+	const expectedMessage = 'Expected 2 calls to the method c with arguments [\'lala\', \'bar\'], but received 1 of such call.\n' +
+		'All calls received to method c:\n' +
+		'-> call with arguments [\'lala\', \'bar\']'
+	t.throws(() => substitute.received(2).c('lala', 'bar'), { message: expectedMessage });
+
 	t.deepEqual(substitute.d, 1337);
 });
 
 test('partial mocks using property instance mimicks', t => {
 	initialize();
-	
+
 	substitute.d.mimicks(() => instance.d);
 
 	t.deepEqual(substitute.d, 1337);
 });
 
 test('verifying with more arguments fails', t => {
-    initialize()
-    substitute.bar(1)
-    substitute.received().bar(1)
-    t.throws(() => substitute.received().bar(1, 2))
+	initialize()
+	substitute.bar(1)
+	substitute.received().bar(1)
+	t.throws(() => substitute.received().bar(1, 2))
 })
 
 test('verifying with less arguments fails', t => {
-    initialize()
-    substitute.bar(1, 2)
-    substitute.received().bar(1, 2)
-    t.throws(() => substitute.received().bar(1))
+	initialize()
+	substitute.bar(1, 2)
+	substitute.received().bar(1, 2)
+	t.throws(() => substitute.received().bar(1))
 })
 
 test('return with more arguments is not matched fails', t => {
-    initialize()
-    substitute.bar(1, 2).returns(3)
-    t.is(3, substitute.bar(1, 2))
-    t.is('function', typeof(substitute.bar(1)))
+	initialize()
+	substitute.bar(1, 2).returns(3)
+	t.is(3, substitute.bar(1, 2))
+	t.is('function', typeof (substitute.bar(1)))
 })
 
 test('return with less arguments is not matched', t => {
-    initialize()
-    substitute.bar(1).returns(3)
-    t.is(3, substitute.bar(1))
-    t.is('function', typeof(substitute.bar(1, 2).toString))
+	initialize()
+	substitute.bar(1).returns(3)
+	t.is(3, substitute.bar(1))
+	t.is('function', typeof (substitute.bar(1, 2).toString))
 })
 
 test('can stub multiple primitive return values', t => {
-    initialize()
-    substitute.bar(1).returns(2)
-    substitute.bar(2).returns(3)
-    t.is(2, substitute.bar(1))
-    t.is(3, substitute.bar(2))
+	initialize()
+	substitute.bar(1).returns(2)
+	substitute.bar(2).returns(3)
+	t.is(2, substitute.bar(1))
+	t.is(3, substitute.bar(2))
 })
 
 test('can stub multiple Arg values', t => {
-    initialize()
-    substitute.bar(Arg.is(x => x % 2 === 0)).returns(1)
-    substitute.bar(Arg.is(x => x % 2 !== 0)).returns(2)
-    t.is(1, substitute.bar(4))
-    t.is(2, substitute.bar(5))
+	initialize()
+	substitute.bar(Arg.is(x => x % 2 === 0)).returns(1)
+	substitute.bar(Arg.is(x => x % 2 !== 0)).returns(2)
+	t.is(1, substitute.bar(4))
+	t.is(2, substitute.bar(5))
 })
 
 
 test.skip('can stub primitive & Arg values', t => {
-    initialize()
-    substitute.bar(1).returns(2)
-    substitute.bar(Arg.any()).returns(3) // throws 'substitute.bar(...).returns is not a function'
-    t.is(5, substitute.bar(2))
-    t.is(2, substitute.bar(1))
-    t.is(3, substitute.bar(2))
+	initialize()
+	substitute.bar(1).returns(2)
+	substitute.bar(Arg.any()).returns(3) // throws 'substitute.bar(...).returns is not a function'
+	t.is(5, substitute.bar(2))
+	t.is(2, substitute.bar(1))
+	t.is(3, substitute.bar(2))
 })
