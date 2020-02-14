@@ -13,7 +13,7 @@ export class Argument<T> {
         return this.description;
     }
 
-    inspect() {
+    [Symbol.for('nodejs.util.inspect.custom')]() {
         return this.description;
     }
 }
