@@ -2,8 +2,6 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { areArgumentsEqual, Type } from "../Utilities";
 
-const Nothing = Symbol();
-
 export class SetPropertyState implements ContextState {
     private _callCount: number;
     private _arguments: any[];

@@ -3,17 +3,24 @@ import { Context } from "src/Context";
 import { areArgumentArraysEqual, Call, Type } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
 
-const Nothing = Symbol()
-
 interface ReturnMock {
     args: Call
     returnValues: any[] | Symbol // why symbol, what
     returnIndex: 0
 }
+interface MimickMock {
+    args: Call
+    mimickFunction: Function
+}
+interface ThrowMock {
+    args: Call
+    throwFunction: any
+}
 
 export class FunctionState implements ContextState {
     private returns: ReturnMock[];
-    private mimicks: Function|null;
+    private mimicks: MimickMock[];
+    private throws: ThrowMock[];
 
     private _calls: Call[]; // list of lists of arguments this was called with
     private _lastArgs?: Call // bit of a hack
@@ -32,8 +39,9 @@ export class FunctionState implements ContextState {
 
     constructor(private _getPropertyState: GetPropertyState) {
         this.returns = [];
-        this.mimicks = null;
+        this.mimicks = [];
         this._calls = [];
+        this.throws = [];
     }
 
     private getCallCount(args: Call): number {
@@ -51,15 +59,22 @@ export class FunctionState implements ContextState {
             this.property,
             args);
 
-        if(!hasExpectations) {
+        if (!hasExpectations) {
             this._calls.push(args)
         }
 
         if (!hasExpectations) {
-            if(this.mimicks)
-                return this.mimicks.apply(this.mimicks, args);
+            if (this.mimicks.length > 0) {
+                const mimicks = this.mimicks.find(mimick => areArgumentArraysEqual(mimick.args, args))
+                if (mimicks !== void 0) return mimicks.mimickFunction.apply(mimicks.mimickFunction, args);
+            }
 
-            if(!this.returns.length)
+            if (this.throws.length > 0) {
+                const possibleThrow = this.throws.find(throws => areArgumentArraysEqual(throws.args, args))
+                if (possibleThrow !== void 0) throw possibleThrow.throwFunction;
+            }
+
+            if (!this.returns.length)
                 return context.proxy;
             const returns = this.returns.find(r => areArgumentArraysEqual(r.args, args))
 
@@ -85,16 +100,36 @@ export class FunctionState implements ContextState {
         if (property === 'then')
             return void 0;
 
-        if(property === 'mimicks') {
+        if (property === 'mimicks') {
             return (input: Function) => {
-                this.mimicks = input;
+                if (!this._lastArgs) {
+                    throw new Error('Eh, there\'s a bug, no args recorded for this mimicks :/')
+                }
+                this.mimicks.push({
+                    args: this._lastArgs,
+                    mimickFunction: input
+                })
                 this._calls.pop()
 
                 context.state = context.initialState;
             }
         }
 
-        if(property === 'returns') {
+        if (property === 'throws') {
+            return (input: Error | Function) => {
+                if (!this._lastArgs) {
+                    throw new Error('Eh, there\'s a bug, no args recorded for this throw :/')
+                }
+                this.throws.push({
+                    args: this._lastArgs,
+                    throwFunction: input
+                });
+                this._calls.pop();
+                context.state = context.initialState;
+            }
+        }
+
+        if (property === 'returns') {
             return (...returns: any[]) => {
                 if (!this._lastArgs) {
                     throw new Error('Eh, there\'s a bug, no args recorded for this return :/')
@@ -106,7 +141,7 @@ export class FunctionState implements ContextState {
                 })
                 this._calls.pop()
 
-                if(this.callCount === 0) {
+                if (this.callCount === 0) {
                     // var indexOfSelf = this
                     //     ._getPropertyState
                     //     .recordedFunctionStates
