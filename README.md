@@ -140,6 +140,24 @@ console.log(fakeCalculator.divide(10, 5)); //prints 5
 console.log(fakeCalculator.divide(9, 5)); //prints 1338
 ```
 
+## Throwing exceptions
+Exceptions can be thrown on properties or methods. You can add different exceptions for different arguments
+
+```typescript
+import { Substitute, Arg } from '@fluffy-spoon/substitute';
+
+interface Calculator {
+  add(a: number, b: number): number;
+  subtract(a: number, b: number): number;
+  divide(a: number, b: number): number;
+  isEnabled: boolean;
+}
+
+const calculator = Substitute.for<Calculator>();
+calculator.divide(Arg.any(), 0).throws(new Error('Cannot divide by 0'));
+calculator.divide(1, 0); // throws the exception Error: Cannot divide by 0
+```
+
 # Benefits over other mocking libraries
 - Easier-to-understand fluent syntax.
 - No need to cast to `any` in certain places (for instance, when overriding read-only properties) due to the `myProperty.returns(...)` syntax.

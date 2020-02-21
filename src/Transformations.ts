@@ -1,16 +1,17 @@
 import { AllArguments } from "./Arguments";
 
-export type NoArgumentFunctionSubstitute<TReturnType> = 
+export type NoArgumentFunctionSubstitute<TReturnType> =
     (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
 
-export type FunctionSubstitute<TArguments extends any[], TReturnType> = 
-    ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) & 
+export type FunctionSubstitute<TArguments extends any[], TReturnType> =
+    ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
     ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
 export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
 
 type BaseMockObjectMixin<TReturnType> = {
     returns: (...args: TReturnType[]) => void;
+    throws: (exception: any) => void;
 }
 
 type NoArgumentMockObjectMixin<TReturnType> = BaseMockObjectMixin<TReturnType> & {
@@ -30,7 +31,7 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
 type TerminatingObject<T> = {
     [P in keyof T]:
     T[P] extends () => infer R ? () => void :
-    T[P] extends (...args: infer F) => infer R ? (...args: F) => void : 
+    T[P] extends (...args: infer F) => infer R ? (...args: F) => void :
     T[P];
 }
 
@@ -43,6 +44,6 @@ type ObjectSubstituteTransformation<T extends Object> = {
 
 type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 
-export type OmitProxyMethods<T extends any> = Omit<T, 'mimick'|'received'|'didNotReceive'>;
+export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive'>;
 
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;

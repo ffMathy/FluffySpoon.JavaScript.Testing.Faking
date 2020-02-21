@@ -11,6 +11,9 @@ export enum Type {
     property = 'property'
 }
 
+export const Nothing = Symbol();
+export type Nothing = typeof Nothing
+
 export function stringifyArguments(args: any[]) {
     args = args.map(x => util.inspect(x));
     return args && args.length > 0 ? 'arguments [' + args.join(', ') + ']' : 'no arguments';
@@ -62,16 +65,15 @@ export function areArgumentsEqual(a: any, b: any) {
 
 function deepEqual(a: any, b: any): boolean {
     if (Array.isArray(a)) {
-        if (!Array.isArray(b) || a.length !== b.length)
-            return false;
+        if (!Array.isArray(b) || a.length !== b.length) return false;
         for (let i = 0; i < a.length; i++) {
-            if (!deepEqual(a[i], b[i]))
-                return false;
+            if (!deepEqual(a[i], b[i])) return false;
         }
         return true;
     }
     if (typeof a === 'object' && a !== null && b !== null) {
         if (!(typeof b === 'object')) return false;
+        if (a.constructor !== b.constructor) return false;
         const keys = Object.keys(a);
         if (keys.length !== Object.keys(b).length) return false;
         for (const key in a) {

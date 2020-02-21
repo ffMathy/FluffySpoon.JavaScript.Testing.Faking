@@ -1,13 +1,12 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { FunctionState } from "./FunctionState";
-import { Type } from "../Utilities";
-
-const Nothing = Symbol();
+import { Type, Nothing } from "../Utilities";
 
 export class GetPropertyState implements ContextState {
-    private returns: any[]|Symbol;
-    private mimicks: Function|null;
+    private returns: any[] | Nothing;
+    private mimicks: Function | Nothing;
+    private throws: any;
 
     private _callCount: number;
     private _functionState?: FunctionState;
@@ -30,7 +29,8 @@ export class GetPropertyState implements ContextState {
 
     constructor(private _property: PropertyKey) {
         this.returns = Nothing;
-        this.mimicks = null;
+        this.mimicks = Nothing;
+        this.throws = Nothing;
         this._callCount = 0;
     }
 
@@ -58,10 +58,10 @@ export class GetPropertyState implements ContextState {
         if (property === 'then')
             return void 0;
 
-        if(this.isFunction)
+        if (this.isFunction)
             return context.proxy;
 
-        if(property === 'mimicks') {
+        if (property === 'mimicks') {
             return (input: Function) => {
                 this.mimicks = input;
                 this._callCount--;
@@ -70,8 +70,8 @@ export class GetPropertyState implements ContextState {
             }
         }
 
-        if(property === 'returns') {
-            if(this.returns !== Nothing)
+        if (property === 'returns') {
+            if (this.returns !== Nothing)
                 throw new Error('The return value for the property ' + this._property.toString() + ' has already been set to ' + this.returns);
 
             return (...returns: any[]) => {
@@ -82,20 +82,32 @@ export class GetPropertyState implements ContextState {
             };
         }
 
-        if(!hasExpectations) {
-            this._callCount++;
+        if (property === 'throws') {
+            return (callback: Function) => {
+                this.throws = callback;
+                this._callCount--;
 
-            if(this.mimicks)
-                return this.mimicks.apply(this.mimicks);
-
-            if(this.returns !== Nothing) {
-                var returnsArray = this.returns as any[];
-                if(returnsArray.length === 1)
-                    return returnsArray[0];
-        
-                return returnsArray[this._callCount-1];
+                context.state = context.initialState;
             }
         }
+
+        if (!hasExpectations) {
+                this._callCount++;
+
+                if (this.mimicks !== Nothing)
+                    return this.mimicks.apply(this.mimicks);
+                
+                if (this.throws !== Nothing)
+                    throw this.throws
+
+                if (this.returns !== Nothing) {
+                    var returnsArray = this.returns as any[];
+                    if (returnsArray.length === 1)
+                        return returnsArray[0];
+
+                    return returnsArray[this._callCount - 1];
+                }
+            }
 
         context.initialState.assertCallCountMatchesExpectations(
             [[]],  // I'm not sure what this was supposed to mean
