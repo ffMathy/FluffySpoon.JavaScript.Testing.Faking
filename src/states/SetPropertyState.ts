@@ -1,6 +1,7 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { areArgumentsEqual, Type } from "../Utilities";
+import { SubstituteException } from "../SubstituteBase";
 
 export class SetPropertyState implements ContextState {
     private _callCount: number;
@@ -25,13 +26,13 @@ export class SetPropertyState implements ContextState {
     }
 
     apply(context: Context): undefined {
-        throw new Error('Calling apply of setPropertyState is not normal behaviour, something gone wrong')
+        throw SubstituteException.generic('Calling apply of setPropertyState is not normal behaviour, something gone wrong')
     }
 
     set(context: Context, property: PropertyKey, value: any) {
         let callCount = this._callCount;
         const hasExpectations = context.initialState.hasExpectations;
-        if(hasExpectations) {
+        if (hasExpectations) {
             callCount = context.initialState
                 .setPropertyStates
                 .filter(x => areArgumentsEqual(x.arguments[0], value))
@@ -46,12 +47,12 @@ export class SetPropertyState implements ContextState {
             this.property,
             this.arguments);
 
-        if(!hasExpectations) {
+        if (!hasExpectations) {
             this._callCount++;
         }
     }
 
     get(context: Context, property: PropertyKey): undefined {
-        throw new Error('Calling get of setPropertyState is not normal behaviour, something gone wrong')
+        throw SubstituteException.generic('Calling get of setPropertyState is not normal behaviour, something gone wrong')
     }
 }

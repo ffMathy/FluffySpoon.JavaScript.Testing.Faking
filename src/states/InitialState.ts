@@ -2,8 +2,9 @@ import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
-import { stringifyArguments, stringifyCalls, Call, Type, Get } from "../Utilities";
+import { SubstituteMethods, stringifyArguments, stringifyCalls, Call, Type, Get } from "../Utilities";
 import { AreProxiesDisabledKey } from "../Substitute";
+import { SubstituteException } from "../SubstituteBase";
 
 export class InitialState implements ContextState {
     private recordedGetPropertyStates: Map<PropertyKey, GetPropertyState>;
@@ -47,25 +48,23 @@ export class InitialState implements ContextState {
     }
 
     assertCallCountMatchesExpectations(
-        calls: Call[], // list of arguments
-        callCount: number,
+        receivedCalls: Call[], // list of arguments
+        receivedCount: number,
         type: Type, // method or property
-        property: PropertyKey,
+        propertyValue: PropertyKey,
         args: any[]
     ) {
         const expectedCount = this._expectedCount;
 
         this.clearExpectations();
-        if (this.doesCallCountMatchExpectations(expectedCount, callCount))
+        if (this.doesCallCountMatchExpectations(expectedCount, receivedCount))
             return;
 
-        throw new Error(
-            'Expected ' + (expectedCount === null ? '1 or more' : expectedCount) +
-            ' call' + (expectedCount === 1 ? '' : 's') + ' to the ' + type + ' ' + property.toString() +
-            ' with ' + stringifyArguments(args) + ', but received ' + (callCount === 0 ? 'none' : callCount) +
-            ' of such call' + (callCount === 1 ? '' : 's') +
-            '.\nAll calls received to ' + type + ' ' + property.toString() + ':' + stringifyCalls(calls)
-        );
+        const callCount = { expected: expectedCount, received: receivedCount }
+        const property = { type, value: propertyValue }
+        const calls = { expectedArguments: args, received: receivedCalls }
+
+        throw SubstituteException.forCallCountMissMatch(callCount, property, calls)
     }
 
     private doesCallCountMatchExpectations(expectedCount: number | undefined | null, actualCount: number) {
@@ -78,8 +77,7 @@ export class InitialState implements ContextState {
         return expectedCount === actualCount;
     }
 
-    apply(context: Context, args: any[]) {
-    }
+    apply(context: Context, args: any[]) { }
 
     set(context: Context, property: PropertyKey, value: any) {
         if (property === AreProxiesDisabledKey) {
@@ -93,64 +91,29 @@ export class InitialState implements ContextState {
         }
 
         const setPropertyState = new SetPropertyState(property, value);
-        context.state = setPropertyState;
-
-        this.recordedSetPropertyStates.push(setPropertyState);
-
         setPropertyState.set(context, property, value);
+
+        context.state = setPropertyState;
+        this.recordedSetPropertyStates.push(setPropertyState);
     }
 
     get(context: Context, property: PropertyKey) {
-        if (typeof property === 'symbol') {
-            if (property === AreProxiesDisabledKey)
+        switch (property) {
+            case AreProxiesDisabledKey:
                 return this._areProxiesDisabled;
-
-            if (property === Symbol.toPrimitive)
-                return () => '{SubstituteJS fake}';
-
-            if (property.toString() === 'Symbol(util.inspect.custom)')
-                return () => '{SubstituteJS fake}';
-
-            if (property === Symbol.iterator)
-                return void 0;
-
-            if (property === Symbol.toStringTag)
-                return 'Substitute';
+            case SubstituteMethods.received:
+                return (count?: number) => {
+                    this._expectedCount = count === void 0 ? null : count;
+                    return context.receivedProxy;
+                };
+            case SubstituteMethods.didNotReceive:
+                return () => {
+                    this._expectedCount = 0;
+                    return context.receivedProxy;
+                };
+            default:
+                return Get(this, context, property);
         }
-
-        if (property === 'valueOf')
-            return '{SubstituteJS fake}';
-
-        if (property === '$$typeof')
-            return '{SubstituteJS fake}';
-
-        if (property === 'length')
-            return '{SubstituteJS fake}';
-
-        if (property === 'toString')
-            return '{SubstituteJS fake}';
-
-        if (property === 'inspect')
-            return () => '{SubstituteJS fake}';
-
-        if (property === 'constructor')
-            return () => context.rootProxy;
-
-        if (property === 'received') {
-            return (count?: number) => {
-                this._expectedCount = count === void 0 ? null : count;
-                return context.receivedProxy;
-            };
-        }
-
-        if (property === 'didNotReceive') {
-            return () => {
-                this._expectedCount = 0;
-                return context.receivedProxy;
-            };
-        }
-
-        return Get(this, context, property)
     }
 
     private clearExpectations() {

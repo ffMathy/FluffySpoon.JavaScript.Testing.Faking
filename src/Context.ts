@@ -1,10 +1,10 @@
+import { inspect } from 'util'
 import { ContextState } from "./states/ContextState";
 import { InitialState } from "./states/InitialState";
 import { HandlerKey } from "./Substitute";
 import { Type } from "./Utilities";
 import { SetPropertyState } from "./states/SetPropertyState";
-
-class SubstituteJS { }
+import { SubstituteBase as SubstituteJS, SubstituteException } from './SubstituteBase'
 
 export class Context {
     private _initialState: InitialState;
@@ -19,21 +19,19 @@ export class Context {
 
     constructor() {
         this._initialState = new InitialState();
-        this._setState = this._initialState
+        this._setState = this._initialState;
         this._getState = this._initialState;
 
         this._proxy = new Proxy(SubstituteJS, {
             apply: (_target, _this, args) => this.apply(_target, _this, args),
             set: (_target, property, value) => (this.set(_target, property, value), true),
-            get: (_target, property) => this.get(_target, property),
-            getOwnPropertyDescriptor: (obj, prop) => prop === 'constructor' ?
-                { value: obj, configurable: true } : Reflect.getOwnPropertyDescriptor(obj, prop)
+            get: (_target, property) => this._filterAndReturnProperty(_target, property, this.get)
         });
 
         this._rootProxy = new Proxy(SubstituteJS, {
             apply: (_target, _this, args) => this.initialState.apply(this, args),
             set: (_target, property, value) => (this.initialState.set(this, property, value), true),
-            get: (_target, property) => this.initialState.get(this, property)
+            get: (_target, property) => this._filterAndReturnProperty(_target, property, this.rootGet)
         });
 
         this._receivedProxy = new Proxy(SubstituteJS, {
@@ -50,12 +48,41 @@ export class Context {
         });
     }
 
+    private _filterAndReturnProperty(target: typeof SubstituteJS, property: PropertyKey, defaultGet: Context['get']) {
+        switch (property) {
+            case 'constructor':
+            case 'valueOf':
+            case '$$typeof':
+            case '$$typeof':
+            case 'length':
+            case 'toString':
+            case 'inspect':
+            case 'lastRegisteredSubstituteJSMethodOrProperty':
+                return target.prototype[property];
+            case Symbol.toPrimitive:
+                return target.prototype[Symbol.toPrimitive];
+            case inspect.custom:
+                return target.prototype[inspect.custom];
+            case Symbol.iterator:
+                return target.prototype[Symbol.iterator];
+            case Symbol.toStringTag:
+                return target.prototype[Symbol.toStringTag];
+            default:
+                target.prototype.lastRegisteredSubstituteJSMethodOrProperty = property.toString()
+                return defaultGet.bind(this)(target, property);
+        }
+    }
+
     private handleNotFoundState(property: PropertyKey) {
         if (this.initialState.hasExpectations && this.initialState.expectedCount !== null) {
             this.initialState.assertCallCountMatchesExpectations([], 0, Type.property, property, []);
             return this.receivedProxy;
         }
-        throw new Error(`there is no mock for property: ${String(property)}`);
+        throw SubstituteException.forPropertyNotMocked(property);
+    }
+
+    rootGet(_target: any, property: PropertyKey) {
+        return this.initialState.get(this, property);
     }
 
     apply(_target: any, _this: any, args: any[]) {
