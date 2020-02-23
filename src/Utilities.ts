@@ -1,14 +1,22 @@
 import { Argument, AllArguments } from "./Arguments";
-import { GetPropertyState } from './states/GetPropertyState'
-import { InitialState } from './states/InitialState'
-import { Context } from './Context'
-import util = require('util')
+import { GetPropertyState } from './states/GetPropertyState';
+import { InitialState } from './states/InitialState';
+import { Context } from './Context';
+import * as util from 'util';
 
 export type Call = any[] // list of args
 
 export enum Type {
     method = 'method',
     property = 'property'
+}
+
+export enum SubstituteMethods {
+    received = 'received',
+    didNotReceive = 'didNotReceive',
+    mimicks = 'mimicks',
+    throws = 'throws',
+    returns = 'returns'
 }
 
 export const Nothing = Symbol();
