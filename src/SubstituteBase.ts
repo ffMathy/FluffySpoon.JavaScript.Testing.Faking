@@ -1,7 +1,7 @@
 import { inspect } from 'util';
 import { Type, stringifyArguments, stringifyCalls, Call } from './Utilities';
 
-export class SubstituteBase {
+export class SubstituteJS {
   private _lastRegisteredSubstituteJSMethodOrProperty: string
   set lastRegisteredSubstituteJSMethodOrProperty(value: string) {
     this._lastRegisteredSubstituteJSMethodOrProperty = value;

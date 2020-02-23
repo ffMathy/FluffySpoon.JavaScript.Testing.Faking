@@ -4,7 +4,7 @@ import { InitialState } from "./states/InitialState";
 import { HandlerKey } from "./Substitute";
 import { Type } from "./Utilities";
 import { SetPropertyState } from "./states/SetPropertyState";
-import { SubstituteBase as SubstituteJS, SubstituteException } from './SubstituteBase'
+import { SubstituteJS as SubstituteBase, SubstituteException } from './SubstituteBase'
 
 export class Context {
     private _initialState: InitialState;
@@ -22,19 +22,19 @@ export class Context {
         this._setState = this._initialState;
         this._getState = this._initialState;
 
-        this._proxy = new Proxy(SubstituteJS, {
+        this._proxy = new Proxy(SubstituteBase, {
             apply: (_target, _this, args) => this.apply(_target, _this, args),
             set: (_target, property, value) => (this.set(_target, property, value), true),
             get: (_target, property) => this._filterAndReturnProperty(_target, property, this.get)
         });
 
-        this._rootProxy = new Proxy(SubstituteJS, {
+        this._rootProxy = new Proxy(SubstituteBase, {
             apply: (_target, _this, args) => this.initialState.apply(this, args),
             set: (_target, property, value) => (this.initialState.set(this, property, value), true),
             get: (_target, property) => this._filterAndReturnProperty(_target, property, this.rootGet)
         });
 
-        this._receivedProxy = new Proxy(SubstituteJS, {
+        this._receivedProxy = new Proxy(SubstituteBase, {
             apply: (_target, _this, args) => this._receivedState === void 0 ? void 0 : this._receivedState.apply(this, args),
             set: (_target, property, value) => (this.set(_target, property, value), true),
             get: (_target, property) => {
@@ -48,7 +48,7 @@ export class Context {
         });
     }
 
-    private _filterAndReturnProperty(target: typeof SubstituteJS, property: PropertyKey, defaultGet: Context['get']) {
+    private _filterAndReturnProperty(target: typeof SubstituteBase, property: PropertyKey, defaultGet: Context['get']) {
         switch (property) {
             case 'constructor':
             case 'valueOf':
