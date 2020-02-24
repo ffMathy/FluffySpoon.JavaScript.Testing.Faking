@@ -15,6 +15,6 @@ test('issue 51 - All functions shares the same state', async t => {
     try {
         calculator.received().divide(1, 2);
     } catch (e) {
-        t.regex(e.toString(), /Error: there is no mock for property: divide/);
+        t.regex(e.toString(), /SubstituteException: There is no mock for property: divide/);
     }
 });

@@ -1,7 +1,8 @@
 import { ContextState, PropertyKey } from "./ContextState";
 import { Context } from "src/Context";
-import { areArgumentArraysEqual, Call, Type } from "../Utilities";
+import { SubstituteMethods, areArgumentArraysEqual, Call, Type } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
+import { SubstituteException } from "../SubstituteBase";
 
 interface ReturnMock {
     args: Call
@@ -100,10 +101,10 @@ export class FunctionState implements ContextState {
         if (property === 'then')
             return void 0;
 
-        if (property === 'mimicks') {
+        if (property === SubstituteMethods.mimicks) {
             return (input: Function) => {
                 if (!this._lastArgs) {
-                    throw new Error('Eh, there\'s a bug, no args recorded for this mimicks :/')
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this mimicks :/')
                 }
                 this.mimicks.push({
                     args: this._lastArgs,
@@ -115,10 +116,10 @@ export class FunctionState implements ContextState {
             }
         }
 
-        if (property === 'throws') {
+        if (property === SubstituteMethods.throws) {
             return (input: Error | Function) => {
                 if (!this._lastArgs) {
-                    throw new Error('Eh, there\'s a bug, no args recorded for this throw :/')
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this throw :/')
                 }
                 this.throws.push({
                     args: this._lastArgs,
@@ -129,10 +130,10 @@ export class FunctionState implements ContextState {
             }
         }
 
-        if (property === 'returns') {
+        if (property === SubstituteMethods.returns) {
             return (...returns: any[]) => {
                 if (!this._lastArgs) {
-                    throw new Error('Eh, there\'s a bug, no args recorded for this return :/')
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/')
                 }
                 this.returns.push({
                     returnValues: returns,
