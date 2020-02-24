@@ -53,7 +53,6 @@ export class Context {
             case 'constructor':
             case 'valueOf':
             case '$$typeof':
-            case '$$typeof':
             case 'length':
             case 'toString':
             case 'inspect':
