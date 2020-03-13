@@ -156,6 +156,23 @@ export class FunctionState implements ContextState {
             };
         }
 
+        if (property === SubstituteMethods.resolves) {
+            return (...returns: any[]) => {
+                if (!this._lastArgs) {
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/')
+                }
+                returns = returns.map(value => Promise.resolve(value))
+                this.returns.push({
+                    returnValues: returns,
+                    returnIndex: 0,
+                    args: this._lastArgs
+                })
+                this._calls.pop()
+
+                context.state = context.initialState;
+            };
+        }
+
         return context.proxy;
     }
 }

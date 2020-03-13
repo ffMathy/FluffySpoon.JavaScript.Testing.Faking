@@ -18,6 +18,7 @@ interface Calculator {
   add(a: number, b: number): number;
   subtract(a: number, b: number): number;
   divide(a: number, b: number): number;
+  async heavyOperation(): Promise<number>;
 
   isEnabled: boolean;
 }
@@ -51,6 +52,15 @@ console.log(calculator.add(1, 2)); //prints 3
 console.log(calculator.add(1, 2)); //prints 7
 console.log(calculator.add(1, 2)); //prints 9
 console.log(calculator.add(1, 2)); //prints undefined
+```
+
+## Working with promises
+When working with promises you can also use the method `resolves()` to return a promise.
+
+```typescript
+calculator.heavyOperation(1, 2).resolves(4); 
+//same as calculator.heavyOperation(1, 2).returns(Promise.resolve(4));
+console.log(await calculator.heavyOperation(1, 2)); //prints 4
 ```
 
 ## Verifying calls

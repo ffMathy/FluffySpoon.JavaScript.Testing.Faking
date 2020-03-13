@@ -16,7 +16,8 @@ export enum SubstituteMethods {
     didNotReceive = 'didNotReceive',
     mimicks = 'mimicks',
     throws = 'throws',
-    returns = 'returns'
+    returns = 'returns',
+    resolves = 'resolves'
 }
 
 export const Nothing = Symbol();
