@@ -33,10 +33,12 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
 
 type NoArgumentMockObjectPromise<TReturnType> = NoArgumentMockObjectMixin<TReturnType> & {
     resolves: (...args: Unpacked<TReturnType>[]) => void;
+    rejects: (exception: any) => void;
 }
 
 type MockObjectPromise<TArguments extends any[], TReturnType> = MockObjectMixin<TArguments, TReturnType> & {
     resolves: (...args: Unpacked<TReturnType>[]) => void;
+    rejects: (exception: any) => void;
 }
 
 export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {

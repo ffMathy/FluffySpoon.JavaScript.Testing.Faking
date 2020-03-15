@@ -130,16 +130,27 @@ export class FunctionState implements ContextState {
             }
         }
 
-        if (property === SubstituteMethods.returns) {
+        if (property === SubstituteMethods.returns
+            || property === SubstituteMethods.resolves
+            || property === SubstituteMethods.rejects
+        ) {
             return (...returns: any[]) => {
                 if (!this._lastArgs) {
                     throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/')
                 }
-                this.returns.push({
-                    returnValues: returns,
-                    returnIndex: 0,
-                    args: this._lastArgs
-                })
+                const returnMock: Partial<ReturnMock> = { returnIndex: 0, args: this._lastArgs };
+                switch (property) {
+                    case SubstituteMethods.returns:
+                        returnMock.returnValues = returns;
+                        break;
+                    case SubstituteMethods.resolves:
+                        returnMock.returnValues = returns.map(value => Promise.resolve(value));
+                        break;
+                    case SubstituteMethods.rejects:
+                        returnMock.returnValues = returns.map(value => Promise.reject(value));
+                        break;
+                }
+                this.returns.push(<ReturnMock>returnMock);
                 this._calls.pop()
 
                 if (this.callCount === 0) {
@@ -151,23 +162,6 @@ export class FunctionState implements ContextState {
                     //     .recordedFunctionStates
                     //     .splice(indexOfSelf, 1);
                 }
-
-                context.state = context.initialState;
-            };
-        }
-
-        if (property === SubstituteMethods.resolves) {
-            return (...returns: any[]) => {
-                if (!this._lastArgs) {
-                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/')
-                }
-                returns = returns.map(value => Promise.resolve(value))
-                this.returns.push({
-                    returnValues: returns,
-                    returnIndex: 0,
-                    args: this._lastArgs
-                })
-                this._calls.pop()
 
                 context.state = context.initialState;
             };

@@ -55,12 +55,18 @@ console.log(calculator.add(1, 2)); //prints undefined
 ```
 
 ## Working with promises
-When working with promises you can also use the method `resolves()` to return a promise.
+When working with promises you can also use `resolves()` and `rejects()` to return a promise.
 
 ```typescript
 calculator.heavyOperation(1, 2).resolves(4); 
 //same as calculator.heavyOperation(1, 2).returns(Promise.resolve(4));
 console.log(await calculator.heavyOperation(1, 2)); //prints 4
+```
+
+```typescript
+calculator.heavyOperation(1, 2).rejects(new Error());
+//same as calculator.heavyOperation(1, 2).returns(Promise.reject(new Error()));
+console.log(await calculator.heavyOperation(1, 2)); //throws Error
 ```
 
 ## Verifying calls
