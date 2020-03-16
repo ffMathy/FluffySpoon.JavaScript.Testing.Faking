@@ -174,6 +174,22 @@ test('returning resolved promises works', async t => {
 	t.is(1338, await substitute.returnPromise());
 });
 
+test('resolving other fake works', async t => {
+	initialize();
+
+	const otherSubstitute = Substitute.for<Dummy>();
+	substitute.returnPromise().resolves(otherSubstitute);
+	t.is(otherSubstitute, await substitute.returnPromise());
+});
+
+test('resolving promises works', async t => {
+	initialize();
+
+	substitute.returnPromise().resolves(1338);
+
+	t.is(1338, await substitute.returnPromise());
+});
+
 test('class void returns', t => {
 	initialize();
 
