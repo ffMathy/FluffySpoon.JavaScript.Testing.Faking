@@ -1,26 +1,21 @@
 import { AllArguments } from "./Arguments";
 
-export type NoArgumentFunctionSubstitute<TReturnType> =
-    TReturnType extends Promise<infer U> ?
-        (() => (TReturnType & NoArgumentMockObjectPromise<TReturnType>)) :
-        (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
+export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
 
 export type FunctionSubstitute<TArguments extends any[], TReturnType> =
-    TReturnType extends Promise<infer U> ?
-        ((...args: TArguments) => (TReturnType & MockObjectPromise<TArguments, TReturnType>)) &
-        ((allArguments: AllArguments) => (TReturnType & MockObjectPromise<TArguments, TReturnType>)) :
-        ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
-        ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
+    ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
+    ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
 export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
 
-type Unpacked<T> =
-    T extends Promise<infer U> ? U :
-    T;
+type MockObjectPromise<TReturnType> = TReturnType extends Promise<infer U> ? {
+    resolves: (...args: U[]) => void;
+    rejects: (exception: any) => void;
+} : {}
 
-type BaseMockObjectMixin<TReturnType> = {
+type BaseMockObjectMixin<TReturnType> = MockObjectPromise<TReturnType> & {
     returns: (...args: TReturnType[]) => void;
-    throws: (exception: any) => void;
+    throws: (exception: any) => never;
 }
 
 type NoArgumentMockObjectMixin<TReturnType> = BaseMockObjectMixin<TReturnType> & {
@@ -29,16 +24,6 @@ type NoArgumentMockObjectMixin<TReturnType> = BaseMockObjectMixin<TReturnType> &
 
 type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixin<TReturnType> & {
     mimicks: (func: (...args: TArguments) => TReturnType) => void;
-}
-
-type NoArgumentMockObjectPromise<TReturnType> = NoArgumentMockObjectMixin<TReturnType> & {
-    resolves: (...args: Unpacked<TReturnType>[]) => void;
-    rejects: (exception: any) => void;
-}
-
-type MockObjectPromise<TArguments extends any[], TReturnType> = MockObjectMixin<TArguments, TReturnType> & {
-    resolves: (...args: Unpacked<TReturnType>[]) => void;
-    rejects: (exception: any) => void;
 }
 
 export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
