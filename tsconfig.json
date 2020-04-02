@@ -1,17 +1,16 @@
 {
     "compileOnSave": true,
     "compilerOptions": {
+        "module": "commonjs",
+        "moduleResolution": "node",
         "baseUrl": ".",
-		"declaration": true,
+        "declaration": true,
         "sourceMap": true,
         "inlineSources": true,
         "downlevelIteration": true,
         "outDir": "./dist",
         "strict": true,
         "strictNullChecks": false,
-        "target": "es5",
-        "lib": [
-            "es2015"
-        ]
+        "target": "ES2016"
     }
 }
