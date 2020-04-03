@@ -1,4 +1,4 @@
-import { Argument, AllArguments } from "./Arguments";
+import { Argument, AllArguments } from './Arguments';
 import { GetPropertyState } from './states/GetPropertyState';
 import { InitialState } from './states/InitialState';
 import { Context } from './Context';
@@ -21,6 +21,7 @@ export enum SubstituteMethods {
     rejects = 'rejects'
 }
 
+const seenObject = Symbol();
 export const Nothing = Symbol();
 export type Nothing = typeof Nothing
 
@@ -73,25 +74,29 @@ export function areArgumentsEqual(a: any, b: any) {
     return deepEqual(a, b);
 };
 
-function deepEqual(a: any, b: any): boolean {
-    if (Array.isArray(a)) {
-        if (!Array.isArray(b) || a.length !== b.length) return false;
-        for (let i = 0; i < a.length; i++) {
-            if (!deepEqual(a[i], b[i])) return false;
-        }
-        return true;
-    }
-    if (typeof a === 'object' && a !== null && b !== null) {
-        if (!(typeof b === 'object')) return false;
+function deepEqual(realA: any, realB: any, objectReferences: Object[] = []): boolean {
+    const a = objectReferences.includes(realA) ? seenObject : realA;
+    const b = objectReferences.includes(realB) ? seenObject : realB;
+    const newObjectReferences = updateObjectReferences(objectReferences, a, b);
+
+    if (nonNullObject(a) && nonNullObject(b)) {
         if (a.constructor !== b.constructor) return false;
-        const keys = Object.keys(a);
-        if (keys.length !== Object.keys(b).length) return false;
+        if (Object.keys(a).length !== Object.keys(b).length) return false;
         for (const key in a) {
-            if (!deepEqual(a[key], b[key])) return false;
+            if (!deepEqual(a[key], b[key], newObjectReferences)) return false;
         }
         return true;
     }
     return a === b;
+}
+
+function updateObjectReferences(objectReferences: Array<Object>, a: any, b: any) {
+    const tempObjectReferences = [...objectReferences, nonNullObject(a) && !objectReferences.includes(a) ? a : void 0];
+    return [...tempObjectReferences, nonNullObject(b) && !tempObjectReferences.includes(b) ? b : void 0];
+}
+
+function nonNullObject(value: any) {
+    return typeof value === 'object' && value !== null;
 }
 
 export function Get(recorder: InitialState, context: Context, property: PropertyKey) {
