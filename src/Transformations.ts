@@ -1,6 +1,6 @@
 import { AllArguments } from "./Arguments";
 
-type FunctionSubstituteWithOverloads<TFunc> =
+type FunctionSubstituteWithOverrides<TFunc, Terminating = false> =
     TFunc extends {
         (...args: infer A1): infer R1;
         (...args: infer A2): infer R2;
@@ -8,35 +8,38 @@ type FunctionSubstituteWithOverloads<TFunc> =
         (...args: infer A4): infer R4;
         (...args: infer A5): infer R5;
     } ?
-    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> &
-    FunctionSubstitute<A3, R3> & FunctionSubstitute<A4, R4>
-    & FunctionSubstitute<A5, R5> : TFunc extends {
+    FunctionHandler<A1, R1, Terminating> & FunctionHandler<A2, R2, Terminating> &
+    FunctionHandler<A3, R3, Terminating> & FunctionHandler<A4, R4, Terminating>
+    & FunctionHandler<A5, R5, Terminating> : TFunc extends {
         (...args: infer A1): infer R1;
         (...args: infer A2): infer R2;
         (...args: infer A3): infer R3;
         (...args: infer A4): infer R4;
     } ?
-    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> &
-    FunctionSubstitute<A3, R3> & FunctionSubstitute<A4, R4> : TFunc extends {
+    FunctionHandler<A1, R1, Terminating> & FunctionHandler<A2, R2, Terminating> &
+    FunctionHandler<A3, R3, Terminating> & FunctionHandler<A4, R4, Terminating> : TFunc extends {
         (...args: infer A1): infer R1;
         (...args: infer A2): infer R2;
         (...args: infer A3): infer R3;
     } ?
-    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2>
-    & FunctionSubstitute<A3, R3> : TFunc extends {
+    FunctionHandler<A1, R1, Terminating> & FunctionHandler<A2, R2, Terminating>
+    & FunctionHandler<A3, R3, Terminating> : TFunc extends {
         (...args: infer A1): infer R1;
         (...args: infer A2): infer R2;
     } ?
-    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> : TFunc extends {
+    FunctionHandler<A1, R1, Terminating> & FunctionHandler<A2, R2, Terminating> : TFunc extends {
         (...args: infer A1): infer R1;
     } ?
-    FunctionSubstitute<A1, R1> : never;
+    FunctionHandler<A1, R1, Terminating> : never;
 
 type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type FunctionHandler<TArguments extends any[], TReturnType, Terminating> =
+    Equals<TArguments, unknown[]> extends true ?
+    {} : Terminating extends true ?
+    TerminatingFunction<TArguments> :
+    FunctionSubstitute<TArguments, TReturnType>
 
 export type FunctionSubstitute<TArguments extends any[], TReturnType> =
-    Equals<TArguments, unknown[]> extends true ?
-    {} :
     ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
     ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
@@ -67,10 +70,13 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
     mimick(instance: T): void;
 }
 
+type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments) => void)
+
 type TerminatingObject<T> = {
     [P in keyof T]:
-    T[P] extends (...args: infer F) => any ? ((...args: F) => void) & ((arg: AllArguments) => void) :
-    T[P] extends () => any ? () => void :
+    T[P] extends (...args: infer F) => any ?
+    F extends [] ? () => void :
+    FunctionSubstituteWithOverrides<T[P], true> :
     T[P];
 }
 
@@ -78,7 +84,7 @@ type ObjectSubstituteTransformation<T extends Object> = {
     [P in keyof T]:
     T[P] extends (...args: infer F) => infer R ?
     F extends [] ? NoArgumentFunctionSubstitute<R> :
-    FunctionSubstituteWithOverloads<T[P]> :
+    FunctionSubstituteWithOverrides<T[P]> :
     PropertySubstitute<T[P]>;
 }
 
