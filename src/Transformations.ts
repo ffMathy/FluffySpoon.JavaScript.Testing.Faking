@@ -1,6 +1,6 @@
 import { AllArguments } from "./Arguments";
 
-type FunctionSubstituteWithOverrides<TFunc, Terminating = false> =
+type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
     TFunc extends {
         (...args: infer A1): infer R1;
         (...args: infer A2): infer R2;
@@ -76,7 +76,7 @@ type TerminatingObject<T> = {
     [P in keyof T]:
     T[P] extends (...args: infer F) => any ?
     F extends [] ? () => void :
-    FunctionSubstituteWithOverrides<T[P], true> :
+    FunctionSubstituteWithOverloads<T[P], true> :
     T[P];
 }
 
@@ -84,7 +84,7 @@ type ObjectSubstituteTransformation<T extends Object> = {
     [P in keyof T]:
     T[P] extends (...args: infer F) => infer R ?
     F extends [] ? NoArgumentFunctionSubstitute<R> :
-    FunctionSubstituteWithOverrides<T[P]> :
+    FunctionSubstituteWithOverloads<T[P]> :
     PropertySubstitute<T[P]>;
 }
 
