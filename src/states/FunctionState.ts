@@ -134,11 +134,12 @@ export class FunctionState implements ContextState {
             || property === SubstituteMethods.resolves
             || property === SubstituteMethods.rejects
         ) {
-            return (...returns: any[]) => {
+            return (...returnValues: any[]) => {
                 if (!this._lastArgs) {
-                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/')
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded for this return :/');
                 }
                 const returnMock: Partial<ReturnMock> = { returnIndex: 0, args: this._lastArgs };
+                const returns = returnValues.length === 0 ? [void 0] : returnValues
                 switch (property) {
                     case SubstituteMethods.returns:
                         returnMock.returnValues = returns;
@@ -149,6 +150,10 @@ export class FunctionState implements ContextState {
                     case SubstituteMethods.rejects:
                         returnMock.returnValues = returns.map(value => Promise.reject(value));
                         break;
+                    default:
+                        throw SubstituteException.generic(
+                            `Expected one of the following methods: "${SubstituteMethods.returns}", "${SubstituteMethods.resolves}" or "${SubstituteMethods.rejects}"`
+                        );
                 }
                 this.returns.push(<ReturnMock>returnMock);
                 this._calls.pop()
