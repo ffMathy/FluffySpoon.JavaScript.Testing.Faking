@@ -1,11 +1,46 @@
 import { AllArguments } from "./Arguments";
 
-export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
+type FunctionSubstituteWithOverloads<TFunc> =
+    TFunc extends {
+        (...args: infer A1): infer R1;
+        (...args: infer A2): infer R2;
+        (...args: infer A3): infer R3;
+        (...args: infer A4): infer R4;
+        (...args: infer A5): infer R5;
+    } ?
+    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> &
+    FunctionSubstitute<A3, R3> & FunctionSubstitute<A4, R4>
+    & FunctionSubstitute<A5, R5> : TFunc extends {
+        (...args: infer A1): infer R1;
+        (...args: infer A2): infer R2;
+        (...args: infer A3): infer R3;
+        (...args: infer A4): infer R4;
+    } ?
+    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> &
+    FunctionSubstitute<A3, R3> & FunctionSubstitute<A4, R4> : TFunc extends {
+        (...args: infer A1): infer R1;
+        (...args: infer A2): infer R2;
+        (...args: infer A3): infer R3;
+    } ?
+    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2>
+    & FunctionSubstitute<A3, R3> : TFunc extends {
+        (...args: infer A1): infer R1;
+        (...args: infer A2): infer R2;
+    } ?
+    FunctionSubstitute<A1, R1> & FunctionSubstitute<A2, R2> : TFunc extends {
+        (...args: infer A1): infer R1;
+    } ?
+    FunctionSubstitute<A1, R1> : never;
+
+type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
 
 export type FunctionSubstitute<TArguments extends any[], TReturnType> =
+    Equals<TArguments, unknown[]> extends true ?
+    {} :
     ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
     ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
+export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
 export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
 
 type MockObjectPromise<TReturnType> = TReturnType extends Promise<infer U> ? {
@@ -41,8 +76,9 @@ type TerminatingObject<T> = {
 
 type ObjectSubstituteTransformation<T extends Object> = {
     [P in keyof T]:
-    T[P] extends (...args: infer F) => infer R ? FunctionSubstitute<F, R> :
-    T[P] extends () => infer R ? NoArgumentFunctionSubstitute<R> :
+    T[P] extends (...args: infer F) => infer R ?
+    F extends [] ? NoArgumentFunctionSubstitute<R> :
+    FunctionSubstituteWithOverloads<T[P]> :
     PropertySubstitute<T[P]>;
 }
 
