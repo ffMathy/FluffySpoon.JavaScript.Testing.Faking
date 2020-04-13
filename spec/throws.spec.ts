@@ -17,13 +17,6 @@ test('throws on a method with arguments', t => {
   t.throws(() => calculator.divide(1, 0), { instanceOf: Error, message: 'Cannot divide by 0' })
 })
 
-test('rejects on a method', async t => {
-  const calculator = Substitute.for<Calculator>()
-  calculator.heavyOperation().rejects(new Error('Error'))
-
-  await t.throwsAsync(calculator.heavyOperation, { instanceOf: Error, message: 'Error' })
-})
-
 test('throws on a property being called', t => {
   const calculator = Substitute.for<Calculator>()
   calculator.mode.throws(new Error('Property not set'))
