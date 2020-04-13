@@ -1,5 +1,5 @@
 import test from 'ava';
-import { Substitute, Arg } from '../src/index';
+import { Substitute, Arg } from '../src';
 import { SubstituteException } from '../src/SubstituteBase';
 
 interface Calculator {

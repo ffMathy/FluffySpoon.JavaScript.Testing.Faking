@@ -1,6 +1,7 @@
 import test from 'ava';
+
+import { Arg } from '../src';
 import { areArgumentArraysEqual } from '../src/Utilities';
-import { Arg } from '../src/index';
 
 const testObject = { "foo": "bar" };
 const testArray = ["a", 1, true];

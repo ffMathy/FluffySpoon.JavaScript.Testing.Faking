@@ -1,10 +1,10 @@
-import test from 'ava'
+import test from 'ava';
 
-import { Substitute, Arg } from '../src/index'
+import { Substitute, Arg } from '../src';
 
 interface Calculator {
   getMemory(): Promise<number>;
-  heavyOperation(...args: number[]): Promise<number>
+  heavyOperation(...args: number[]): Promise<number>;
   model: Promise<string>;
 }
 

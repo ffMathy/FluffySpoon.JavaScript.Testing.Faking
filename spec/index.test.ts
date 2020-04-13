@@ -1,6 +1,6 @@
 import test from 'ava';
 
-import { Substitute, Arg } from '../src/index';
+import { Substitute, Arg } from '../src';
 import { OmitProxyMethods, ObjectSubstitute } from '../src/Transformations';
 
 class Dummy {
