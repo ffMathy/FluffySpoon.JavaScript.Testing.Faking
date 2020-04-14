@@ -1,4 +1,4 @@
-![Open Collective backers and sponsors](https://img.shields.io/opencollective/all/substitute-js)
+<a href="https://github.com/mochajs/mocha#backers"><img src="https://opencollective.com/substitute-js/backers/badge.svg" alt="OpenCollective"></a> <a href="https://github.com/mochajs/mocha#sponsors"><img src="https://opencollective.com/substitute-js/sponsors/badge.svg" alt="OpenCollective"></a>
 
 [`@fluffy-spoon/substitute`](https://www.npmjs.com/package/@fluffy-spoon/substitute) is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
