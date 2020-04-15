@@ -5,11 +5,13 @@ import { areArgumentArraysEqual } from '../src/Utilities';
 
 const testObject = { "foo": "bar" };
 const testArray = ["a", 1, true];
+
+// #90: Infinite recursion in deepEqual https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/blob/master/spec/issues/90.test.ts
 const parent = {} as any;
 parent.child = parent;
-
 const root = {} as any;
 root.path = { to: { nested: root } };
+
 const testFunc = () => { };
 
 //#region areArgumentArraysEqual

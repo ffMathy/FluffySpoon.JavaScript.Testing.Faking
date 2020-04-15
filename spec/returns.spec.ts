@@ -63,6 +63,7 @@ test('returns a primitive value for method with specific and conditional argumen
 });
 
 test('returns a primitive value for method with Arg.all', t => {
+  // #25: call verification does not work when using Arg.all() to set up return values https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/25
   const calculator = Substitute.for<Calculator>();
   calculator.add(Arg.all()).returns(42);
 
@@ -72,6 +73,7 @@ test('returns a primitive value for method with Arg.all', t => {
 });
 
 test('returns a primitive value for method with one optional argument', t => {
+  // #24: Mocked method arguments not allowed when verifying method was called https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/24
   const calculator = Substitute.for<Calculator>();
   calculator.viewResult().returns(0);
   calculator.viewResult(3).returns(123);
@@ -141,6 +143,7 @@ test('returns another substituted instance for method with arguments', t => {
 });
 
 test('returns a primitive value on a property', t => {
+  // #15: can call properties twice https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/15
   const calculator = Substitute.for<Calculator>();
   const noResult = calculator.isEnabled;
 
@@ -154,7 +157,6 @@ test('returns a primitive value on a property', t => {
 test('returns a promise on a property', async t => {
   const calculator = Substitute.for<Calculator>();
   calculator.model.returns(Promise.resolve('Casio FX-82'));
-
 
   t.is(await calculator.model, 'Casio FX-82');
 });

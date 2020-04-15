@@ -115,7 +115,18 @@ test('getting a property twice with mock correctly asserts the call count', t =>
   t.throws(() => calculator.received().isEnabled, { instanceOf: SubstituteException });
 });
 
+test('calling a method with Arg correctly asserts the call count with Arg', t => {
+  // #18: receive with arg https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/18
+  const calculator = Substitute.for<Calculator>();
+  calculator.add(Arg.all());
+
+  calculator.received(1).add(Arg.all());
+  calculator.received().add(Arg.all());
+  t.throws(() => calculator.received(0).add(1, 1), { instanceOf: SubstituteException });
+});
+
 test('calling a method does not interfere with other properties or methods call counts', t => {
+  // #51: All functions share the same state https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/51
   const calculator = Substitute.for<Calculator>();
   calculator.add(1, 1);
 
@@ -123,5 +134,6 @@ test('calling a method does not interfere with other properties or methods call 
   calculator.received(0).multiply(Arg.all());
   calculator.received(0).isEnabled;
 
+  t.throws(() => calculator.received().multiply(1, 1), { instanceOf: SubstituteException });
   t.throws(() => calculator.received().multiply(Arg.all()), { instanceOf: SubstituteException });
 });
