@@ -43,7 +43,7 @@ enum SubstituteExceptionTypes {
 
 export class SubstituteException extends Error {
   type: SubstituteExceptionTypes
-  private constructor(msg: string, exceptionType?: SubstituteExceptionTypes) {
+  constructor(msg: string, exceptionType?: SubstituteExceptionTypes) {
     super(msg);
     Error.captureStackTrace(this, SubstituteException);
     this.name = new.target.name;

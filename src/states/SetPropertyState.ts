@@ -1,5 +1,5 @@
 import { ContextState, PropertyKey } from "./ContextState";
-import { Context } from "src/Context";
+import { Context } from "../Context";
 import { areArgumentsEqual, Type } from "../Utilities";
 import { SubstituteException } from "../SubstituteBase";
 

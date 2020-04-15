@@ -3,7 +3,7 @@ export class Argument<T> {
     constructor(
         private description: string,
         private matchingFunction: (arg: T) => boolean
-    ){}
+    ) { }
 
     matches(arg: T) {
         return this.matchingFunction(arg);
@@ -37,18 +37,15 @@ export class Arg {
     static any<T extends 'boolean'>(type: T): Argument<boolean> & boolean
     static any<T extends 'array'>(type: T): Argument<any[]> & any[]
     static any<T extends 'function'>(type: T): Argument<Function> & Function
-    static any<T extends 'string'|'number'|'boolean'|'symbol'|'undefined'|'object'|'function'|'array'>(type: T): Argument<any> & any
+    static any<T extends 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array'>(type: T): Argument<any> & any
     static any(type?: string): Argument<any> & any {
         const description = !type ? '{any arg}' : '{type ' + type + '}';
         return new Argument<any>(description, x => {
-            if(!type)
+            if (!type)
                 return true;
 
-            if(typeof x === 'undefined')
-                return true;
-
-            if(type === 'array')
-                return x && Array.isArray(x);
+            if (type === 'array')
+                return Array.isArray(x);
 
             return typeof x === type;
         });
@@ -59,10 +56,10 @@ export class Arg {
     }
 
     private static toStringify(obj: any) {
-        if(typeof obj.inspect === 'function')
+        if (typeof obj.inspect === 'function')
             return obj.inspect();
 
-        if(typeof obj.toString === 'function')
+        if (typeof obj.toString === 'function')
             return obj.toString();
 
         return obj;

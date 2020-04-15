@@ -1,5 +1,5 @@
 import { ContextState, PropertyKey } from "./ContextState";
-import { Context } from "src/Context";
+import { Context } from "../Context";
 import { SubstituteMethods, areArgumentArraysEqual, Call, Type } from "../Utilities";
 import { GetPropertyState } from "./GetPropertyState";
 import { SubstituteException } from "../SubstituteBase";
@@ -46,7 +46,7 @@ export class FunctionState implements ContextState {
     }
 
     private getCallCount(args: Call): number {
-        return this._calls.reduce((count, cargs) => areArgumentArraysEqual(cargs, args) ? count + 1 : count, 0)
+        return this._calls.filter(callArgs => areArgumentArraysEqual(callArgs, args)).length;
     }
 
     apply(context: Context, args: any[]) {

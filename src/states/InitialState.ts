@@ -1,5 +1,5 @@
 import { ContextState, PropertyKey } from "./ContextState";
-import { Context } from "src/Context";
+import { Context } from "../Context";
 import { GetPropertyState } from "./GetPropertyState";
 import { SetPropertyState } from "./SetPropertyState";
 import { SubstituteMethods, stringifyArguments, stringifyCalls, Call, Type, Get } from "../Utilities";
