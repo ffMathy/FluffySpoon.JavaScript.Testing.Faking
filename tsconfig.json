@@ -10,6 +10,6 @@
         "outDir": "./dist",
         "strict": true,
         "strictNullChecks": false,
-        "target": "ES2016"
+        "target": "ES6"
     }
 }
