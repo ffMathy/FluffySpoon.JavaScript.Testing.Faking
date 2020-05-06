@@ -1,7 +1,22 @@
 {
     "name": "@fluffy-spoon/substitute",
     "version": "1.0.0",
-    "description": "",
+    "description": "TypeScript port of NSubstitute, which aims to provide a much more fluent mocking opportunity for strong-typed languages",
+    "license": "MIT",
+    "funding": {
+        "type": "opencollective",
+        "url": "https://opencollective.com/substitute-js#section-contribute"
+    },
+    "author": {
+        "name": "Mathias Lykkegaard Lorenzen",
+        "url": "https://github.com/ffMathy"
+    },
+    "contributors": [
+        {
+            "name": "Enrique Pöhlmann",
+            "url": "https://github.com/notanengineercom"
+        }
+    ],
     "main": "dist/src/index.js",
     "typings": "./dist/src/index.d.ts",
     "files": [
@@ -12,8 +27,7 @@
         "test": "tsc && ava",
         "build": "tsc"
     },
-    "author": "",
-    "license": "ISC",
+    "dependencies": {},
     "devDependencies": {
         "@ava/typescript": "^1.1.0",
         "ava": "^3.7.0",
@@ -31,6 +45,5 @@
         "cache": false,
         "failFast": true,
         "failWithoutAssertions": true
-    },
-    "dependencies": {}
+    }
 }
