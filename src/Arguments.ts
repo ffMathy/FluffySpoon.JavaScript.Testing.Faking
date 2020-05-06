@@ -18,7 +18,7 @@ export class Argument<T> {
     }
 }
 
-export class AllArguments extends Argument<any> {
+export class AllArguments<T extends any = any> extends Argument<T> {
     constructor() {
         super('{all}', () => true);
     }
@@ -27,8 +27,8 @@ export class AllArguments extends Argument<any> {
 export class Arg {
     private static _all: AllArguments;
 
-    static all() {
-        return this._all = (this._all || new AllArguments());
+    static all<T>() {
+        return this._all = new AllArguments<T>();
     }
 
     static any(): Argument<any> & any
@@ -51,7 +51,7 @@ export class Arg {
         });
     }
 
-    static is<T>(predicate: (input: any) => boolean): Argument<T> & T {
+    static is<T>(predicate: (input: T) => boolean): Argument<T> & T {
         return new Argument<T>('{predicate ' + this.toStringify(predicate) + '}', predicate) as Argument<T> & T;
     }
 
