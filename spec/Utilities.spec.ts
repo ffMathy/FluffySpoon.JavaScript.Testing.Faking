@@ -77,6 +77,8 @@ test('areArgumentArraysEqual should return valid result using Arg.any()', t => {
     t.true(areArgumentArraysEqual([Arg.any('string')], ['foo']));
     t.true(areArgumentArraysEqual([Arg.any('number')], [1]));
     t.true(areArgumentArraysEqual([Arg.any('boolean')], [true]));
+    t.true(areArgumentArraysEqual([Arg.any('symbol')], [Symbol()]));
+    t.true(areArgumentArraysEqual([Arg.any('undefined')], [undefined]));
     t.true(areArgumentArraysEqual([Arg.any('object')], [testObject]));
     t.true(areArgumentArraysEqual([Arg.any('array')], [testArray]));
     t.true(areArgumentArraysEqual([Arg.any('function')], [testFunc]));
