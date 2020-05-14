@@ -103,14 +103,14 @@ calculator.received().add(1, Arg.is(x => x < 0));
 ```typescript
 import { Arg } from '@fluffy-spoon/substitute';
 
-const equalToZero = x => x === 0;
+const equalToZero = (x: number) => x === 0;
 
 // first argument will match any number
 // second argument will match a number that is not '0'
 calculator.divide(Arg.any('number'), Arg.is.not(equalToZero)).returns(10);
 console.log(calculator.divide(100, 10)); // prints 10
 
-const argIsNotZero = Arg.is.not<number>(equalToZero);
+const argIsNotZero = Arg.is.not(equalToZero);
 calculator.received(1).divide(argIsNotZero, argIsNotZero);
 ```
 
