@@ -59,7 +59,7 @@ test('areArgumentArraysEqual should return valid result using Arg.all()', t => {
     t.true(areArgumentArraysEqual([Arg.all()], [parent, root]));
 })
 
-test('areArgumentArraysEqual should return valid result using Arg.any()', t => {
+test('areArgumentArraysEqual should return valid result using Arg', t => {
     t.true(areArgumentArraysEqual([Arg.any()], ['hi']));
     t.true(areArgumentArraysEqual([Arg.any()], [1]));
     t.true(areArgumentArraysEqual([Arg.any()], [0]));
@@ -82,6 +82,8 @@ test('areArgumentArraysEqual should return valid result using Arg.any()', t => {
     t.true(areArgumentArraysEqual([Arg.any('object')], [testObject]));
     t.true(areArgumentArraysEqual([Arg.any('array')], [testArray]));
     t.true(areArgumentArraysEqual([Arg.any('function')], [testFunc]));
+    t.true(areArgumentArraysEqual([Arg.any('object')], [parent]));
+    t.true(areArgumentArraysEqual([Arg.any('object')], [root]));
 
     t.false(areArgumentArraysEqual([Arg.any('string')], [1]));
     t.false(areArgumentArraysEqual([Arg.any('number')], ['string']));
@@ -89,8 +91,6 @@ test('areArgumentArraysEqual should return valid result using Arg.any()', t => {
     t.false(areArgumentArraysEqual([Arg.any('object')], ['foo']));
     t.false(areArgumentArraysEqual([Arg.any('array')], ['bar']));
     t.false(areArgumentArraysEqual([Arg.any('function')], ['foo']));
-    t.true(areArgumentArraysEqual([Arg.any('object')], [parent]));
-    t.true(areArgumentArraysEqual([Arg.any('object')], [root]));
 })
 
 test('areArgumentArraysEqual should return valid result using Arg.is()', t => {
