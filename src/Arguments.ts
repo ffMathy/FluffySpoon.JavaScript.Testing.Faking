@@ -24,28 +24,27 @@ class BaseArgument<T> {
 }
 
 export class Argument<T> extends BaseArgument<T> {
-    private readonly _type = 'SingleArgument'
+    private readonly _type = 'SingleArgument';
     constructor(description: string, matchingFunction: PredicateFunction<T>, options?: ArgumentOptions) {
-        super(description, matchingFunction, options)
+        super(description, matchingFunction, options);
     }
     get type(): 'SingleArgument' {
-        return this._type
+        return this._type;
     }
 }
 
-export class AllArguments<T extends any = any> extends BaseArgument<T> {
-    private readonly _type = 'AllArguments'
+export class AllArguments<T extends any[]> extends BaseArgument<T> {
+    private readonly _type = 'AllArguments';
     constructor() {
         super('{all}', () => true, {});
     }
     get type(): 'AllArguments' {
-        return this._type
+        return this._type;
     }
 }
 
-type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
-
 export namespace Arg {
+    type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
     type ReturnArg<T> = Argument<T> & T;
     type Inversable<T> = T & { not: T }
     const factory = (factoryF: Function) => <T>(...args: any[]): T => factoryF(...args)
@@ -59,8 +58,7 @@ export namespace Arg {
         return obj;
     }
 
-
-    export const all = <T>(): AllArguments<T> => new AllArguments<T>();
+    export const all = <T extends any[]>(): AllArguments<T> => new AllArguments<T>();
 
     type Is = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>) => ReturnArg<ExtractFirstArg<T>>
     const isFunction = <T extends PredicateFunction<T>>(predicate: T, options?: ArgumentOptions) => new Argument(
@@ -83,7 +81,7 @@ export namespace Arg {
         ReturnArg<any[]> : any;
 
     type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any';
-    type Any = <T extends AnyType>(type?: T) => MapAnyReturn<T>;
+    type Any = <T extends AnyType = 'any'>(type?: T) => MapAnyReturn<T>;
 
     const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
         const description = !type ? '{any arg}' : `{type ${type}}`;

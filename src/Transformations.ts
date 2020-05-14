@@ -90,6 +90,6 @@ type ObjectSubstituteTransformation<T extends Object> = {
 
 type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 
+// @ts-expect-error
 export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive'>;
-
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;
