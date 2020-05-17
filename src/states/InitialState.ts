@@ -58,11 +58,11 @@ export class InitialState implements ContextState {
         if (this.doesCallCountMatchExpectations(expectedCount, receivedCount))
             return;
 
-        const callCount = { expected: expectedCount, received: receivedCount }
-        const property = { type, value: propertyValue }
-        const calls = { expectedArguments: args, received: receivedCalls }
+        const callCount = { expected: expectedCount, received: receivedCount };
+        const property = { type, value: propertyValue };
+        const calls = { expectedArguments: args, received: receivedCalls };
 
-        throw SubstituteException.forCallCountMissMatch(callCount, property, calls)
+        throw SubstituteException.forCallCountMissMatch(callCount, property, calls);
     }
 
     private doesCallCountMatchExpectations(expectedCount: number | undefined | null, actualCount: number) {
@@ -101,7 +101,7 @@ export class InitialState implements ContextState {
                 return this._areProxiesDisabled;
             case SubstituteMethods.received:
                 return (count?: number) => {
-                    this._expectedCount = count === void 0 ? null : count;
+                    this._expectedCount = count ?? null;
                     return context.receivedProxy;
                 };
             case SubstituteMethods.didNotReceive:
