@@ -1,121 +1,131 @@
-import { ContextState, PropertyKey } from "./ContextState";
-import { Context } from "../Context";
-import { FunctionState } from "./FunctionState";
-import { Type, Nothing, SubstituteMethods } from "../Utilities";
-import { SubstituteException } from "../SubstituteBase";
+import { ContextState, PropertyKey } from './ContextState';
+import { Context } from '../Context';
+import { PropertyType, SubstituteMethods, Call, areArgumentArraysEqual } from '../Utilities';
+import { SubstituteException } from '../SubstituteBase';
+
+interface SubstituteMock {
+    arguments: Call
+    mockValues: any[]
+    substituteType: SubstituteMethods
+}
 
 export class GetPropertyState implements ContextState {
-    private returns: any[] | Nothing;
-    private mimicks: Function | Nothing;
-    private throws: any;
+    private _mocks: SubstituteMock[];
+    private _recordedCalls: Call[];
+    private _isFunctionState: boolean;
+    private _lastArgs?: Call;
 
-    private _callCount: number;
-    private _functionState?: FunctionState;
-
-    private get isFunction(): boolean {
-        return !!this._functionState
-    }
-
-    public get property() {
+    public get property(): PropertyKey {
         return this._property;
     }
 
-    public get callCount() {
-        return this._callCount;
+    get isFunctionState(): boolean {
+        return this._isFunctionState;
     }
 
-    public get functionState(): FunctionState | undefined {
-        return this._functionState
+    public get callCount(): number {
+        return this._recordedCalls.length;
     }
 
     constructor(private _property: PropertyKey) {
-        this.returns = Nothing;
-        this.mimicks = Nothing;
-        this.throws = Nothing;
-        this._callCount = 0;
+        this._mocks = [];
+        this._recordedCalls = [];
+        this._isFunctionState = false;
     }
 
-    apply(context: Context, args: any[]) {
-        this._callCount = 0;
+    private getCallCount(args: Call): number {
+        const callFilter = (recordedCall: Call): boolean => areArgumentArraysEqual(recordedCall, args);
+        return this._recordedCalls.filter(callFilter).length;
+    }
 
-        if (this.functionState) {
-            context.state = this.functionState
-            return this.functionState.apply(context, args);
+    private applySubstituteMethodLogic(substituteMethod: SubstituteMethods, mockValue: any, args?: Call) {
+        switch (substituteMethod) {
+            case SubstituteMethods.resolves:
+                return Promise.resolve(mockValue);
+            case SubstituteMethods.rejects:
+                return Promise.reject(mockValue);
+            case SubstituteMethods.returns:
+                return mockValue;
+            case SubstituteMethods.throws:
+                throw mockValue;
+            case SubstituteMethods.mimicks:
+                return mockValue.apply(mockValue, args);
+            default:
+                throw SubstituteException.generic(`Method ${substituteMethod} not implemented`)
         }
-
-        var functionState = new FunctionState(this);
-        context.state = functionState;
-        this._functionState = functionState
-
-        return context.apply(void 0, void 0, args);
     }
 
-    set(context: Context, property: PropertyKey, value: any) { }
-
-    get(context: Context, property: PropertyKey) {
+    private processProperty(context: Context, args: any[], propertyType: PropertyType) {
         const hasExpectations = context.initialState.hasExpectations;
-
-        if (property === 'then')
-            return void 0;
-
-        if (this.isFunction)
-            return context.proxy;
-
-        if (property === SubstituteMethods.mimicks) {
-            return (input: Function) => {
-                this.mimicks = input;
-                this._callCount--;
-
-                context.state = context.initialState;
-            }
-        }
-
-        if (property === SubstituteMethods.returns) {
-            if (this.returns !== Nothing)
-                throw SubstituteException.generic('The return value for the property ' + this._property.toString() + ' has already been set to ' + this.returns);
-
-            return (...returns: any[]) => {
-                this.returns = returns;
-                this._callCount--;
-
-                context.state = context.initialState;
-            };
-        }
-
-        if (property === SubstituteMethods.throws) {
-            return (callback: Function) => {
-                this.throws = callback;
-                this._callCount--;
-
-                context.state = context.initialState;
-            }
-        }
-
         if (!hasExpectations) {
-            this._callCount++;
-
-            if (this.mimicks !== Nothing)
-                return this.mimicks.apply(this.mimicks);
-
-            if (this.throws !== Nothing)
-                throw this.throws
-
-            if (this.returns !== Nothing) {
-                var returnsArray = this.returns as any[];
-                if (returnsArray.length === 1)
-                    return returnsArray[0];
-
-                return returnsArray[this._callCount - 1];
+            this._recordedCalls.push(args);
+            const foundSubstitute = this._mocks.find(mock => areArgumentArraysEqual(mock.arguments, args));
+            if (foundSubstitute !== void 0) {
+                const mockValue = foundSubstitute.mockValues.length > 1 ?
+                    foundSubstitute.mockValues.shift() :
+                    foundSubstitute.mockValues[0];
+                return this.applySubstituteMethodLogic(foundSubstitute.substituteType, mockValue, args);
             }
         }
 
         context.initialState.assertCallCountMatchesExpectations(
-            [[]],  // I'm not sure what this was supposed to mean
-            this.callCount,
-            Type.property,
+            this._recordedCalls,
+            this.getCallCount(args),
+            propertyType,
             this.property,
-            []);
+            args
+        );
 
         return context.proxy;
+    }
+
+    apply(context: Context, args: any[]) {
+        if (!this._isFunctionState) {
+            this._isFunctionState = true;
+            this._recordedCalls = [];
+        }
+        this._lastArgs = args;
+        return this.processProperty(context, args, PropertyType.method);
+    }
+
+    set(context: Context, property: PropertyKey, value: any) { }
+
+    private isSubstituteMethod(property: PropertyKey): property is SubstituteMethods {
+        return property === SubstituteMethods.returns ||
+            property === SubstituteMethods.mimicks ||
+            property === SubstituteMethods.throws ||
+            property === SubstituteMethods.resolves ||
+            property === SubstituteMethods.rejects;
+    }
+
+    private sanitizeSubstituteMockInputs(mockInputs: Call): Call {
+        if (mockInputs.length === 0) return [undefined];
+        return mockInputs.length > 1 ?
+            [...mockInputs, undefined] :
+            [...mockInputs];
+    }
+
+    get(context: Context, property: PropertyKey) {
+        if (property === 'then') return void 0;
+
+        if (this.isSubstituteMethod(property)) {
+            return (...inputs: Call) => {
+                const mockInputs = this.sanitizeSubstituteMockInputs(inputs);
+                const args = this._isFunctionState ? this._lastArgs : [];
+                if (args === void 0)
+                    throw SubstituteException.generic('Eh, there\'s a bug, no args recorded :/');
+
+                this._mocks.push({
+                    arguments: args,
+                    mockValues: mockInputs,
+                    substituteType: property
+                });
+
+                this._recordedCalls.pop();
+                context.state = context.initialState;
+            }
+        }
+        if (this._isFunctionState) return context.proxy;
+        return this.processProperty(context, [], PropertyType.property);
     }
 }

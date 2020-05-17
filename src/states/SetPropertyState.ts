@@ -1,7 +1,7 @@
-import { ContextState, PropertyKey } from "./ContextState";
-import { Context } from "../Context";
-import { areArgumentsEqual, Type } from "../Utilities";
-import { SubstituteException } from "../SubstituteBase";
+import { ContextState, PropertyKey } from './ContextState';
+import { Context } from '../Context';
+import { areArgumentsEqual, PropertyType } from '../Utilities';
+import { SubstituteException } from '../SubstituteBase';
 
 export class SetPropertyState implements ContextState {
     private _callCount: number;
@@ -21,12 +21,11 @@ export class SetPropertyState implements ContextState {
 
     constructor(private _property: PropertyKey, ...args: any[]) {
         this._arguments = args;
-
         this._callCount = 0;
     }
 
     apply(context: Context): undefined {
-        throw SubstituteException.generic('Calling apply of setPropertyState is not normal behaviour, something gone wrong')
+        throw SubstituteException.generic('Calling apply of setPropertyState is not normal behaviour, something went wrong');
     }
 
     set(context: Context, property: PropertyKey, value: any) {
@@ -41,11 +40,12 @@ export class SetPropertyState implements ContextState {
         }
 
         context.initialState.assertCallCountMatchesExpectations(
-            [[]], // not sure what this was supposed to do
+            [[]],
             callCount,
-            Type.property,
+            PropertyType.property,
             this.property,
-            this.arguments);
+            this.arguments
+        );
 
         if (!hasExpectations) {
             this._callCount++;
@@ -53,6 +53,6 @@ export class SetPropertyState implements ContextState {
     }
 
     get(context: Context, property: PropertyKey): undefined {
-        throw SubstituteException.generic('Calling get of setPropertyState is not normal behaviour, something gone wrong')
+        throw SubstituteException.generic('Calling get of setPropertyState is not normal behaviour, something went wrong');
     }
 }

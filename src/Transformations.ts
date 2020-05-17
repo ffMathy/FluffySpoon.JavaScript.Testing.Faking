@@ -46,22 +46,24 @@ export type FunctionSubstitute<TArguments extends any[], TReturnType> =
 export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
 export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
 
+type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType;
+
 type MockObjectPromise<TReturnType> = TReturnType extends Promise<infer U> ? {
-    resolves: (...args: U[]) => void;
-    rejects: (exception: any) => void;
+    resolves: OneArgumentRequiredFunction<U, void>;
+    rejects: OneArgumentRequiredFunction<any, void>;
 } : {}
 
 type BaseMockObjectMixin<TReturnType> = MockObjectPromise<TReturnType> & {
-    returns: (...args: TReturnType[]) => void;
-    throws: (exception: any) => never;
+    returns: OneArgumentRequiredFunction<TReturnType, void>;
+    throws: OneArgumentRequiredFunction<any, never>;
 }
 
 type NoArgumentMockObjectMixin<TReturnType> = BaseMockObjectMixin<TReturnType> & {
-    mimicks: (func: () => TReturnType) => void;
+    mimicks: OneArgumentRequiredFunction<() => TReturnType, void>;
 }
 
 type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixin<TReturnType> & {
-    mimicks: (func: (...args: TArguments) => TReturnType) => void;
+    mimicks: OneArgumentRequiredFunction<(...args: TArguments) => TReturnType, void>;
 }
 
 export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
@@ -88,8 +90,7 @@ type ObjectSubstituteTransformation<T extends Object> = {
     PropertySubstitute<T[P]>;
 }
 
-type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
+type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;
 
-// @ts-expect-error
 export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive'>;
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;

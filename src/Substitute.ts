@@ -1,6 +1,5 @@
-import { Context } from "./Context";
-import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from "./Transformations";
-import { Get } from './Utilities'
+import { Context } from './Context';
+import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from './Transformations';
 
 export const HandlerKey = Symbol();
 export const AreProxiesDisabledKey = Symbol();
@@ -18,8 +17,8 @@ export class Substitute {
         const thisExposedProxy = thisProxy[HandlerKey]; // Context
 
         const disableProxy = <K extends Function>(f: K): K => {
-            return function() {
-                thisProxy[AreProxiesDisabledKey] = true; // for what reason need to do this? 
+            return function () {
+                thisProxy[AreProxiesDisabledKey] = true;
                 const returnValue = f.call(thisExposedProxy, ...arguments);
                 thisProxy[AreProxiesDisabledKey] = false;
                 return returnValue;
@@ -28,14 +27,14 @@ export class Substitute {
 
         return new Proxy(() => { }, {
             apply: function (_target, _this, args) {
-                return disableProxy(thisExposedProxy.apply)(...arguments)
+                return disableProxy(thisExposedProxy.getStateApply)(...arguments)
             },
             set: function (_target, property, value) {
-                return disableProxy(thisExposedProxy.set)(...arguments)
+                return disableProxy(thisExposedProxy.setStateSet)(...arguments)
             },
             get: function (_target, property) {
-                Get(thisExposedProxy._initialState, thisExposedProxy, property)
-                return disableProxy(thisExposedProxy.get)(...arguments)
+                thisExposedProxy._initialState.handleGet(thisExposedProxy, property)
+                return disableProxy(thisExposedProxy.getStateGet)(...arguments)
             }
         }) as any;
     }

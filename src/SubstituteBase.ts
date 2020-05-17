@@ -1,5 +1,5 @@
 import { inspect } from 'util';
-import { Type, stringifyArguments, stringifyCalls, Call } from './Utilities';
+import { PropertyType, stringifyArguments, stringifyCalls, Call } from './Utilities';
 
 export class SubstituteJS {
   private _lastRegisteredSubstituteJSMethodOrProperty: string
@@ -52,7 +52,7 @@ export class SubstituteException extends Error {
 
   static forCallCountMissMatch(
     callCount: { expected: number | null, received: number },
-    property: { type: Type, value: PropertyKey },
+    property: { type: PropertyType, value: PropertyKey },
     calls: { expectedArguments: any[], received: Call[] }
   ) {
     const message = 'Expected ' + (callCount.expected === null ? '1 or more' : callCount.expected) +
