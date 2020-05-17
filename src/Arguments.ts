@@ -1,61 +1,54 @@
-export class Argument<T> {
-
+type PredicateFunction<T> = (arg: T) => boolean
+type ArgumentOptions = {
+    inverseMatch?: boolean
+}
+class BaseArgument<T> {
     constructor(
-        private description: string,
-        private matchingFunction: (arg: T) => boolean
+        private _description: string,
+        private _matchingFunction: PredicateFunction<T>,
+        private _options?: ArgumentOptions
     ) { }
 
     matches(arg: T) {
-        return this.matchingFunction(arg);
+        const inverseMatch = this._options?.inverseMatch ?? false
+        return inverseMatch ? !this._matchingFunction(arg) : this._matchingFunction(arg);
     }
 
     toString() {
-        return this.description;
+        return this._description;
     }
 
     [Symbol.for('nodejs.util.inspect.custom')]() {
-        return this.description;
+        return this._description;
     }
 }
 
-export class AllArguments extends Argument<any> {
+export class Argument<T> extends BaseArgument<T> {
+    private readonly _type = 'SingleArgument';
+    constructor(description: string, matchingFunction: PredicateFunction<T>, options?: ArgumentOptions) {
+        super(description, matchingFunction, options);
+    }
+    get type(): 'SingleArgument' {
+        return this._type;
+    }
+}
+
+export class AllArguments<T extends any[]> extends BaseArgument<T> {
+    private readonly _type = 'AllArguments';
     constructor() {
-        super('{all}', () => true);
+        super('{all}', () => true, {});
+    }
+    get type(): 'AllArguments' {
+        return this._type;
     }
 }
 
-export class Arg {
-    private static _all: AllArguments;
-
-    static all() {
-        return this._all = (this._all || new AllArguments());
-    }
-
-    static any(): Argument<any> & any
-    static any<T extends 'string'>(type: T): Argument<string> & string
-    static any<T extends 'number'>(type: T): Argument<number> & number
-    static any<T extends 'boolean'>(type: T): Argument<boolean> & boolean
-    static any<T extends 'array'>(type: T): Argument<any[]> & any[]
-    static any<T extends 'function'>(type: T): Argument<Function> & Function
-    static any<T extends 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array'>(type: T): Argument<any> & any
-    static any(type?: string): Argument<any> & any {
-        const description = !type ? '{any arg}' : '{type ' + type + '}';
-        return new Argument<any>(description, x => {
-            if (!type)
-                return true;
-
-            if (type === 'array')
-                return Array.isArray(x);
-
-            return typeof x === type;
-        });
-    }
-
-    static is<T>(predicate: (input: any) => boolean): Argument<T> & T {
-        return new Argument<T>('{predicate ' + this.toStringify(predicate) + '}', predicate) as Argument<T> & T;
-    }
-
-    private static toStringify(obj: any) {
+export namespace Arg {
+    type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
+    type ReturnArg<T> = Argument<T> & T;
+    type Inversable<T> = T & { not: T }
+    const factory = (factoryF: Function) => <T>(...args: any[]): T => factoryF(...args)
+    const toStringify = (obj: any) => {
         if (typeof obj.inspect === 'function')
             return obj.inspect();
 
@@ -64,4 +57,49 @@ export class Arg {
 
         return obj;
     }
+
+    export const all = <T extends any[]>(): AllArguments<T> => new AllArguments<T>();
+
+    type Is = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>) => ReturnArg<ExtractFirstArg<T>>
+    const isFunction = <T extends PredicateFunction<T>>(predicate: T, options?: ArgumentOptions) => new Argument(
+        `{predicate ${toStringify(predicate)}}`, predicate, options
+    );
+
+    const isArgFunction: Inversable<Is> = (predicate) => factory(isFunction)(predicate);
+    isArgFunction.not = (predicate) => factory(isFunction)(predicate, { inverseMatch: true });
+    export const is = isArgFunction
+
+    type MapAnyReturn<T> = T extends 'any' ?
+        ReturnArg<any> : T extends 'string' ?
+        ReturnArg<string> : T extends 'number' ?
+        ReturnArg<number> : T extends 'boolean' ?
+        ReturnArg<boolean> : T extends 'symbol' ?
+        ReturnArg<symbol> : T extends 'undefined' ?
+        ReturnArg<undefined> : T extends 'object' ?
+        ReturnArg<object> : T extends 'function' ?
+        ReturnArg<Function> : T extends 'array' ?
+        ReturnArg<any[]> : any;
+
+    type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any';
+    type Any = <T extends AnyType = 'any'>(type?: T) => MapAnyReturn<T>;
+
+    const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
+        const description = !type ? '{any arg}' : `{type ${type}}`;
+        const predicate = (x: any) => {
+            switch (type) {
+                case 'any':
+                    return true;
+                case 'array':
+                    return Array.isArray(x);
+                default:
+                    return typeof x === type;
+            }
+        }
+
+        return new Argument(description, predicate, options);
+    }
+
+    const anyArgFunction: Inversable<Any> = (type) => factory(anyFunction)(type);
+    anyArgFunction.not = (type) => factory(anyFunction)(type, { inverseMatch: true });
+    export const any = anyArgFunction;
 }

@@ -25,35 +25,35 @@ interface Calculator {
   isEnabled: boolean;
 }
 
-//Create:
-var calculator = Substitute.for<Calculator>();
+// Create:
+const calculator = Substitute.for<Calculator>();
  
-//Set a return value:
+// Set a return value:
 calculator.add(1, 2).returns(3);
  
-//Check received calls:
+// Check received calls:
 calculator.received().add(1, Arg.any());
 calculator.didNotReceive().add(2, 2);
 ```
 
 ## Creating a mock
-`var calculator = Substitute.for<Calculator>();`
+`const calculator = Substitute.for<Calculator>();`
 
 ## Setting return types
 See the example below. The same syntax also applies to properties and fields.
 
 ```typescript
-//single return type
+// single return type
 calculator.add(1, 2).returns(4);
-console.log(calculator.add(1, 2)); //prints 4
-console.log(calculator.add(1, 2)); //prints undefined
+console.log(calculator.add(1, 2)); // prints 4
+console.log(calculator.add(1, 2)); // prints undefined
 
-//multiple return types in sequence
+// multiple return types in sequence
 calculator.add(1, 2).returns(3, 7, 9);
-console.log(calculator.add(1, 2)); //prints 3
-console.log(calculator.add(1, 2)); //prints 7
-console.log(calculator.add(1, 2)); //prints 9
-console.log(calculator.add(1, 2)); //prints undefined
+console.log(calculator.add(1, 2)); // prints 3
+console.log(calculator.add(1, 2)); // prints 7
+console.log(calculator.add(1, 2)); // prints 9
+console.log(calculator.add(1, 2)); // prints undefined
 ```
 
 ## Working with promises
@@ -61,25 +61,25 @@ When working with promises you can also use `resolves()` and `rejects()` to retu
 
 ```typescript
 calculator.heavyOperation(1, 2).resolves(4); 
-//same as calculator.heavyOperation(1, 2).returns(Promise.resolve(4));
-console.log(await calculator.heavyOperation(1, 2)); //prints 4
+// same as calculator.heavyOperation(1, 2).returns(Promise.resolve(4));
+console.log(await calculator.heavyOperation(1, 2)); // prints 4
 ```
 
 ```typescript
 calculator.heavyOperation(1, 2).rejects(new Error());
-//same as calculator.heavyOperation(1, 2).returns(Promise.reject(new Error()));
-console.log(await calculator.heavyOperation(1, 2)); //throws Error
+// same as calculator.heavyOperation(1, 2).returns(Promise.reject(new Error()));
+console.log(await calculator.heavyOperation(1, 2)); // throws Error
 ```
 
 ## Verifying calls
 ```typescript
 calculator.enabled = true;
-var foo = calculator.add(1, 2);
+const foo = calculator.add(1, 2);
 
-//verify call to add(1, 2)
+// verify call to add(1, 2)
 calculator.received().add(1, 2);
 
-//verify property set to "true"
+// verify property set to "true"
 calculator.received().enabled = true;
 ```
 
@@ -90,21 +90,38 @@ There are several ways of matching arguments. The examples below also applies to
 ```typescript
 import { Arg } from '@fluffy-spoon/substitute';
 
-//ignoring first argument
+// ignoring first argument
 calculator.add(Arg.any(), 2).returns(10);
-console.log(calculator.add(1337, 3)); //prints undefined since second argument doesn't match
-console.log(calculator.add(1337, 2)); //prints 10 since second argument matches
+console.log(calculator.add(1337, 3)); // prints undefined since second argument doesn't match
+console.log(calculator.add(1337, 2)); // prints 10 since second argument matches
 
-//received call with first arg 1 and second arg less than 0
+// received call with first arg 1 and second arg less than 0
 calculator.received().add(1, Arg.is(x => x < 0));
 ```
 
+### Generic and inverse matchers
+```typescript
+import { Arg } from '@fluffy-spoon/substitute';
+
+const equalToZero = (x: number) => x === 0;
+
+// first argument will match any number
+// second argument will match a number that is not '0'
+calculator.divide(Arg.any('number'), Arg.is.not(equalToZero)).returns(10);
+console.log(calculator.divide(100, 10)); // prints 10
+
+const argIsNotZero = Arg.is.not(equalToZero);
+calculator.received(1).divide(argIsNotZero, argIsNotZero);
+```
+
+> #### Note: `Arg.is()` will automatically infer the type of the argument it's replacing 
+
 ### Ignoring all arguments
 ```typescript
-//ignoring all arguments
+// ignoring all arguments
 calculator.add(Arg.all()).returns(10);
-console.log(calculator.add(1, 3)); //prints 10
-console.log(calculator.add(5, 2)); //prints 10
+console.log(calculator.add(1, 3)); // prints 10
+console.log(calculator.add(5, 2)); // prints 10
 ```
 
 ### Match order
@@ -113,15 +130,15 @@ The order of argument matchers matters. The first matcher that matches will alwa
 ```typescript
 calculator.add(Arg.all()).returns(10);
 calculator.add(1, 3).returns(1337);
-console.log(calculator.add(1, 3)); //prints 10
-console.log(calculator.add(5, 2)); //prints 10
+console.log(calculator.add(1, 3)); // prints 10
+console.log(calculator.add(5, 2)); // prints 10
 ```
 
 ```typescript
 calculator.add(1, 3).returns(1337);
 calculator.add(Arg.all()).returns(10);
-console.log(calculator.add(1, 3)); //prints 1337
-console.log(calculator.add(5, 2)); //prints 10
+console.log(calculator.add(1, 3)); // prints 1337
+console.log(calculator.add(5, 2)); // prints 10
 ```
 
 ## Partial mocks
@@ -136,26 +153,26 @@ class RealCalculator implements Calculator {
   divide(a: number, b: number) => a / b;
 }
 
-var realCalculator = new RealCalculator();
-var fakeCalculator = Substitute.for<Calculator>();
+const realCalculator = new RealCalculator();
+const fakeCalculator = Substitute.for<Calculator>();
 
-//let the subtract method always use the real method
+// let the subtract method always use the real method
 fakeCalculator.subtract(Arg.all()).mimicks(realCalculator.subtract);
-console.log(fakeCalculator.subtract(20, 10)); //prints 10
-console.log(fakeCalculator.subtract(1, 2)); //prints -1
+console.log(fakeCalculator.subtract(20, 10)); // prints 10
+console.log(fakeCalculator.subtract(1, 2)); // prints -1
 
-//for the add method, we only use the real method when the first arg is less than 10
-//else, we always return 1337
+// for the add method, we only use the real method when the first arg is less than 10
+// else, we always return 1337
 fakeCalculator.add(Arg.is(x < 10), Arg.any()).mimicks(realCalculator.add);
 fakeCalculator.add(Arg.is(x >= 10), Arg.any()).returns(1337);
-console.log(fakeCalculator.add(5, 100)); //prints 105 via real method
-console.log(fakeCalculator.add(210, 7)); //prints 1337 via fake method
+console.log(fakeCalculator.add(5, 100)); // prints 105 via real method
+console.log(fakeCalculator.add(210, 7)); // prints 1337 via fake method
 
-//for the divide method, we only use the real method for explicit arguments
+// for the divide method, we only use the real method for explicit arguments
 fakeCalculator.divide(10, 2).mimicks(realCalculator.divide);
 fakeCalculator.divide(Arg.all()).returns(1338);
-console.log(fakeCalculator.divide(10, 5)); //prints 5
-console.log(fakeCalculator.divide(9, 5)); //prints 1338
+console.log(fakeCalculator.divide(10, 5)); // prints 5
+console.log(fakeCalculator.divide(9, 5)); // prints 1338
 ```
 
 ## Throwing exceptions
@@ -196,15 +213,15 @@ class Example {
   }
 }
 
-var fake = Substitute.for<Example>();
+const fake = Substitute.for<Example>();
 
-//BAD: this would have called substitute.js' "received" method.
-//fake.received(2);
+// BAD: this would have called substitute.js' "received" method.
+// fake.received(2);
 
-//GOOD: we now call the "received" method we have defined in the class above.
+// GOOD: we now call the "received" method we have defined in the class above.
 Substitute.disableFor(fake).received(1337);
 
-//now we can assert that we received a call to the "received" method.
+// now we can assert that we received a call to the "received" method.
 fake.received().received(1337);
 ```
 

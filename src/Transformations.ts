@@ -41,7 +41,7 @@ type FunctionHandler<TArguments extends any[], TReturnType, Terminating> =
 
 export type FunctionSubstitute<TArguments extends any[], TReturnType> =
     ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
-    ((allArguments: AllArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
+    ((allArguments: AllArguments<TArguments>) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
 export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
 export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
@@ -70,7 +70,7 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
     mimick(instance: T): void;
 }
 
-type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments) => void)
+type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
 
 type TerminatingObject<T> = {
     [P in keyof T]:
@@ -90,6 +90,6 @@ type ObjectSubstituteTransformation<T extends Object> = {
 
 type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 
+// @ts-expect-error
 export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive'>;
-
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;
