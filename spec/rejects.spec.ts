@@ -22,7 +22,7 @@ test('rejects a method with arguments', async t => {
   await t.throwsAsync(calculator.heavyOperation(0, 1, 1, 2, 4, 5, 8), { instanceOf: Error, message: 'Wrong sequence!' });
 });
 
-test.skip('rejects a property', async t => {
+test('rejects a property', async t => {
   const calculator = Substitute.for<Calculator>();
   calculator.model.rejects(new Error('No model'));
 

@@ -22,7 +22,7 @@ test('resolves a method with arguments', async t => {
   t.is(await calculator.heavyOperation(0, 1, 1, 2, 3, 5, 8), 13);
 });
 
-test.skip('resolves a property', async t => {
+test('resolves a property', async t => {
   const calculator = Substitute.for<Calculator>();
   calculator.model.resolves('Casio FX-82');
 
