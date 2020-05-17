@@ -1,9 +1,9 @@
 import { inspect } from 'util'
-import { ContextState } from "./states/ContextState";
-import { InitialState } from "./states/InitialState";
-import { HandlerKey } from "./Substitute";
-import { Type } from "./Utilities";
-import { SetPropertyState } from "./states/SetPropertyState";
+import { ContextState } from './states/ContextState';
+import { InitialState } from './states/InitialState';
+import { HandlerKey } from './Substitute';
+import { PropertyType } from './Utilities';
+import { SetPropertyState } from './states/SetPropertyState';
 import { SubstituteJS as SubstituteBase, SubstituteException } from './SubstituteBase'
 
 export class Context {
@@ -23,9 +23,9 @@ export class Context {
         this._getState = this._initialState;
 
         this._proxy = new Proxy(SubstituteBase, {
-            apply: (_target, _this, args) => this.apply(_target, _this, args),
-            set: (_target, property, value) => (this.set(_target, property, value), true),
-            get: (_target, property) => this._filterAndReturnProperty(_target, property, this.get)
+            apply: (_target, _this, args) => this.getStateApply(_target, _this, args),
+            set: (_target, property, value) => (this.setStateSet(_target, property, value), true),
+            get: (_target, property) => this._filterAndReturnProperty(_target, property, this.getStateGet)
         });
 
         this._rootProxy = new Proxy(SubstituteBase, {
@@ -36,11 +36,11 @@ export class Context {
 
         this._receivedProxy = new Proxy(SubstituteBase, {
             apply: (_target, _this, args) => this._receivedState === void 0 ? void 0 : this._receivedState.apply(this, args),
-            set: (_target, property, value) => (this.set(_target, property, value), true),
+            set: (_target, property, value) => (this.setStateSet(_target, property, value), true),
             get: (_target, property) => {
                 const state = this.initialState.getPropertyStates.find(getPropertyState => getPropertyState.property === property);
                 if (state === void 0) return this.handleNotFoundState(property);
-                if (!state.functionState)
+                if (!state.isFunctionState)
                     state.get(this, property);
                 this._receivedState = state;
                 return this.receivedProxy;
@@ -48,7 +48,7 @@ export class Context {
         });
     }
 
-    private _filterAndReturnProperty(target: typeof SubstituteBase, property: PropertyKey, defaultGet: Context['get']) {
+    private _filterAndReturnProperty(target: typeof SubstituteBase, property: PropertyKey, getToExecute: ContextState['get']) {
         switch (property) {
             case 'constructor':
             case 'valueOf':
@@ -68,13 +68,13 @@ export class Context {
                 return target.prototype[Symbol.toStringTag];
             default:
                 target.prototype.lastRegisteredSubstituteJSMethodOrProperty = property.toString()
-                return defaultGet.bind(this)(target, property);
+                return getToExecute.bind(this)(target as any, property);
         }
     }
 
     private handleNotFoundState(property: PropertyKey) {
         if (this.initialState.hasExpectations && this.initialState.expectedCount !== null) {
-            this.initialState.assertCallCountMatchesExpectations([], 0, Type.property, property, []);
+            this.initialState.assertCallCountMatchesExpectations([], 0, PropertyType.property, property, []);
             return this.receivedProxy;
         }
         throw SubstituteException.forPropertyNotMocked(property);
@@ -84,15 +84,15 @@ export class Context {
         return this.initialState.get(this, property);
     }
 
-    apply(_target: any, _this: any, args: any[]) {
+    getStateApply(_target: any, _this: any, args: any[]) {
         return this._getState.apply(this, args);
     }
 
-    set(_target: any, property: PropertyKey, value: any) {
+    setStateSet(_target: any, property: PropertyKey, value: any) {
         return this._setState.set(this, property, value);
     }
 
-    get(_target: any, property: PropertyKey) {
+    getStateGet(_target: any, property: PropertyKey) {
         if (property === HandlerKey) {
             return this;
         }

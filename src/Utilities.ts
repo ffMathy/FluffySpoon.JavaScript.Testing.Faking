@@ -6,7 +6,7 @@ import * as util from 'util';
 
 export type Call = any[] // list of args
 
-export enum Type {
+export enum PropertyType {
     method = 'method',
     property = 'property'
 }
@@ -22,8 +22,6 @@ export enum SubstituteMethods {
 }
 
 const seenObject = Symbol();
-export const Nothing = Symbol();
-export type Nothing = typeof Nothing
 
 export function stringifyArguments(args: any[]) {
     args = args.map(x => util.inspect(x));
@@ -35,7 +33,7 @@ export function areArgumentArraysEqual(a: any[], b: any[]) {
         return true;
     }
 
-    for (var i = 0; i < Math.max(b.length, a.length); i++) {
+    for (let i = 0; i < Math.max(b.length, a.length); i++) {
         if (!areArgumentsEqual(b[i], a[i])) {
             return false;
         }
@@ -74,15 +72,16 @@ export function areArgumentsEqual(a: any, b: any) {
     return deepEqual(a, b);
 };
 
-function deepEqual(realA: any, realB: any, objectReferences: Object[] = []): boolean {
+function deepEqual(realA: any, realB: any, objectReferences: object[] = []): boolean {
     const a = objectReferences.includes(realA) ? seenObject : realA;
     const b = objectReferences.includes(realB) ? seenObject : realB;
     const newObjectReferences = updateObjectReferences(objectReferences, a, b);
 
     if (nonNullObject(a) && nonNullObject(b)) {
         if (a.constructor !== b.constructor) return false;
-        if (Object.keys(a).length !== Object.keys(b).length) return false;
-        for (const key in a) {
+        const objectAKeys = Object.keys(a);
+        if (objectAKeys.length !== Object.keys(b).length) return false;
+        for (const key of objectAKeys) {
             if (!deepEqual(a[key], b[key], newObjectReferences)) return false;
         }
         return true;
@@ -90,26 +89,11 @@ function deepEqual(realA: any, realB: any, objectReferences: Object[] = []): boo
     return a === b;
 }
 
-function updateObjectReferences(objectReferences: Array<Object>, a: any, b: any) {
+function updateObjectReferences(objectReferences: Array<object>, a: any, b: any) {
     const tempObjectReferences = [...objectReferences, nonNullObject(a) && !objectReferences.includes(a) ? a : void 0];
     return [...tempObjectReferences, nonNullObject(b) && !tempObjectReferences.includes(b) ? b : void 0];
 }
 
-function nonNullObject(value: any) {
+function nonNullObject(value: any): value is { [key: string]: any } {
     return typeof value === 'object' && value !== null;
-}
-
-export function Get(recorder: InitialState, context: Context, property: PropertyKey) {
-    const existingGetState = recorder.getPropertyStates.find(state => state.property === property);
-    if (existingGetState) {
-        context.state = existingGetState;
-        return context.get(void 0, property);
-    }
-
-    const getState = new GetPropertyState(property);
-    context.state = getState;
-
-    recorder.recordGetPropertyState(property, getState);
-
-    return context.get(void 0, property);
 }
