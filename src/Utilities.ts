@@ -15,6 +15,7 @@ export enum SubstituteMethods {
     received = 'received',
     didNotReceive = 'didNotReceive',
     mimicks = 'mimicks',
+    configure = 'configure',
     throws = 'throws',
     returns = 'returns',
     resolves = 'resolves',

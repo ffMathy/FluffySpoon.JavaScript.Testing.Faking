@@ -70,6 +70,7 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
     received(amount?: number): TerminatingObject<K>;
     didNotReceive(): TerminatingObject<K>;
     mimick(instance: T): void;
+    configure(): ObjectSubstituteTransformation<T>;
 }
 
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
