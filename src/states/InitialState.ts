@@ -109,6 +109,11 @@ export class InitialState implements ContextState {
                     this._expectedCount = 0;
                     return context.receivedProxy;
                 };
+            case SubstituteMethods.configure:
+                return () => {
+                    context.enableConfigurationMode();
+                    return context.rootProxy;
+                }
             default:
                 return this.handleGet(context, property);
         }

@@ -17,10 +17,14 @@ export class Context {
     private _setState: ContextState;
     private _receivedState: ContextState;
 
+    private _configurationMode: boolean;
+
     constructor() {
         this._initialState = new InitialState();
         this._setState = this._initialState;
         this._getState = this._initialState;
+
+        this._configurationMode = false;
 
         this._proxy = new Proxy(SubstituteBase, {
             apply: (_target, _this, args) => this.getStateApply(_target, _this, args),
@@ -98,6 +102,18 @@ export class Context {
         }
 
         return this._getState.get(this, property);
+    }
+
+    public enableConfigurationMode(): void {
+        this._configurationMode = true;
+    }
+
+    public disableConfigurationMode(): void {
+        this._configurationMode = false;
+    }
+
+    public isConfigurationMode(): boolean {
+        return this._configurationMode;
     }
 
     public get proxy() {
