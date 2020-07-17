@@ -31,7 +31,7 @@
     "devDependencies": {
         "@ava/typescript": "^1.1.0",
         "ava": "^3.10.1",
-        "typescript": "^3.9.6"
+        "typescript": "^3.9.7"
     },
     "ava": {
         "typescript": {
