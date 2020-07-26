@@ -1,5 +1,8 @@
 <a href="https://opencollective.com/substitute-js#section-contribute"><a href="https://opencollective.com/substitute-js" alt="Financial Contributors on Open Collective"><img src="https://opencollective.com/substitute-js/all/badge.svg?label=financial+contributors" /></a> 
+  
+First some shameless promotion for my other project. **I'm currently building the GitHub app [Pull Dog](https://dogger.io)**, which creates a Docker-based test environment for every pull request you open, and send a link to the environment right in the pull request itself, as a comment.
 
+# What is this?
 [`@fluffy-spoon/substitute`](https://www.npmjs.com/package/@fluffy-spoon/substitute) is a TypeScript port of [NSubstitute](http://nsubstitute.github.io), which aims to provide a much more fluent mocking opportunity for strong-typed languages.
 
 *You can read an in-depth comparison of `substitute.js` versus other popular TypeScript mocking frameworks here: https://medium.com/@mathiaslykkegaardlorenzen/with-typescript-3-and-substitute-js-you-are-already-missing-out-when-mocking-or-faking-a3b3240c4607*
