@@ -17,6 +17,17 @@
             "url": "https://github.com/notanengineercom"
         }
     ],
+    "repository": {
+        "type" : "git",
+        "url" : "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
+    },
+    "keywords": ["NSubstitute", "mocking", "test", "testing", "faking"],
+    "bugs": {
+        "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues"
+    },
+    "engines": {
+        "node": ">=8"
+    },
     "main": "dist/src/index.js",
     "typings": "./dist/src/index.d.ts",
     "files": [
