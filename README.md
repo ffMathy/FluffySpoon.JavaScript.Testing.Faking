@@ -1,5 +1,3 @@
-First some shameless promotion for my other project: **I'm currently building the GitHub app [Pull Dog](https://dogger.io)**, which creates a Docker-based test environment for every pull request you open, and send a link to the environment right in the pull request itself, as a comment.
-
 <a href="https://opencollective.com/substitute-js#section-contribute"><a href="https://opencollective.com/substitute-js" alt="Financial Contributors on Open Collective"><img src="https://opencollective.com/substitute-js/all/badge.svg?label=financial+contributors" /></a> 
 
 # What is this?
