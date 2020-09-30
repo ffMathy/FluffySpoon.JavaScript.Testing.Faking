@@ -19,7 +19,7 @@ jobs:
         node-version: ${{ matrix.node-version }}
     - name: install dependencies
       run: npm ci
-    - if: matrix.node-version === '8.x' # yargs on ava needs at least node 10 as engine
+    - if: matrix.node-version == '8.x' # yargs on ava needs at least node 10 as engine
       name: downgrade ava (node 8 only)
       run: npm i -D ava@3.12.1
     - name: build and test
