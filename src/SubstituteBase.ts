@@ -10,30 +10,30 @@ export class SubstituteJS {
     return typeof this._lastRegisteredSubstituteJSMethodOrProperty === 'undefined' ? 'root' : this._lastRegisteredSubstituteJSMethodOrProperty;
   }
   [Symbol.toPrimitive]() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   [Symbol.toStringTag]() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   [Symbol.iterator]() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   [inspect.custom]() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   valueOf() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   $$typeof() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   toString() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
   inspect() {
-    return `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
   }
-  length = `[Function: ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
+  length = `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
 }
 
 enum SubstituteExceptionTypes {
