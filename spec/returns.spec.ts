@@ -1,6 +1,8 @@
 import test from 'ava';
-import { Substitute, Arg } from '../src';
 import { inspect } from 'util'
+
+import { Substitute, Arg } from '../src';
+import { getCorrectConstructorDescriptor } from './util/compatibility';
 
 interface Calculator {
   add(a: number, b: number): number;
@@ -28,7 +30,7 @@ test('returns a primitive value for method with specific arguments', t => {
 
   t.is(calculator.add(1, 1), 2);
   t.is(calculator.add(1, 1), 2);
-  t.is(inspect(noResult.constructor), '[Function: SubstituteJS]');
+  t.is(inspect(noResult.constructor), `[${getCorrectConstructorDescriptor()} SubstituteJS]`);
 });
 
 test('returns a primitive value for method with specific arguments where the last argument is optional', t => {
@@ -46,8 +48,8 @@ test('returns a primitive value for method with specific arguments where the las
   const noResult = calculator.multiply(2, 2);
   const noResult2 = calculator.multiply(0);
 
-  t.is(inspect(noResult.constructor), '[Function: SubstituteJS]');
-  t.is(inspect(noResult2.constructor), '[Function: SubstituteJS]');
+  t.is(inspect(noResult.constructor), `[${getCorrectConstructorDescriptor()} SubstituteJS]`);
+  t.is(inspect(noResult2.constructor), `[${getCorrectConstructorDescriptor()} SubstituteJS]`);
 });
 
 test('returns a primitive value for method with specific and conditional arguments', t => {
@@ -97,7 +99,7 @@ test('returns a promise for method with specific arguments', async t => {
   const noResult = calculator.heavyOperation(1, 1, 1);
 
   t.is(result, true);
-  t.is(inspect(noResult.constructor), '[Function: SubstituteJS]');
+  t.is(inspect(noResult.constructor), `[${getCorrectConstructorDescriptor()} SubstituteJS]`);
 });
 
 test('returns a promise for method with specific and conditional arguments', async t => {
@@ -151,7 +153,7 @@ test('returns a primitive value on a property', t => {
 
   t.is(calculator.isEnabled, true);
   t.is(calculator.isEnabled, true);
-  t.is(inspect(noResult.constructor), '[Function: SubstituteJS]');
+  t.is(inspect(noResult.constructor), `[${getCorrectConstructorDescriptor()} SubstituteJS]`);
 });
 
 test('returns a promise on a property', async t => {
