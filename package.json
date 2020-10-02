@@ -18,10 +18,16 @@
         }
     ],
     "repository": {
-        "type" : "git",
-        "url" : "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
+        "type": "git",
+        "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
     },
-    "keywords": ["NSubstitute", "mocking", "test", "testing", "faking"],
+    "keywords": [
+        "NSubstitute",
+        "mocking",
+        "test",
+        "testing",
+        "faking"
+    ],
     "bugs": {
         "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues"
     },
@@ -35,23 +41,21 @@
     ],
     "scripts": {
         "prepack": "npm i && tsc",
-        "test": "tsc && ava",
+        "test": "tsc --sourceMap && ava",
         "build": "tsc"
     },
     "dependencies": {},
     "devDependencies": {
         "@ava/typescript": "^1.1.0",
-        "ava": "^3.11.0",
-        "typescript": "^3.9.7"
+        "@types/node": "^14.11.2",
+        "ava": "^3.13.0",
+        "typescript": "^4.0.3"
     },
     "ava": {
         "typescript": {
             "rewritePaths": {
                 "/": "dist/"
-            },
-            "extensions": [
-                "ts"
-            ]
+            }
         },
         "cache": false,
         "failFast": true,
