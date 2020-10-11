@@ -7,7 +7,7 @@ export class SubstituteJS {
     this._lastRegisteredSubstituteJSMethodOrProperty = value;
   }
   get lastRegisteredSubstituteJSMethodOrProperty() {
-    return typeof this._lastRegisteredSubstituteJSMethodOrProperty === 'undefined' ? 'root' : this._lastRegisteredSubstituteJSMethodOrProperty;
+    return this._lastRegisteredSubstituteJSMethodOrProperty ?? 'root';
   }
   [Symbol.toPrimitive]() {
     return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;

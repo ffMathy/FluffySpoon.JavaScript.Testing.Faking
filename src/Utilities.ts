@@ -1,7 +1,4 @@
 import { Argument, AllArguments } from './Arguments';
-import { GetPropertyState } from './states/GetPropertyState';
-import { InitialState } from './states/InitialState';
-import { Context } from './Context';
 import * as util from 'util';
 
 export type Call = any[] // list of args
@@ -11,7 +8,7 @@ export enum PropertyType {
     property = 'property'
 }
 
-export enum SubstituteMethods {
+export enum SubstituteMethod {
     received = 'received',
     didNotReceive = 'didNotReceive',
     mimicks = 'mimicks',
@@ -19,6 +16,14 @@ export enum SubstituteMethods {
     returns = 'returns',
     resolves = 'resolves',
     rejects = 'rejects'
+}
+
+export function isSubstituteMethod(property: PropertyKey): property is SubstituteMethod {
+    return property === SubstituteMethod.returns ||
+        property === SubstituteMethod.mimicks ||
+        property === SubstituteMethod.throws ||
+        property === SubstituteMethod.resolves ||
+        property === SubstituteMethod.rejects;
 }
 
 const seenObject = Symbol();
