@@ -1,41 +1,39 @@
-import { Context } from './Context';
-import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from './Transformations';
+import { ContextNode } from './Context'
+import { Graph } from './linked-list/Graph'
+import { ObjectSubstitute, OmitProxyMethods } from './Transformations'
 
-export const HandlerKey = Symbol();
-export const AreProxiesDisabledKey = Symbol();
+export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T
 
-export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T;
+export class Substitute extends Graph {
+  private _proxy: () => void
 
-export class Substitute {
-    static for<T>(): SubstituteOf<T> {
-        const objectContext = new Context();
-        return objectContext.rootProxy;
-    }
+  private constructor() {
+    super()
+    this._proxy = new Proxy(() => { }, {
+      getPrototypeOf() { // Set custom prototype -> overrideSubstitutePrototype/Instance?
+        return Substitute.prototype
+      },
+      get: (_target, _property) => {
+        const node = new ContextNode(_property)
+        node.parent = this
 
-    static disableFor<T extends ObjectSubstitute<OmitProxyMethods<any>>>(substitute: T): DisabledSubstituteObject<T> {
-        const thisProxy = substitute as any; // rootProxy
-        const thisExposedProxy = thisProxy[HandlerKey]; // Context
+        this.addNodeBranch(node, _property)
+        return node.returnProxyOrSubstitution()
+      }
+    })
+  }
 
-        const disableProxy = <K extends Function>(f: K): K => {
-            return function () {
-                thisProxy[AreProxiesDisabledKey] = true;
-                const returnValue = f.call(thisExposedProxy, ...arguments);
-                thisProxy[AreProxiesDisabledKey] = false;
-                return returnValue;
-            } as any;
-        };
+  static for<T>(): SubstituteOf<T> {
+    const substitute = new this()
+    return substitute.proxy as unknown as SubstituteOf<T>
+  }
 
-        return new Proxy(() => { }, {
-            apply: function (_target, _this, args) {
-                return disableProxy(thisExposedProxy.getStateApply)(...arguments)
-            },
-            set: function (_target, property, value) {
-                return disableProxy(thisExposedProxy.setStateSet)(...arguments)
-            },
-            get: function (_target, property) {
-                thisExposedProxy._initialState.handleGet(thisExposedProxy, property)
-                return disableProxy(thisExposedProxy.getStateGet)(...arguments)
-            }
-        }) as any;
-    }
+  get proxy() {
+    return this._proxy
+  }
+
+  public getSiblingsOf(node: ContextNode): ContextNode[] {
+    const siblingNodes = this.indexedRecords.get(node.property) as ContextNode[]
+    return siblingNodes.filter(siblingNode => siblingNode != node)
+  }
 }
