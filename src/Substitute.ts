@@ -1,4 +1,4 @@
-import { ContextNode } from './Context'
+import { ContextNode } from './ContextNode'
 import { Graph } from './linked-list/Graph'
 import { ObjectSubstitute, OmitProxyMethods } from './Transformations'
 
