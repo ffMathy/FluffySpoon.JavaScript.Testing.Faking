@@ -78,7 +78,9 @@ export class GetPropertyState implements ContextState {
     }
 
     private processProperty(context: Context, args: any[], propertyType: PropertyType) {
+
         const hasExpectations = context.initialState.hasExpectations;
+
         if (!hasExpectations && !context.isConfigurationMode()) {
             this._recordedCalls.push(args);
 
@@ -189,7 +191,12 @@ export class GetPropertyState implements ContextState {
                 else
                     this._mocks[argsType][mockPosition] = substituteMock;
 
-                this._recordedCalls.pop();
+                if(context.isConfigurationMode()){
+                    this._recordedCalls = [];
+                } else {
+                    this._recordedCalls.pop();
+                }
+
                 context.disableConfigurationMode();
                 context.state = context.initialState;
             }
