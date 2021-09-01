@@ -129,7 +129,7 @@ test('resolution respects the match-group order: only-primitives > with-single-a
   t.is(calculator.add(1, 1), 12);
 });
 
-test.only('will reset the received counters', t => {
+test('will reset the received counters', t => {
   const calculator = Substitute.for<Calculator>();
 
   // initial
