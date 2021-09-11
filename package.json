@@ -55,7 +55,8 @@
         "typescript": {
             "rewritePaths": {
                 "/": "dist/"
-            }
+            },
+            "compile": false
         },
         "cache": false,
         "failFast": true,
