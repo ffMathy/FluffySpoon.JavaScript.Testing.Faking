@@ -1,26 +1,33 @@
-import { ContextNode } from './ContextNode'
-import { Graph } from './linked-list/Graph'
-import { ObjectSubstitute, OmitProxyMethods } from './Transformations'
+import { inspect, InspectOptions } from 'util'
+
+import { SubstituteBase } from './SubstituteBase'
+import { createSubstituteProxy } from './SubstituteProxy'
+import { Recorder } from './Recorder'
+import { DisabledSubstituteObject, ObjectSubstitute, OmitProxyMethods } from './Transformations'
 
 export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T
+type Instantiable<T> = { [SubstituteBase.instance]?: T }
 
-export class Substitute extends Graph {
-  private _proxy: () => void
+export class Substitute extends SubstituteBase {
+  private _proxy: Substitute
+  private _recorder: Recorder = new Recorder()
+  private _context: { disableAssertions: boolean } = { disableAssertions: false }
 
-  private constructor() {
+  constructor() {
     super()
-    this._proxy = new Proxy(() => { }, {
-      getPrototypeOf() { // Set custom prototype -> overrideSubstitutePrototype/Instance?
-        return Substitute.prototype
-      },
-      get: (_target, _property) => {
-        const node = new ContextNode(_property)
-        node.parent = this
-
-        this.addNodeBranch(node, _property)
-        return node.returnProxyOrSubstitution()
-      }
-    })
+    this._proxy = new Proxy(
+      this,
+      createSubstituteProxy<Substitute>({
+        get: (target, _property, _, node) => {
+          if (target.context.disableAssertions) node.disableAssertions()
+        },
+        set: () => { }
+        // apply: (target, _, args, __, proxy) => {
+        // const rootProperty = proxy.get(target, '()', proxy) TODO: Implement to support callable interfaces
+        // return Reflect.apply(rootProperty, rootProperty, args)
+        // }
+      })
+    )
   }
 
   static for<T>(): SubstituteOf<T> {
@@ -28,12 +35,48 @@ export class Substitute extends Graph {
     return substitute.proxy as unknown as SubstituteOf<T>
   }
 
-  get proxy() {
+  static disableFor<T extends SubstituteOf<unknown> & Instantiable<Substitute>>(substituteProxy: T): DisabledSubstituteObject<T> {
+    const substitute = substituteProxy[SubstituteBase.instance]
+
+    const disableProxy = <
+      TParameters extends unknown[],
+      TReturnType extends unknown
+    >(reflection: (...args: TParameters) => TReturnType): typeof reflection => (...args) => {
+      substitute.context.disableAssertions = true
+      const reflectionResult = reflection(...args)
+      substitute.context.disableAssertions = false
+      return reflectionResult
+    }
+
+    return new Proxy(substitute.proxy, {
+      get: function (target, property) {
+        return disableProxy(Reflect.get)(target, property)
+      },
+      set: function (target, property, value) {
+        return disableProxy(Reflect.set)(target, property, value)
+      },
+      apply: function (target, _, args) {
+        return disableProxy(Reflect.apply)(target, _, args)
+      }
+    }) as DisabledSubstituteObject<T>
+  }
+
+  public get proxy() {
     return this._proxy
   }
 
-  public getSiblingsOf(node: ContextNode): ContextNode[] {
-    const siblingNodes = this.indexedRecords.get(node.property) as ContextNode[]
-    return siblingNodes.filter(siblingNode => siblingNode != node)
+  public get recorder() {
+    return this._recorder
+  }
+
+  public get context() {
+    return this._context
+  }
+
+  protected printableForm(_: number, options: InspectOptions): string {
+    const records = inspect(this.recorder, options)
+
+    const instanceName = 'Substitute' // Substitute<FooThing>
+    return instanceName + ' {' + records + '\n}'
   }
 }
