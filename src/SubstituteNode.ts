@@ -1,13 +1,19 @@
 import { inspect, InspectOptions } from 'util'
 
-import { PropertyType, isSubstitutionMethod, isAssertionMethod, AssertionMethod, SubstitutionMethod, textModifier, isSubstituteMethod } from './Utilities'
+import { PropertyType, isSubstitutionMethod, isAssertionMethod, AssertionMethod, SubstitutionMethod, textModifier, ConfigurationMethod, isSubstituteMethod } from './Utilities'
 import { SubstituteException } from './SubstituteException'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteNodeBase } from './SubstituteNodeBase'
 import { SubstituteBase } from './SubstituteBase'
 import { createSubstituteProxy } from './SubstituteProxy'
+import { ClearType } from './Transformations'
 
-type SubstituteContext = SubstitutionMethod | AssertionMethod | 'none'
+type SubstituteContext = SubstitutionMethod | AssertionMethod | ConfigurationMethod | 'none'
+const clearTypeToFilterMap: Record<ClearType, (node: SubstituteNode) => boolean> = {
+  all: () => true,
+  receivedCalls: node => !node.hasContext,
+  substituteValues: node => node.isSubstitution
+}
 
 export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   private _proxy: SubstituteNode
@@ -31,6 +37,7 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
         },
         apply: (node, _, rawArguments) => {
           node.handleMethod(rawArguments)
+          if (node.context === 'clearSubstitute') return node.clear()
           return node.parent?.isAssertion ?? false ? node.executeAssertion() : node.read()
         }
       }
@@ -98,6 +105,12 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   public write(value: any) {
     this._accessorType = 'set'
     this._recordedArguments = RecordedArguments.from([value])
+  }
+
+  public clear() {
+    const clearType: ClearType = this.recordedArguments.value[0] ?? 'all'
+    const filter = clearTypeToFilterMap[clearType] as (node: SubstituteNodeBase) => boolean
+    this.root.recorder.clearRecords(filter)
   }
 
   public executeSubstitution(contextArguments: RecordedArguments) {
