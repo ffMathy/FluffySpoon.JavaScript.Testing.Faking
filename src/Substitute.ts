@@ -15,18 +15,17 @@ export class Substitute extends SubstituteBase {
 
   constructor() {
     super()
-    this._proxy = new Proxy(
+    this._proxy = createSubstituteProxy(
       this,
-      createSubstituteProxy<Substitute>({
+      {
         get: (target, _property, _, node) => {
           if (target.context.disableAssertions) node.disableAssertions()
-        },
-        set: () => { }
+        }
         // apply: (target, _, args, __, proxy) => {
         // const rootProperty = proxy.get(target, '()', proxy) TODO: Implement to support callable interfaces
         // return Reflect.apply(rootProperty, rootProperty, args)
         // }
-      })
+      }
     )
   }
 

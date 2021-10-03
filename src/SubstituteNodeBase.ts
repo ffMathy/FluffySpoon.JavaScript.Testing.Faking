@@ -1,27 +1,25 @@
 import { SubstituteBase } from './SubstituteBase'
 import { Substitute } from './Substitute'
+import { RecordsSet } from './RecordsSet'
 
 export abstract class SubstituteNodeBase<T extends SubstituteNodeBase = SubstituteNodeBase<any>> extends SubstituteBase {
-  private _parent?: T = undefined
+  private _parent?: T
   private _child?: T
   private _head: T & { parent: undefined }
   private _root: Substitute
 
-  constructor(private _key: PropertyKey, caller: T | SubstituteBase) {
+  constructor(private _key: PropertyKey, caller: SubstituteBase) {
     super()
 
     if (caller instanceof Substitute) {
       caller.recorder.addIndexedRecord(this)
       this._root = caller
     }
+    if (!(caller instanceof SubstituteNodeBase)) return
 
-    if (caller instanceof SubstituteNodeBase) {
-      this._parent = caller
-      this._head = caller.head as T & { parent: undefined }
-      caller.child = this
-    }
-
-    this.root.recorder.addRecord(this)
+    this._parent = caller as T
+    this._head = caller.head as T & { parent: undefined }
+    caller.child = this
   }
 
   get key(): PropertyKey {
@@ -60,12 +58,8 @@ export abstract class SubstituteNodeBase<T extends SubstituteNodeBase = Substitu
     return !this.isHead()
   }
 
-  protected getAllSiblings(): T[] {
-    return this.root.recorder.getSiblingsOf(this) as T[]
-  }
-
-  protected getAllSiblingsOfHead(): T[] {
-    return this.root.recorder.getSiblingsOf(this.head) as T[]
+  protected getAllSiblings(): RecordsSet<T> {
+    return this.root.recorder.getSiblingsOf(this) as RecordsSet<T>
   }
 
   public abstract read(): void
