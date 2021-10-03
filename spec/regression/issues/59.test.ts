@@ -1,6 +1,6 @@
-import test from 'ava';
+import test from 'ava'
 
-import { Substitute } from '../../src/index';
+import { Substitute } from '../../../src'
 
 interface IEcho {
   echo(a: string): string
@@ -13,6 +13,6 @@ test('issue 59 - Mock function with optional parameters', (t) => {
   echoer.maybeEcho().returns('baz')
 
   t.is(echoer.maybeEcho('foo'), 'bar')
-  echoer.received().maybeEcho('foo');
+  echoer.received().maybeEcho('foo')
   t.is(echoer.maybeEcho(), 'baz')
 })
