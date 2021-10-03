@@ -1,11 +1,13 @@
 import { inspect, InspectOptions } from 'util'
 
-import { PropertyType, isSubstitutionMethod, isAssertionMethod, SubstitutionMethod, textModifier } from './Utilities'
+import { PropertyType, isSubstitutionMethod, isAssertionMethod, AssertionMethod, SubstitutionMethod, textModifier, isSubstituteMethod } from './Utilities'
 import { SubstituteException } from './SubstituteException'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteNodeBase } from './SubstituteNodeBase'
 import { SubstituteBase } from './SubstituteBase'
 import { createSubstituteProxy } from './SubstituteProxy'
+
+type SubstituteContext = SubstitutionMethod | AssertionMethod | 'none'
 
 export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   private _proxy: SubstituteNode
@@ -13,30 +15,25 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   private _accessorType: 'get' | 'set' = 'get'
   private _recordedArguments: RecordedArguments = RecordedArguments.none()
 
-  private _hasSubstitution: boolean = false
-  private _isSubstitution: boolean = false
-
+  private _context: SubstituteContext = 'none'
   private _disabledAssertions: boolean = false
-  private _isAssertion: boolean = false
 
   constructor(property: PropertyKey, parent: SubstituteNode | SubstituteBase) {
     super(property, parent)
-    this._proxy = new Proxy(
+    this._proxy = createSubstituteProxy(
       this,
-      createSubstituteProxy<SubstituteNode>({
-        get: (target, _, __, node) => {
-          if (target.isAssertion) node.executeAssertion()
+      {
+        get: (node, _, __, nextNode) => {
+          if (node.isAssertion) nextNode.executeAssertion()
         },
-        set: (target, _, __, ___, node) => {
-          if (target.isAssertion) node.executeAssertion()
+        set: (node, _, __, ___, nextNode) => {
+          if (node.isAssertion) nextNode.executeAssertion()
         },
-        apply: (target, _, rawArguments) => {
-          target.handleMethod(rawArguments)
-          return target.isIntermediateNode() && target.parent.isAssertion
-            ? target.executeAssertion()
-            : target.read()
+        apply: (node, _, rawArguments) => {
+          node.handleMethod(rawArguments)
+          return node.parent?.isAssertion ?? false ? node.executeAssertion() : node.read()
         }
-      })
+      }
     )
   }
 
@@ -44,16 +41,20 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
     return this._proxy
   }
 
-  get isSubstitution(): boolean {
-    return this._isSubstitution
+  get context(): SubstituteContext {
+    return this._context
   }
 
-  get hasSubstitution(): boolean {
-    return this._hasSubstitution
+  get hasContext(): boolean {
+    return this.context !== 'none'
+  }
+
+  get isSubstitution(): boolean {
+    return isSubstitutionMethod(this.context)
   }
 
   get isAssertion(): boolean {
-    return this._isAssertion
+    return isAssertionMethod(this.context)
   }
 
   get property() {
@@ -76,16 +77,8 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
     return this._disabledAssertions
   }
 
-  public labelAsSubstitution(): void {
-    this._isSubstitution = true
-  }
-
-  public enableSubstitution(): void {
-    this._hasSubstitution = true
-  }
-
-  public labelAsAssertion(): void {
-    this._isAssertion = true
+  public assignContext(context: SubstituteContext): void {
+    this._context = context
   }
 
   public disableAssertions() {
@@ -93,7 +86,7 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   }
 
   public read(): SubstituteNode | void | never {
-    if (this.isSubstitution) return
+    if (this.parent?.isSubstitution ?? false) return
     if (this.isAssertion) return this.proxy
 
     const mostSuitableSubstitution = this.getMostSuitableSubstitution()
@@ -108,7 +101,7 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   }
 
   public executeSubstitution(contextArguments: RecordedArguments) {
-    const substitutionMethod = this.child.property as SubstitutionMethod
+    const substitutionMethod = this.context as SubstitutionMethod
     const substitutionValue = this.child.recordedArguments.value.length > 1
       ? this.child.recordedArguments.value.shift()
       : this.child.recordedArguments.value[0]
@@ -130,8 +123,7 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   }
 
   public executeAssertion(): void | never {
-    const siblings = this.getAllSiblings().filter(n => !n.isAssertion && !n.hasSubstitution && n.accessorType === this.accessorType) // isSubstitution should return this.parent.hasSubstitution
-
+    const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
     if (!this.isIntermediateNode()) throw new Error('Not possible')
 
     const expectedCount = this.parent.recordedArguments.value[0] ?? undefined
@@ -165,40 +157,37 @@ export class SubstituteNode extends SubstituteNodeBase<SubstituteNode> {
   public handleMethod(rawArguments: any[]): void {
     this._propertyType = PropertyType.method
     this._recordedArguments = RecordedArguments.from(rawArguments)
+    if (!isSubstituteMethod(this.property)) return
 
-    if (!this.disabledAssertions && isAssertionMethod(this.property)) {
-      if (this.property === 'didNotReceive') this._recordedArguments = RecordedArguments.from([0])
-      this.labelAsAssertion()
-    }
+    if (this.isIntermediateNode() && isSubstitutionMethod(this.property)) return this.parent.assignContext(this.property)
+    if (this.disabledAssertions || !this.isHead()) return
 
-    if (isSubstitutionMethod(this.property)) {
-      this.labelAsSubstitution()
-      if (this.isIntermediateNode()) this.parent.enableSubstitution()
-    }
+    this.assignContext(this.property)
+    if (this.context === 'didNotReceive') this._recordedArguments = RecordedArguments.from([0])
   }
 
   private getMostSuitableSubstitution(): SubstituteNode {
-    const nodes = this.getAllSiblings().filter(node => node.hasSubstitution &&
+    const nodes = this.getAllSiblings().filter(node => node.isSubstitution &&
       node.propertyType === this.propertyType &&
       node.recordedArguments.match(this.recordedArguments)
     )
-    const sortedNodes = RecordedArguments.sort(nodes)
+    const sortedNodes = RecordedArguments.sort([...nodes])
     return sortedNodes[0]
   }
 
   protected printableForm(_: number, options: InspectOptions): string {
-    const isMockNode = this.hasSubstitution || this.isAssertion
+    const hasContext = this.hasContext
     const args = inspect(this.recordedArguments, options)
-    const label = this.hasSubstitution
+    const label = this.isSubstitution
       ? '=> '
       : this.isAssertion
         ? `${this.child.property.toString()}`
         : ''
-    const s = isMockNode
-      ? ` ${label}${inspect(this.child.recordedArguments, options)}`
+    const s = hasContext
+      ? ` ${label}${inspect(this.child?.recordedArguments, options)}`
       : ''
 
     const printableNode = `${this.propertyType}<${this.property.toString()}>: ${args}${s}`
-    return isMockNode ? textModifier.italic(printableNode) : printableNode
+    return hasContext ? textModifier.italic(printableNode) : printableNode
   }
 }
