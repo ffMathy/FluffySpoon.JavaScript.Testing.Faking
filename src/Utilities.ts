@@ -7,14 +7,15 @@ export enum PropertyType {
 }
 
 export type AssertionMethod = 'received' | 'didNotReceive'
-
 export const isAssertionMethod = (property: PropertyKey): property is AssertionMethod =>
   property === 'received' || property === 'didNotReceive'
 
 export type SubstitutionMethod = 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'
-
 export const isSubstitutionMethod = (property: PropertyKey): property is SubstitutionMethod =>
   property === 'mimicks' || property === 'returns' || property === 'throws' || property === 'resolves' || property === 'rejects'
+
+export const isSubstituteMethod = (property: PropertyKey): property is SubstitutionMethod | AssertionMethod =>
+  isSubstitutionMethod(property) || isAssertionMethod(property)
 
 export const stringifyArguments = (args: RecordedArguments) => textModifier.faint(
   args.hasNoArguments
