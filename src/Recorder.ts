@@ -35,6 +35,16 @@ export class Recorder {
     return siblingNodes.filter(siblingNode => siblingNode !== node)
   }
 
+  public clearRecords(filterFunction: (node: SubstituteNodeBase) => boolean) {
+    const recordsToRemove = this.records.filter(filterFunction)
+    for (const record of recordsToRemove) {
+      const indexedRecord = this.indexedRecords.get(record.key)
+      indexedRecord.delete(record)
+      if (indexedRecord.size === 0) this.indexedRecords.delete(record.key)
+      this.records.delete(record)
+    }
+  }
+
   public [inspect.custom](_: number, options: InspectOptions): string {
     const entries = [...this.indexedRecords.entries()]
     return entries.map(
