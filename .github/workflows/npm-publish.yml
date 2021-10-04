@@ -26,8 +26,9 @@ jobs:
           registry-url: https://registry.npmjs.org/
       - run: npm ci --ignore-scripts
       - run: npm run build
+      - run: echo "tag=latest" >> $GITHUB_ENV
       - name: Sets npm tag
-        if: contains(github.event.release.release.tag_name, 'beta')
+        if: contains(github.event.release.tag_name, 'beta')
         run: echo "tag=beta" >> $GITHUB_ENV
       - run: npm publish --access public --tag {{ env.tag }}
         env:
@@ -47,6 +48,7 @@ jobs:
           registry-url: https://npm.pkg.github.com/
       - run: npm ci --ignore-scripts
       - run: npm run build
+      - run: echo "tag=latest" >> $GITHUB_ENV
       - name: Sets npm tag
         if: contains(github.event.release.tag_name, 'beta')
         run: echo "tag=beta" >> $GITHUB_ENV
