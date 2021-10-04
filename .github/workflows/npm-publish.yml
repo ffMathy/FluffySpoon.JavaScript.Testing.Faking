@@ -48,7 +48,7 @@ jobs:
       - run: npm ci --ignore-scripts
       - run: npm run build
       - name: Sets npm tag
-        if: contains(github.event.release.release.tag_name, 'beta')
+        if: contains(github.event.release.tag_name, 'beta')
         run: echo "tag=beta" >> $GITHUB_ENV
       - run: npm publish --tag {{ env.tag }}
         env:
