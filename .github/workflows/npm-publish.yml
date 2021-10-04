@@ -1,0 +1,57 @@
+name: Publish
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 14
+      - run: npm ci --ignore-scripts
+      - run: npm test
+
+  publish-npm:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 14
+          registry-url: https://registry.npmjs.org/
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: echo "tag=latest" >> $GITHUB_ENV
+      - name: Sets npm tag
+        if: contains(github.event.release.tag_name, 'beta')
+        run: echo "tag=beta" >> $GITHUB_ENV
+      - run: npm publish --access public --tag {{ env.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.npm_token }}
+
+  publish-github:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: 14
+          registry-url: https://npm.pkg.github.com/
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - run: echo "tag=latest" >> $GITHUB_ENV
+      - name: Sets npm tag
+        if: contains(github.event.release.tag_name, 'beta')
+        run: echo "tag=beta" >> $GITHUB_ENV
+      - run: npm publish --tag {{ env.tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

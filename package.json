@@ -40,9 +40,8 @@
         "dist/src/**/*"
     ],
     "scripts": {
-        "prepack": "npm i && tsc",
         "test": "tsc --sourceMap && ava",
-        "build": "tsc"
+        "build": "rm -rf dist && tsc"
     },
     "dependencies": {},
     "devDependencies": {
