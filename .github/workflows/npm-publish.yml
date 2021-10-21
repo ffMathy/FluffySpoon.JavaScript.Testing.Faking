@@ -30,7 +30,7 @@ jobs:
       - name: Sets npm tag
         if: contains(github.event.release.tag_name, 'beta')
         run: echo "tag=beta" >> $GITHUB_ENV
-      - run: npm publish --access public --tag {{ env.tag }}
+      - run: npm publish --access public --tag ${{ env.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.npm_token }}
 
@@ -52,6 +52,6 @@ jobs:
       - name: Sets npm tag
         if: contains(github.event.release.tag_name, 'beta')
         run: echo "tag=beta" >> $GITHUB_ENV
-      - run: npm publish --tag {{ env.tag }}
+      - run: npm publish --tag ${{ env.tag }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
