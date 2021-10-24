@@ -32,7 +32,7 @@ jobs:
         run: echo "tag=beta" >> $GITHUB_ENV
       - run: npm publish --access public --tag ${{ env.tag }}
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.npm_token }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
 
   publish-github:
     needs: build
