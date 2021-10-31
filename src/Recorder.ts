@@ -22,7 +22,7 @@ export class Recorder {
   public addIndexedRecord(node: SubstituteNodeBase): void {
     this.addRecord(node)
     const existingNodes = this.indexedRecords.get(node.key)
-    if (typeof existingNodes === 'undefined') this._indexedRecords.set(node.key, new RecordsSet([node]))
+    if (typeof existingNodes === 'undefined') this.indexedRecords.set(node.key, new RecordsSet([node]))
     else existingNodes.add(node)
   }
 

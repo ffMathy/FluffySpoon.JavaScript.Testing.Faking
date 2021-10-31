@@ -4,11 +4,17 @@ type Transformer<T, R> = { type: 'filter', fnc: FilterFunction<T> } | { type: 'm
 
 export class RecordsSet<T> extends Set<T> {
   private _transformer: Transformer<any, any>
-  private _prevIter: RecordsSet<T>
+  private readonly _prevIter?: RecordsSet<T>
 
   constructor(value?: Iterable<T> | readonly T[]) {
     super(value instanceof RecordsSet ? undefined : value)
     if (value instanceof RecordsSet) this._prevIter = value
+  }
+
+  get size(): number {
+    const currentSize = super.size
+    if (this._prevIter instanceof RecordsSet) return currentSize + this._prevIter.size
+    return currentSize
   }
 
   filter(predicate: (item: T) => boolean): RecordsSet<T> {
@@ -23,8 +29,29 @@ export class RecordsSet<T> extends Set<T> {
     return newInstance as RecordsSet<R>
   }
 
+  has(value: T): boolean {
+    if (super.has(value)) return true
+    return this._prevIter instanceof RecordsSet ? this._prevIter.has(value) : false
+  }
+
+  delete(value: T): boolean {
+    const deleted = super.delete(value)
+    if (deleted) return true
+    return this._prevIter instanceof RecordsSet ? this._prevIter.delete(value) : false
+  }
+
+  clear() {
+    Object.defineProperty(this, '_prevIter', { value: undefined })
+    super.clear()
+  }
+
   *[Symbol.iterator](): IterableIterator<T> {
     yield* this.values()
+  }
+
+  *values(): IterableIterator<T> {
+    if (this._prevIter instanceof RecordsSet) yield* this.applyTransform(this._prevIter)
+    yield* this.applyTransform(super.values())
   }
 
   private *applyTransform(itarable: Iterable<T>): IterableIterator<T> {
@@ -34,10 +61,5 @@ export class RecordsSet<T> extends Set<T> {
       if (transform.type === 'mapper') yield transform.fnc(value)
       if (transform.type === 'filter' && transform.fnc(value)) yield value
     }
-  }
-
-  *values(): IterableIterator<T> {
-    if (this._prevIter instanceof RecordsSet) yield* this.applyTransform(this._prevIter)
-    yield* this.applyTransform(super.values())
   }
 }
