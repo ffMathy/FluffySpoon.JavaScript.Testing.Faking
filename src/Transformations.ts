@@ -1,4 +1,4 @@
-import { AllArguments } from "./Arguments";
+import { AllArguments } from './Arguments';
 
 type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
     TFunc extends {
@@ -70,6 +70,7 @@ export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSub
     received(amount?: number): TerminatingObject<K>;
     didNotReceive(): TerminatingObject<K>;
     mimick(instance: T): void;
+    clearSubstitute(clearType?: ClearType): void;
 }
 
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
@@ -92,5 +93,6 @@ type ObjectSubstituteTransformation<T extends Object> = {
 
 type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;
 
-export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive'>;
+export type ClearType = 'all' | 'receivedCalls' | 'substituteValues';
+export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive' | 'clearSubstitute'>;
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;

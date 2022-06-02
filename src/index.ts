@@ -1,6 +1,6 @@
-import { Substitute, SubstituteOf } from './Substitute';
+import { Substitute, SubstituteOf } from './Substitute'
 
-export { Arg } from './Arguments';
-export { Substitute, SubstituteOf };
+export { Arg } from './Arguments'
+export { Substitute, SubstituteOf }
 
-export default Substitute;
+export default Substitute

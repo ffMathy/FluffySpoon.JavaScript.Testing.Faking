@@ -1,41 +1,81 @@
-import { Context } from './Context';
-import { ObjectSubstitute, OmitProxyMethods, DisabledSubstituteObject } from './Transformations';
+import { inspect, InspectOptions } from 'util'
 
-export const HandlerKey = Symbol();
-export const AreProxiesDisabledKey = Symbol();
+import { SubstituteBase } from './SubstituteBase'
+import { createSubstituteProxy } from './SubstituteProxy'
+import { Recorder } from './Recorder'
+import { DisabledSubstituteObject, ObjectSubstitute, OmitProxyMethods } from './Transformations'
 
-export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T;
+export type SubstituteOf<T extends Object> = ObjectSubstitute<OmitProxyMethods<T>, T> & T
+type Instantiable<T> = { [SubstituteBase.instance]?: T }
 
-export class Substitute {
-    static for<T>(): SubstituteOf<T> {
-        const objectContext = new Context();
-        return objectContext.rootProxy;
+export class Substitute extends SubstituteBase {
+  private _proxy: Substitute
+  private _recorder: Recorder = new Recorder()
+  private _context: { disableAssertions: boolean } = { disableAssertions: false }
+
+  constructor() {
+    super()
+    this._proxy = createSubstituteProxy(
+      this,
+      {
+        get: (target, _property, _, node) => {
+          if (target.context.disableAssertions) node.disableAssertions()
+        }
+        // apply: (target, _, args, __, proxy) => {
+        // const rootProperty = proxy.get(target, '()', proxy) TODO: Implement to support callable interfaces
+        // return Reflect.apply(rootProperty, rootProperty, args)
+        // }
+      }
+    )
+  }
+
+  static for<T>(): SubstituteOf<T> {
+    const substitute = new this()
+    return substitute.proxy as unknown as SubstituteOf<T>
+  }
+
+  static disableFor<T extends SubstituteOf<unknown> & Instantiable<Substitute>>(substituteProxy: T): DisabledSubstituteObject<T> {
+    const substitute = substituteProxy[SubstituteBase.instance]
+
+    const disableProxy = <
+      TParameters extends unknown[],
+      TReturnType extends unknown
+    >(reflection: (...args: TParameters) => TReturnType): typeof reflection => (...args) => {
+      substitute.context.disableAssertions = true
+      const reflectionResult = reflection(...args)
+      substitute.context.disableAssertions = false
+      return reflectionResult
     }
 
-    static disableFor<T extends ObjectSubstitute<OmitProxyMethods<any>>>(substitute: T): DisabledSubstituteObject<T> {
-        const thisProxy = substitute as any; // rootProxy
-        const thisExposedProxy = thisProxy[HandlerKey]; // Context
+    return new Proxy(substitute.proxy, {
+      get: function (target, property) {
+        return disableProxy(Reflect.get)(target, property)
+      },
+      set: function (target, property, value) {
+        return disableProxy(Reflect.set)(target, property, value)
+      },
+      apply: function (target, _, args) {
+        return disableProxy(Reflect.apply)(target, _, args)
+      }
+    }) as DisabledSubstituteObject<T>
+  }
 
-        const disableProxy = <K extends Function>(f: K): K => {
-            return function () {
-                thisProxy[AreProxiesDisabledKey] = true;
-                const returnValue = f.call(thisExposedProxy, ...arguments);
-                thisProxy[AreProxiesDisabledKey] = false;
-                return returnValue;
-            } as any;
-        };
+  public get proxy() {
+    return this._proxy
+  }
 
-        return new Proxy(() => { }, {
-            apply: function (_target, _this, args) {
-                return disableProxy(thisExposedProxy.getStateApply)(...arguments)
-            },
-            set: function (_target, property, value) {
-                return disableProxy(thisExposedProxy.setStateSet)(...arguments)
-            },
-            get: function (_target, property) {
-                thisExposedProxy._initialState.handleGet(thisExposedProxy, property)
-                return disableProxy(thisExposedProxy.getStateGet)(...arguments)
-            }
-        }) as any;
-    }
+  public get recorder() {
+    return this._recorder
+  }
+
+  public get context() {
+    return this._context
+  }
+
+  protected printableForm(_: number, options: InspectOptions): string {
+    const records = inspect(this.recorder, options)
+
+    const instanceName = 'Substitute' // Substitute<FooThing>
+    return instanceName + ' {' + records + '\n}'
+  }
 }

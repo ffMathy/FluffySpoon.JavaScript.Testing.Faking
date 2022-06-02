@@ -1,73 +1,35 @@
-import { inspect } from 'util';
-import { PropertyType, stringifyArguments, stringifyCalls, Call } from './Utilities';
+import { inspect, InspectOptions, types } from 'util'
+import { SubstituteException } from './SubstituteException'
 
-export class SubstituteJS {
-  private _lastRegisteredSubstituteJSMethodOrProperty: string
-  set lastRegisteredSubstituteJSMethodOrProperty(value: string) {
-    this._lastRegisteredSubstituteJSMethodOrProperty = value;
-  }
-  get lastRegisteredSubstituteJSMethodOrProperty() {
-    return typeof this._lastRegisteredSubstituteJSMethodOrProperty === 'undefined' ? 'root' : this._lastRegisteredSubstituteJSMethodOrProperty;
-  }
-  [Symbol.toPrimitive]() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  [Symbol.toStringTag]() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  [Symbol.iterator]() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  [inspect.custom]() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  valueOf() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  $$typeof() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  toString() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  inspect() {
-    return `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-  }
-  length = `[class ${this.constructor.name}] -> ${this.lastRegisteredSubstituteJSMethodOrProperty}`;
-}
-
-enum SubstituteExceptionTypes {
-  CallCountMissMatch = 'CallCountMissMatch',
-  PropertyNotMocked = 'PropertyNotMocked'
-}
-
-export class SubstituteException extends Error {
-  type: SubstituteExceptionTypes
-  constructor(msg: string, exceptionType?: SubstituteExceptionTypes) {
-    super(msg);
-    Error.captureStackTrace(this, SubstituteException);
-    this.name = new.target.name;
-    this.type = exceptionType
+const instance = Symbol('Substitute:Instance')
+type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
+export abstract class SubstituteBase extends Function {
+  constructor() {
+    super()
   }
 
-  static forCallCountMissMatch(
-    callCount: { expected: number | null, received: number },
-    property: { type: PropertyType, value: PropertyKey },
-    calls: { expectedArguments: any[], received: Call[] }
-  ) {
-    const message = 'Expected ' + (callCount.expected === null ? '1 or more' : callCount.expected) +
-      ' call' + (callCount.expected === 1 ? '' : 's') + ' to the ' + property.type + ' ' + property.value.toString() +
-      ' with ' + stringifyArguments(calls.expectedArguments) + ', but received ' + (callCount.received === 0 ? 'none' : callCount.received) +
-      ' of such call' + (callCount.received === 1 ? '' : 's') +
-      '.\nAll calls received to ' + property.type + ' ' + property.value.toString() + ':' + stringifyCalls(calls.received);
-    return new this(message, SubstituteExceptionTypes.CallCountMissMatch);
+  static instance: typeof instance = instance
+
+  protected isSpecialProperty(property: PropertyKey): property is SpecialProperty {
+    return property === SubstituteBase.instance || property === inspect.custom || property === 'then'
   }
 
-  static forPropertyNotMocked(property: PropertyKey) {
-    return new this(`There is no mock for property: ${String(property)}`, SubstituteExceptionTypes.PropertyNotMocked)
+  protected evaluateSpecialProperty(property: SpecialProperty) {
+    switch (property) {
+      case SubstituteBase.instance:
+        return this
+      case inspect.custom:
+        return this.printableForm.bind(this)
+      case 'then':
+        return
+      default:
+        throw SubstituteException.generic(`Evaluation of special property ${property} is not implemented`)
+    }
   }
 
-  static generic(message: string) {
-    return new this(message)
+  protected abstract printableForm(_: number, options: InspectOptions): string
+
+  public [inspect.custom](...args: [_: number, options: InspectOptions]): string {
+    return types.isProxy(this) ? this[inspect.custom](...args) : this.printableForm(...args)
   }
 }
