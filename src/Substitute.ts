@@ -29,7 +29,7 @@ export class Substitute extends SubstituteBase {
     )
   }
 
-  static for<T>(): SubstituteOf<T> {
+  static for<T extends Object>(): SubstituteOf<T> {
     const substitute = new this()
     return substitute.proxy as unknown as SubstituteOf<T>
   }
