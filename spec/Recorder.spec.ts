@@ -16,7 +16,7 @@ const otherNode = nodeFactory('otherNode')
 const otherNodeDifferentInstance = nodeFactory('otherNode')
 
 test('adds all records once only', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addRecord(node)
   recorder.addRecord(node)
   recorder.addRecord(otherNode)
@@ -28,7 +28,7 @@ test('adds all records once only', t => {
 })
 
 test('indexes all records correctly', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
@@ -48,7 +48,7 @@ test('indexes all records correctly', t => {
 })
 
 test('returns all sibling nodes', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
   recorder.addIndexedRecord(otherNodeDifferentInstance)
@@ -64,7 +64,7 @@ test('returns all sibling nodes', t => {
 })
 
 test('clears recorded nodes by a given filter function', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
   recorder.addIndexedRecord(otherNodeDifferentInstance)

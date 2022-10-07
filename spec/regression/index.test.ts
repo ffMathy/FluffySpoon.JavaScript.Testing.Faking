@@ -39,7 +39,7 @@ export class Example {
 }
 
 let instance: Example
-let substitute: ObjectSubstitute<OmitProxyMethods<Example>, Example>
+let substitute: ObjectSubstitute<Example>
 
 function initialize() {
 	instance = new Example()
