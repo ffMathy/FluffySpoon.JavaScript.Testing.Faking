@@ -1,5 +1,6 @@
+import { PropertyType } from './Types'
 import { RecordedArguments } from './RecordedArguments'
-import { PropertyType, stringifyArguments, stringifyCalls, textModifier, plurify } from './Utilities'
+import { PropertyType as PropertyTypeMap, stringifyArguments, stringifyCalls, textModifier, plurify } from './Utilities'
 
 enum SubstituteExceptionTypes {
   CallCountMissMatch = 'CallCountMissMatch',
@@ -26,7 +27,7 @@ export class SubstituteException extends Error {
       count.expected === undefined ? '1 or more' : count.expected.toString()
     )} ${plurify('call', count.expected)} to the ${textModifier.italic(property.type)} ${propertyValue}`
 
-    const messageForMethods = property.type === PropertyType.method ? ` with ${stringifyArguments(calls.expected)}` : '' // should also apply for setters (instead of methods only)
+    const messageForMethods = property.type === PropertyTypeMap.Method ? ` with ${stringifyArguments(calls.expected)}` : '' // should also apply for setters (instead of methods only)
     const receivedMessage = `, but received ${textModifier.bold(count.received < 1 ? 'none' : count.received.toString())} of such calls.`
 
     const callTrace = calls.received.length > 0
