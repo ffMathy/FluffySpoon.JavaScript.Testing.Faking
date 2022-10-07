@@ -1,4 +1,5 @@
-import { AllArguments } from './Arguments';
+import type { AllArguments } from './Arguments';
+import type { ClearType, FirstLevelMethod } from './Types';
 
 type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
     TFunc extends {
@@ -66,13 +67,6 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
     mimicks: OneArgumentRequiredFunction<(...args: TArguments) => TReturnType, void>;
 }
 
-export type ObjectSubstitute<T extends Object, K extends Object = T> = ObjectSubstituteTransformation<T> & {
-    received(amount?: number): TerminatingObject<K>;
-    didNotReceive(): TerminatingObject<K>;
-    mimick(instance: T): void;
-    clearSubstitute(clearType?: ClearType): void;
-}
-
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
 
 type TerminatingObject<T> = {
@@ -83,7 +77,7 @@ type TerminatingObject<T> = {
     T[P];
 }
 
-type ObjectSubstituteTransformation<T extends Object> = {
+type ObjectSubstituteTransformation<K, T = OmitProxyMethods<K>> = {
     [P in keyof T]:
     T[P] extends (...args: infer F) => infer R ?
     F extends [] ? NoArgumentFunctionSubstitute<R> :
@@ -91,8 +85,11 @@ type ObjectSubstituteTransformation<T extends Object> = {
     PropertySubstitute<T[P]>;
 }
 
-type Omit<T, K extends keyof any> = Pick<T, Exclude<keyof T, K>>;
-
-export type ClearType = 'all' | 'receivedCalls' | 'substituteValues';
-export type OmitProxyMethods<T extends any> = Omit<T, 'mimick' | 'received' | 'didNotReceive' | 'clearSubstitute'>;
-export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<OmitProxyMethods<infer K>, infer K> ? K : never;
+export type OmitProxyMethods<T> = Omit<T, FirstLevelMethod>;
+export type ObjectSubstitute<T> = ObjectSubstituteTransformation<T> & {
+    received(amount?: number): TerminatingObject<T>;
+    didNotReceive(): TerminatingObject<T>;
+    mimick(instance: OmitProxyMethods<T>): void;
+    clearSubstitute(clearType?: ClearType): void;
+}
+export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<infer K> ? K : never;
