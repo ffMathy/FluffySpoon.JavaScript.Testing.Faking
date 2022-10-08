@@ -62,6 +62,7 @@ export class Recorder<TRecord> {
   }
 
   private getIdentity(record: TRecord): PropertyKey {
-    return record[this._identity as keyof TRecord] as PropertyKey
+    // for typescript < 4.6, we need to intersect PropertyKey with the default type
+    return record[this._identity as keyof TRecord] as TRecord[keyof TRecord] & PropertyKey
   }
 }
