@@ -7,14 +7,14 @@ import { SubstituteException } from './SubstituteException'
 import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType } from './Types'
 
 const instance = Symbol('Substitute:Instance')
-type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
-type RootContext = { substituteMethodsEnabled: boolean }
-
 const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNode>> = {
   all: () => true,
   receivedCalls: node => !node.hasContext,
   substituteValues: node => node.isSubstitution
 }
+
+type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
+type RootContext = { substituteMethodsEnabled: boolean }
 
 export class SubstituteNode extends SubstituteNodeBase {
   private _proxy: SubstituteNode
@@ -30,7 +30,7 @@ export class SubstituteNode extends SubstituteNodeBase {
   private constructor(key: PropertyKey, parent?: SubstituteNode) {
     super(key, parent)
     if (this.isRoot()) this._rootContext = { substituteMethodsEnabled: true }
-    if (this.isIntermediateNode()) this._rootContext = this.root.rootContext
+    else this._rootContext = this.root.rootContext
     this._proxy = new Proxy(
       this,
       {
@@ -66,11 +66,11 @@ export class SubstituteNode extends SubstituteNodeBase {
     return new this(key, parent)
   }
 
-  public get proxy() {
+  public get proxy(): SubstituteNode {
     return this._proxy
   }
 
-  public get rootContext() {
+  public get rootContext(): RootContext {
     return this._rootContext
   }
 
@@ -90,11 +90,11 @@ export class SubstituteNode extends SubstituteNodeBase {
     return isAssertionMethod(this.context)
   }
 
-  get property() {
+  get property(): PropertyKey {
     return this.key
   }
 
-  get propertyType() {
+  get propertyType(): PropertyType {
     return this._propertyType
   }
 
@@ -102,11 +102,11 @@ export class SubstituteNode extends SubstituteNodeBase {
     return this._accessorType
   }
 
-  get recordedArguments() {
+  get recordedArguments(): RecordedArguments {
     return this._recordedArguments
   }
 
-  public get disabledSubstituteMethods() {
+  public get disabledSubstituteMethods(): boolean {
     return this._disabledSubstituteMethods
   }
 
@@ -134,22 +134,27 @@ export class SubstituteNode extends SubstituteNodeBase {
   }
 
   public clear() {
+    if (!this.recordedArguments.hasArguments()) throw new TypeError('No args')
     const clearType: ClearType = this.recordedArguments.value[0] ?? ClearTypeMap.All
     const filter = clearTypeToFilterMap[clearType]
     this.recorder.clearRecords(filter)
   }
 
   public executeSubstitution(contextArguments: RecordedArguments) {
+    if (!this.hasChild()) throw new TypeError('Substitue node has no child')
+    if (!this.child.recordedArguments.hasArguments()) throw new TypeError('Child args')
+
     const substitutionMethod = this.context as SubstitutionMethod
     const substitutionValue = this.child.recordedArguments.value.length > 1
-      ? this.child.recordedArguments.value.shift()
+      ? this.child.recordedArguments.value?.shift()
       : this.child.recordedArguments.value[0]
     switch (substitutionMethod) {
       case 'throws':
         throw substitutionValue
       case 'mimicks':
-        const argumentsToApply = this.propertyType === PropertyTypeMap.Property ? [] : contextArguments.value
-        return substitutionValue(...argumentsToApply)
+        if (this.propertyType === PropertyTypeMap.Property) return substitutionValue()
+        if (!contextArguments.hasArguments()) throw new TypeError('Context arguments cannot be undefined')
+        return substitutionValue(...contextArguments.value)
       case 'resolves':
         return Promise.resolve(substitutionValue)
       case 'rejects':
@@ -163,6 +168,7 @@ export class SubstituteNode extends SubstituteNodeBase {
 
   public executeAssertion(): void | never {
     if (!this.isIntermediateNode()) throw new Error('Not possible')
+    if (!this.parent.recordedArguments.hasArguments()) throw new TypeError('Parent args')
     const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
 
     const expectedCount = this.parent.recordedArguments.value[0] ?? undefined
@@ -257,7 +263,7 @@ export class SubstituteNode extends SubstituteNodeBase {
     const label = this.isSubstitution
       ? '=> '
       : this.isAssertion
-        ? `${this.child.property.toString()}`
+        ? `${this.child?.property.toString()}`
         : ''
     const s = hasContext
       ? ` ${label}${inspect(this.child?.recordedArguments, options)}`

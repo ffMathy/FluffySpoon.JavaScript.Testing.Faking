@@ -4,7 +4,7 @@ type MapperFunction<T, R> = (item: T) => R
 type Transformer<T, R> = { type: 'filter', predicate: FilterFunction<T> } | { type: 'mapper', predicate: MapperFunction<T, R> }
 
 export class RecordsSet<T> extends Set<T> {
-  private _transformer: Transformer<any, any>
+  private _transformer?: Transformer<any, any>
   private readonly _prevIter?: RecordsSet<T>
 
   constructor(value?: Iterable<T> | readonly T[]) {

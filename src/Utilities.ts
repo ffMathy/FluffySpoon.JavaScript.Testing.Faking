@@ -25,9 +25,9 @@ export const ClearType = {
 } as const
 
 export const stringifyArguments = (args: RecordedArguments) => textModifier.faint(
-  args.hasNoArguments
-    ? 'no arguments'
-    : `arguments [${args.value.map(x => inspect(x, { colors: true })).join(', ')}]`
+  args.hasArguments() ?
+    `arguments [${args.value.map(x => inspect(x, { colors: true })).join(', ')}]` :
+    'no arguments'
 )
 
 export const stringifyCalls = (calls: RecordedArguments[]) => {
@@ -45,4 +45,4 @@ export const textModifier = {
   italic: (str: string) => baseTextModifier(str, 3, 23)
 }
 
-export const plurify = (str: string, count: number) => `${str}${count === 1 ? '' : 's'}`
+export const plurify = (str: string, count?: number) => `${str}${count === 1 ? '' : 's'}`

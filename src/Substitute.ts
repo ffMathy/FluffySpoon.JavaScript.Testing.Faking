@@ -2,16 +2,16 @@ import { DisabledSubstituteObject, ObjectSubstitute } from './Transformations'
 import { SubstituteNode } from './SubstituteNode'
 
 export type SubstituteOf<T> = ObjectSubstitute<T> & T
-type InstantiableSubstitute = SubstituteOf<unknown> & { [SubstituteNode.instance]?: SubstituteNode }
+type InstantiableSubstitute<T extends SubstituteOf<unknown>> = T & { [SubstituteNode.instance]: SubstituteNode }
 
 export class Substitute {
-  static for<T>(): SubstituteOf<T> {
+  public static for<T>(): SubstituteOf<T> {
     const substitute = SubstituteNode.createRoot()
     return substitute.proxy as unknown as SubstituteOf<T>
   }
 
-  static disableFor<T extends InstantiableSubstitute>(substituteProxy: T): DisabledSubstituteObject<T> {
-    const substitute = substituteProxy[SubstituteNode.instance]
+  public static disableFor<T extends SubstituteOf<unknown>>(substituteProxy: T): DisabledSubstituteObject<T> {
+    const substitute = this.extractSubstituteNodeFromSubstitute(substituteProxy as InstantiableSubstitute<T>)
 
     const disableProxy = <
       TParameters extends unknown[],
@@ -34,5 +34,9 @@ export class Substitute {
         return disableProxy(Reflect.apply)(target, _, args)
       }
     }) as DisabledSubstituteObject<T>
+  }
+
+  private static extractSubstituteNodeFromSubstitute(substitute: InstantiableSubstitute<SubstituteOf<unknown>>): SubstituteNode {
+    return substitute[SubstituteNode.instance]
   }
 }

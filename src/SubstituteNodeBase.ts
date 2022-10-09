@@ -19,7 +19,7 @@ export abstract class SubstituteNodeBase extends Function {
       return
     }
 
-    parent.child = this
+    parent.assignChild(this)
     this._parent = parent
     this._recorder = parent.recorder
     this._root = parent.root
@@ -40,14 +40,10 @@ export abstract class SubstituteNodeBase extends Function {
   }
 
   protected get parent(): this | undefined {
-    return this._parent as this
+    return this._parent
   }
 
-  protected set child(child: this) {
-    this._child = child
-  }
-
-  protected get child(): this {
+  protected get child(): this | undefined {
     return this._child
   }
 
@@ -57,6 +53,10 @@ export abstract class SubstituteNodeBase extends Function {
 
   protected get depth(): number {
     return this._depth
+  }
+
+  private assignChild(child: this): void {
+    this._child = child
   }
 
   protected isRoot(): this is this & { parent: undefined } {
@@ -69,6 +69,10 @@ export abstract class SubstituteNodeBase extends Function {
 
   protected getAllSiblings(): RecordsSet<this> {
     return this.recorder.getSiblingsOf(this)
+  }
+
+  protected hasChild(): this is this & { child: ThisType<SubstituteNodeBase> } {
+    return this.child instanceof SubstituteNodeBase
   }
 
   public abstract read(): void

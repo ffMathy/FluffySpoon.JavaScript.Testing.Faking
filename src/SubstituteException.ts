@@ -8,7 +8,7 @@ enum SubstituteExceptionTypes {
 }
 
 export class SubstituteException extends Error {
-  type: SubstituteExceptionTypes
+  type?: SubstituteExceptionTypes
 
   constructor(msg: string, exceptionType?: SubstituteExceptionTypes) {
     super(msg)
@@ -18,7 +18,7 @@ export class SubstituteException extends Error {
   }
 
   static forCallCountMissMatch(
-    count: { expected: number | null, received: number },
+    count: { expected: number | undefined, received: number },
     property: { type: PropertyType, value: PropertyKey },
     calls: { expected: RecordedArguments, received: RecordedArguments[] }
   ) {

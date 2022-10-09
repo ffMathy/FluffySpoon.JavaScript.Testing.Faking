@@ -43,13 +43,10 @@ export class Recorder<TRecord> {
     return siblings.filter(sibling => sibling !== record)
   }
 
-  public clearRecords(filterFunction: FilterFunction<TRecord>) {
+  public clearRecords(filterFunction: FilterFunction<TRecord>): void {
     const recordsToRemove = this.records.filter(filterFunction)
     for (const record of recordsToRemove) {
-      const id = this.getIdentity(record)
-      const indexedRecord = this.indexedRecords.get(id)
-      indexedRecord.delete(record)
-      if (indexedRecord.size === 0) this.indexedRecords.delete(id)
+      this.clearIndexedRecord(record)
       this.records.delete(record)
     }
   }
@@ -64,5 +61,13 @@ export class Recorder<TRecord> {
   private getIdentity(record: TRecord): PropertyKey {
     // for typescript < 4.6, we need to intersect PropertyKey with the default type
     return record[this._identity as keyof TRecord] as TRecord[keyof TRecord] & PropertyKey
+  }
+
+  private clearIndexedRecord(record: TRecord): void {
+    const id = this.getIdentity(record)
+    const indexedRecord = this.indexedRecords.get(id)
+    if (typeof indexedRecord === 'undefined') return
+    indexedRecord.delete(record)
+    if (indexedRecord.size === 0) this.indexedRecords.delete(id)
   }
 }

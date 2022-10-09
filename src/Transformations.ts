@@ -45,7 +45,7 @@ export type FunctionSubstitute<TArguments extends any[], TReturnType> =
     ((allArguments: AllArguments<TArguments>) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
 export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
-export type PropertySubstitute<TReturnType> = (TReturnType & Partial<NoArgumentMockObjectMixin<TReturnType>>);
+export type PropertySubstitute<TReturnType> = (TReturnType & NoArgumentMockObjectMixin<TReturnType>);
 
 type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType;
 
