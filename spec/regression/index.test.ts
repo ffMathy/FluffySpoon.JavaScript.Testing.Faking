@@ -96,7 +96,7 @@ test('resolving promises works', async t => {
 
 	substitute.returnPromise().resolves(1338)
 
-	t.is(1338, await substitute.returnPromise())
+	t.is(1338, await substitute.returnPromise() as number)
 })
 
 test('class void returns', t => {
