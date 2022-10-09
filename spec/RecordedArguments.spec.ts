@@ -20,24 +20,24 @@ test('records values and classifies them correctly', t => {
   const emptyArguments = RecordedArguments.from([])
   t.deepEqual(emptyArguments.value, [])
   t.is(emptyArguments.argumentsClass, 'plain')
-  t.is(emptyArguments.hasNoArguments, false)
+  t.is(emptyArguments.hasArguments(), true)
 
   const primitivesOnlyArguments = RecordedArguments.from([1, 'Substitute', false, testSymbol, undefined, null, testFunc, {}])
   t.deepEqual(primitivesOnlyArguments.value, [1, 'Substitute', false, testSymbol, undefined, null, testFunc, {}])
   t.is(primitivesOnlyArguments.argumentsClass, 'plain')
-  t.is(primitivesOnlyArguments.hasNoArguments, false)
+  t.is(primitivesOnlyArguments.hasArguments(), true)
 
   const anyArg = Arg.any('any')
   const withSingleArgumentArguments = RecordedArguments.from([1, 'Substitute', false, testSymbol, undefined, null, testFunc, {}, anyArg])
   t.deepEqual(withSingleArgumentArguments.value, [1, 'Substitute', false, testSymbol, undefined, null, testFunc, {}, anyArg])
   t.is(withSingleArgumentArguments.argumentsClass, 'with-predicate')
-  t.is(withSingleArgumentArguments.hasNoArguments, false)
+  t.is(withSingleArgumentArguments.hasArguments(), true)
 
   const allArg = Arg.all()
   const allArgumentArguments = RecordedArguments.from([allArg])
   t.deepEqual(allArgumentArguments.value, [allArg])
   t.is(allArgumentArguments.argumentsClass, 'wildcard')
-  t.is(allArgumentArguments.hasNoArguments, false)
+  t.is(allArgumentArguments.hasArguments(), true)
 })
 
 test('creates a valid instance for no arguments', t => {
@@ -45,7 +45,7 @@ test('creates a valid instance for no arguments', t => {
 
   t.is(args.value, undefined)
   t.is(args.argumentsClass, undefined)
-  t.is(args.hasNoArguments, true)
+  t.is(args.hasArguments(), false)
 })
 
 test('sorts correctly objects with RecordedArguments', t => {

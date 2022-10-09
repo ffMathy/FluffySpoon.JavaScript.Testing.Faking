@@ -43,7 +43,7 @@ test('mimicks a method with Arg.all', t => {
 test('mimicks a method with optional arguments', t => {
   const calculator = Substitute.for<Calculator>()
   const multiplyOneArgMimicks = (a: number) => a * a
-  const multiplyMimicks = (a: number, b?: number) => a * b
+  const multiplyMimicks = (a: number, b?: number) => a * (b ?? 0)
 
   calculator.multiply(0, Arg.is((b: number) => b > 10 && b < 20)).mimicks(multiplyMimicks)
   calculator.multiply(Arg.any('number'), Arg.is((b: number) => b === 2)).mimicks(multiplyMimicks)

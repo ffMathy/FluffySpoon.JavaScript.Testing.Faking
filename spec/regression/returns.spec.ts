@@ -7,16 +7,21 @@ interface Calculator {
   add(a: number, b: number): number
   multiply(a: number, b?: number): number
   clear(): void
+  other(): Calculator
   getMemory(): Promise<number>
   viewResult(back?: number): number
   heavyOperation(...input: number[]): Promise<boolean>
   isEnabled: boolean
+  isEnabled2: Calculator
   model: Promise<string>
 };
 
 test('returns a primitive value for method with no arguments', t => {
   const calculator = Substitute.for<Calculator>()
   calculator.clear().returns()
+  // calculator.add(1, 2).toExponential()
+  // calculator.isEnabled2.viewResult().returns(3)
+  // calculator.other().viewResult().returns(2)
 
   t.is(calculator.clear(), void 0)
 })

@@ -40,11 +40,11 @@ test('indexes all records correctly', t => {
 
   const nodeSet = recorder.indexedRecords.get(node.key)
   t.true(nodeSet instanceof RecordsSet)
-  t.deepEqual([...nodeSet], [node])
+  t.deepEqual([...nodeSet!], [node])
 
   const otherNodeSet = recorder.indexedRecords.get(otherNode.key)
   t.true(otherNodeSet instanceof RecordsSet)
-  t.deepEqual([...otherNodeSet], [otherNode, otherNodeDifferentInstance])
+  t.deepEqual([...otherNodeSet!], [otherNode, otherNodeDifferentInstance])
 })
 
 test('returns all sibling nodes', t => {
@@ -71,7 +71,7 @@ test('clears recorded nodes by a given filter function', t => {
 
   recorder.clearRecords(n => n.key === otherNode.key)
   t.deepEqual([...recorder.records], [node])
-  t.deepEqual([...recorder.indexedRecords.get(node.key)], [node])
+  t.deepEqual([...recorder.indexedRecords.get(node.key)!], [node])
   t.is(recorder.indexedRecords.get(otherNode.key), undefined)
 
   recorder.clearRecords(_ => true)

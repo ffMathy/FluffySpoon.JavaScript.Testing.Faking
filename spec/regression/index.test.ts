@@ -1,7 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg } from '../../src'
-import { OmitProxyMethods, ObjectSubstitute } from '../../src/Transformations'
+import { Substitute, Arg, SubstituteOf } from '../../src'
 
 class Dummy {
 
@@ -34,12 +33,12 @@ export class Example {
 	}
 
 	bar(a: number, b?: number): number {
-		return a + b || 0
+		return a + (b ?? 0)
 	}
 }
 
 let instance: Example
-let substitute: ObjectSubstitute<Example>
+let substitute: SubstituteOf<Example>
 
 function initialize() {
 	instance = new Example()
@@ -69,21 +68,26 @@ test('class with method called \'received\' can be used for call count verificat
 test('class string field set received', t => {
 	initialize()
 
-	substitute.v = undefined
-	substitute.v = null
-	substitute.v = 'hello'
-	substitute.v = 'hello'
-	substitute.v = 'world'
+	const runLogic = (example: Example) => {
+		example.v = undefined
+		example.v = null
+		example.v = 'hello'
+		example.v = 'hello'
+		example.v = 'world'
+	}
+
+	runLogic(substitute)
+
 
 	t.notThrows(() => substitute.received().v = 'hello')
 	t.notThrows(() => substitute.received(5).v = Arg.any())
 	t.notThrows(() => substitute.received().v = Arg.any())
 	t.notThrows(() => substitute.received(2).v = 'hello')
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => x && x.indexOf('ll') > -1))
+	t.notThrows(() => substitute.received(2).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
 
 	t.throws(() => substitute.received(2).v = Arg.any())
 	t.throws(() => substitute.received(1).v = Arg.any())
-	t.throws(() => substitute.received(1).v = Arg.is(x => x && x.indexOf('ll') > -1))
+	t.throws(() => substitute.received(1).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
 	t.throws(() => substitute.received(3).v = 'hello')
 })
 
