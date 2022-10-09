@@ -8,10 +8,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: 14
+          cache: 'npm'
       - run: npm ci --ignore-scripts
       - run: npm test
 
@@ -19,11 +20,12 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: 14
           registry-url: https://registry.npmjs.org/
+          cache: 'npm'
       - run: npm ci --ignore-scripts
       - run: npm run build
       - run: echo "tag=latest" >> $GITHUB_ENV
@@ -41,11 +43,12 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-node@v2
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
         with:
           node-version: 14
           registry-url: https://npm.pkg.github.com/
+          cache: 'npm'
       - run: npm ci --ignore-scripts
       - run: npm run build
       - run: echo "tag=latest" >> $GITHUB_ENV
