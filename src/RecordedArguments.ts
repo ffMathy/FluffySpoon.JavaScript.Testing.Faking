@@ -3,15 +3,11 @@ import { Argument, AllArguments } from './Arguments'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 export class RecordedArguments {
-  private _argumentsClass: ArgumentsClass
+  private _argumentsClass?: ArgumentsClass
   private _value?: any[]
-  private readonly _hasNoArguments: boolean = false
 
   private constructor(rawArguments: any[] | void) {
-    if (typeof rawArguments === 'undefined') {
-      this._hasNoArguments = true
-      return this
-    }
+    if (typeof rawArguments === 'undefined') return this
 
     this._argumentsClass = this.classifyArguments(rawArguments)
     this._value = rawArguments
@@ -42,7 +38,7 @@ export class RecordedArguments {
     })
   }
 
-  get argumentsClass(): ArgumentsClass {
+  get argumentsClass(): ArgumentsClass | undefined {
     return this._argumentsClass
   }
 
@@ -50,15 +46,14 @@ export class RecordedArguments {
     return this._value
   }
 
-  get hasNoArguments(): boolean {
-    return this._hasNoArguments
+  public hasArguments(): this is this & { argumentsClass: ArgumentsClass, value: any[] } {
+    return Array.isArray(this._value)
   }
 
-  public match(other: RecordedArguments) {
+  public match(other: RecordedArguments): boolean {
     if (this.argumentsClass === 'wildcard' || other.argumentsClass === 'wildcard') return true
-    if (this.hasNoArguments || other.hasNoArguments) return this.hasNoArguments && other.hasNoArguments
+    if (!this.hasArguments() || !other.hasArguments()) return !this.hasArguments() && !other.hasArguments()
     if (this.value.length !== other.value.length) return false
-
     return this.value.every((argument, index) => this.areArgumentsEqual(argument, other.value[index]))
   }
 
