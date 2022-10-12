@@ -5,7 +5,7 @@ on:
     types: [created]
 
 jobs:
-  build:
+  build-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -17,7 +17,7 @@ jobs:
       - run: npm test
 
   publish-npm:
-    needs: build
+    needs: build-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -37,7 +37,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
 
   publish-github:
-    needs: build
+    needs: build-test
     runs-on: ubuntu-latest
     permissions:
       contents: read
