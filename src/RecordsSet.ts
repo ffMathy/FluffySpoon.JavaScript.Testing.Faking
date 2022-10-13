@@ -1,14 +1,16 @@
-type FilterFunction<T> = (item: T) => boolean
+import { FilterFunction } from './Types'
+
 type MapperFunction<T, R> = (item: T) => R
-type Transformer<T, R> = { type: 'filter', fnc: FilterFunction<T> } | { type: 'mapper', fnc: MapperFunction<T, R> }
+type Transformer<T, R> = { type: 'filter', predicate: FilterFunction<T> } | { type: 'mapper', predicate: MapperFunction<T, R> }
 
 export class RecordsSet<T> extends Set<T> {
-  private _transformer: Transformer<any, any>
+  private _transformer?: Transformer<any, any>
   private readonly _prevIter?: RecordsSet<T>
 
   constructor(value?: Iterable<T> | readonly T[]) {
-    super(value instanceof RecordsSet ? undefined : value)
-    if (value instanceof RecordsSet) this._prevIter = value
+    const isRecordSet = value instanceof RecordsSet
+    super(isRecordSet ? undefined : value)
+    if (isRecordSet) this._prevIter = value
   }
 
   get size(): number {
@@ -17,15 +19,15 @@ export class RecordsSet<T> extends Set<T> {
     return currentSize
   }
 
-  filter(predicate: (item: T) => boolean): RecordsSet<T> {
-    const newInstance = new RecordsSet<T>(this)
-    newInstance._transformer = { type: 'filter', fnc: predicate }
+  filter(predicate: FilterFunction<T>): RecordsSet<T> {
+    const newInstance = new RecordsSet<T>(this as RecordsSet<T>)
+    newInstance._transformer = { type: 'filter', predicate }
     return newInstance
   }
 
-  map<R>(predicate: (item: T) => R): RecordsSet<R> {
+  map<R>(predicate: MapperFunction<T, R>): RecordsSet<R> {
     const newInstance = new RecordsSet<R | T>(this)
-    newInstance._transformer = { type: 'mapper', fnc: predicate }
+    newInstance._transformer = { type: 'mapper', predicate }
     return newInstance as RecordsSet<R>
   }
 
@@ -41,7 +43,10 @@ export class RecordsSet<T> extends Set<T> {
   }
 
   clear() {
-    Object.defineProperty(this, '_prevIter', { value: undefined })
+    if (this._prevIter instanceof RecordsSet) {
+      this._prevIter.clear()
+      Object.defineProperty(this, '_prevIter', { value: undefined })
+    }
     super.clear()
   }
 
@@ -54,12 +59,17 @@ export class RecordsSet<T> extends Set<T> {
     yield* this.applyTransform(super.values())
   }
 
-  private *applyTransform(itarable: Iterable<T>): IterableIterator<T> {
+  private * applyTransform(itarable: Iterable<T>): IterableIterator<T> {
     const transform = this._transformer
     if (typeof transform === 'undefined') return yield* itarable
     for (const value of itarable) {
-      if (transform.type === 'mapper') yield transform.fnc(value)
-      if (transform.type === 'filter' && transform.fnc(value)) yield value
+      switch (transform.type) {
+        case 'filter':
+          if (transform.predicate(value)) yield value
+          break
+        case 'mapper': yield transform.predicate(value)
+          break
+      }
     }
   }
 }

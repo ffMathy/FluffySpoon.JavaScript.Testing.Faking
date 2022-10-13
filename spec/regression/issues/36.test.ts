@@ -42,6 +42,7 @@ class Service {
         await this._database.storeUpdates(updateData)
     }
     private getData(arg?: Key) {
+        if (typeof arg === 'undefined') throw new TypeError('Key is undefined')
         return this._database.getUpdates(arg)
     }
 }

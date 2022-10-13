@@ -226,20 +226,6 @@ Substitute.disableFor(fake).received(1337);
 fake.received().received(1337);
 ```
 
-## Strict mode
-If you have `strict` set to `true` in your `tsconfig.json`, you may need to toggle off strict null checks. The framework does not currently support this.
-
-However, it is only needed for your test projects anyway.
-
-```json
-{
-    "compilerOptions": {
-        "strict": true,
-        "strictNullChecks": false
-    }
-}
-```
-
 ## Contributors
 
 ### Code Contributors

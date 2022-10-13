@@ -16,7 +16,7 @@ const otherNode = nodeFactory('otherNode')
 const otherNodeDifferentInstance = nodeFactory('otherNode')
 
 test('adds all records once only', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addRecord(node)
   recorder.addRecord(node)
   recorder.addRecord(otherNode)
@@ -28,7 +28,7 @@ test('adds all records once only', t => {
 })
 
 test('indexes all records correctly', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
@@ -40,15 +40,15 @@ test('indexes all records correctly', t => {
 
   const nodeSet = recorder.indexedRecords.get(node.key)
   t.true(nodeSet instanceof RecordsSet)
-  t.deepEqual([...nodeSet], [node])
+  t.deepEqual([...nodeSet!], [node])
 
   const otherNodeSet = recorder.indexedRecords.get(otherNode.key)
   t.true(otherNodeSet instanceof RecordsSet)
-  t.deepEqual([...otherNodeSet], [otherNode, otherNodeDifferentInstance])
+  t.deepEqual([...otherNodeSet!], [otherNode, otherNodeDifferentInstance])
 })
 
 test('returns all sibling nodes', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
   recorder.addIndexedRecord(otherNodeDifferentInstance)
@@ -64,14 +64,14 @@ test('returns all sibling nodes', t => {
 })
 
 test('clears recorded nodes by a given filter function', t => {
-  const recorder = new Recorder()
+  const recorder = Recorder.withIdentityProperty<SubstituteNodeBase>('key')
   recorder.addIndexedRecord(node)
   recorder.addIndexedRecord(otherNode)
   recorder.addIndexedRecord(otherNodeDifferentInstance)
 
   recorder.clearRecords(n => n.key === otherNode.key)
   t.deepEqual([...recorder.records], [node])
-  t.deepEqual([...recorder.indexedRecords.get(node.key)], [node])
+  t.deepEqual([...recorder.indexedRecords.get(node.key)!], [node])
   t.is(recorder.indexedRecords.get(otherNode.key), undefined)
 
   recorder.clearRecords(_ => true)

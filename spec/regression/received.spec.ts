@@ -64,8 +64,11 @@ test('getting a property twice correctly asserts the call count', t => {
 
 test('setting a property twice correctly asserts the call count', t => {
   const calculator = Substitute.for<Calculator>()
-  calculator.isEnabled = true
-  calculator.isEnabled = true
+  const runLogic = (calc: Calculator) => {
+    calc.isEnabled = true
+    calc.isEnabled = true
+  }
+  runLogic(calculator)
 
   calculator.received(2).isEnabled = true
   calculator.received().isEnabled = true

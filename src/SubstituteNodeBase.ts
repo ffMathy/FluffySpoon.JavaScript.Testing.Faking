@@ -1,65 +1,78 @@
-import { SubstituteBase } from './SubstituteBase'
-import { Substitute } from './Substitute'
+import { Recorder } from './Recorder'
 import { RecordsSet } from './RecordsSet'
 
-export abstract class SubstituteNodeBase<T extends SubstituteNodeBase = SubstituteNodeBase<any>> extends SubstituteBase {
-  private _parent?: T
-  private _child?: T
-  private _head: T & { parent: undefined }
-  private _root: Substitute
+export abstract class SubstituteNodeBase extends Function {
+  private _root: this & { parent: undefined }
+  private _parent?: this
+  private _child?: this
+  private _depth: number
 
-  constructor(private _key: PropertyKey, caller: SubstituteBase) {
+  private _recorder: Recorder<this>
+
+  constructor(private _key: PropertyKey, parent?: SubstituteNodeBase) {
     super()
-
-    if (caller instanceof Substitute) {
-      caller.recorder.addIndexedRecord(this)
-      this._root = caller
+    const shouldBeRoot = !this.isNode(parent)
+    if (shouldBeRoot) {
+      this._recorder = Recorder.withIdentityProperty('key')
+      this._root = this as this & { parent: undefined }
+      this._depth = 0
+      return
     }
-    if (!(caller instanceof SubstituteNodeBase)) return
 
-    this._parent = caller as T
-    this._head = caller.head as T & { parent: undefined }
-    caller.child = this
+    parent.assignChild(this)
+    this._parent = parent
+    this._recorder = parent.recorder
+    this._root = parent.root
+    this._depth = parent.depth + 1
+    if (this.parent === this.root) this.recorder.addIndexedRecord(this)
   }
 
-  get key(): PropertyKey {
+  private isNode(node?: SubstituteNodeBase): node is this {
+    return typeof node !== 'undefined'
+  }
+
+  public get key(): PropertyKey {
     return this._key
   }
 
-  set parent(parent: T | undefined) {
-    this._parent = parent
+  public get recorder(): Recorder<this> {
+    return this._recorder
   }
 
-  get parent(): T | undefined {
+  protected get parent(): this | undefined {
     return this._parent
   }
 
-  set child(child: T) {
-    this._child = child
-  }
-
-  get child(): T {
+  protected get child(): this | undefined {
     return this._child
   }
 
-  get head(): T & { parent: undefined } {
-    return this.isHead() ? this : this._head
+  protected get root(): this & { parent: undefined } {
+    return this._root
   }
 
-  protected get root(): Substitute {
-    return this.head._root
+  protected get depth(): number {
+    return this._depth
   }
 
-  protected isHead(): this is T & { parent: undefined } {
+  private assignChild(child: this): void {
+    this._child = child
+  }
+
+  protected isRoot(): this is this & { parent: undefined } {
     return typeof this._parent === 'undefined'
   }
 
-  protected isIntermediateNode(): this is T & { parent: T } {
-    return !this.isHead()
+  protected isIntermediateNode(): this is this & { parent: ThisType<SubstituteNodeBase> } {
+    return !this.isRoot()
   }
 
-  protected getAllSiblings(): RecordsSet<T> {
-    return this.root.recorder.getSiblingsOf(this) as RecordsSet<T>
+  protected getAllSiblings(): RecordsSet<this> {
+    return this.recorder.getSiblingsOf(this)
+  }
+
+  protected hasChild(): this is this & { child: ThisType<SubstituteNodeBase> } {
+    return this.child instanceof SubstituteNodeBase
   }
 
   public abstract read(): void

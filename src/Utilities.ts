@@ -1,29 +1,33 @@
 import { inspect } from 'util'
 import { RecordedArguments } from './RecordedArguments'
+import type { AssertionMethod, ConfigurationMethod, SubstituteMethod, SubstitutionMethod } from './Types'
 
-export enum PropertyType {
-  method = 'method',
-  property = 'property'
-}
+export const PropertyType = {
+  Method: 'method',
+  Property: 'property'
+} as const
 
-export type AssertionMethod = 'received' | 'didNotReceive'
 export const isAssertionMethod = (property: PropertyKey): property is AssertionMethod =>
   property === 'received' || property === 'didNotReceive'
 
-export type ConfigurationMethod = 'clearSubstitute'
 export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => property === 'clearSubstitute'
 
-export type SubstitutionMethod = 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'
 export const isSubstitutionMethod = (property: PropertyKey): property is SubstitutionMethod =>
   property === 'mimicks' || property === 'returns' || property === 'throws' || property === 'resolves' || property === 'rejects'
 
-export const isSubstituteMethod = (property: PropertyKey): property is SubstitutionMethod | ConfigurationMethod | AssertionMethod =>
+export const isSubstituteMethod = (property: PropertyKey): property is SubstituteMethod =>
   isSubstitutionMethod(property) || isConfigurationMethod(property) || isAssertionMethod(property)
 
+export const ClearType = {
+  All: 'all',
+  ReceivedCalls: 'receivedCalls',
+  SubstituteValues: 'substituteValues'
+} as const
+
 export const stringifyArguments = (args: RecordedArguments) => textModifier.faint(
-  args.hasNoArguments
-    ? 'no arguments'
-    : `arguments [${args.value.map(x => inspect(x, { colors: true })).join(', ')}]`
+  args.hasArguments() ?
+    `arguments [${args.value.map(x => inspect(x, { colors: true })).join(', ')}]` :
+    'no arguments'
 )
 
 export const stringifyCalls = (calls: RecordedArguments[]) => {
@@ -41,4 +45,4 @@ export const textModifier = {
   italic: (str: string) => baseTextModifier(str, 3, 23)
 }
 
-export const plurify = (str: string, count: number) => `${str}${count === 1 ? '' : 's'}`
+export const plurify = (str: string, count?: number) => `${str}${count === 1 ? '' : 's'}`
