@@ -1,13 +1,15 @@
 {
-    "compileOnSave": true,
     "compilerOptions": {
         "module": "commonjs",
         "moduleResolution": "node",
+        "target": "ES6",
         "baseUrl": ".",
         "declaration": true,
-        "outDir": "./dist",
+        "outDir": "dist",
         "strict": true,
-        "strictNullChecks": false,
-        "target": "ES6"
-    }
+        "removeComments": true
+    },
+    "include": [
+        "src/**/*"
+    ]
 }
