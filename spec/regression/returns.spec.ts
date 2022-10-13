@@ -23,7 +23,7 @@ test('returns a primitive value for method with no arguments', t => {
   // calculator.isEnabled2.viewResult().returns(3)
   // calculator.other().viewResult().returns(2)
 
-  t.is(calculator.clear(), void 0)
+  t.is(void 0 as void, calculator.clear())
 })
 
 test('returns a primitive value for method with specific arguments', t => {
@@ -32,8 +32,8 @@ test('returns a primitive value for method with specific arguments', t => {
 
   calculator.add(1, 1).returns(2)
 
-  t.is(calculator.add(1, 1), 2)
-  t.is(calculator.add(1, 1), 2)
+  t.is(2, calculator.add(1, 1))
+  t.is(2, calculator.add(1, 1))
   t.true(types.isProxy(noResult))
 })
 
@@ -45,10 +45,10 @@ test('returns a primitive value for method with specific arguments where the las
   calculator.multiply(1, Arg.any()).returns(10)
   calculator.multiply(1).returns(1)
 
-  t.is(calculator.multiply(2), 4)
-  t.is(calculator.multiply(0, 10), 0)
-  t.is(calculator.multiply(1), 1)
-  t.is(calculator.multiply(1, 10), 10)
+  t.is(4, calculator.multiply(2))
+  t.is(0, calculator.multiply(0, 10))
+  t.is(1, calculator.multiply(1))
+  t.is(10, calculator.multiply(1, 10))
 
   const noResult = calculator.multiply(2, 2)
   const noResult2 = calculator.multiply(0)
@@ -85,8 +85,8 @@ test('returns a primitive value for method with one optional argument', t => {
   calculator.viewResult().returns(0)
   calculator.viewResult(3).returns(123)
 
-  t.is(calculator.viewResult(), 0)
-  t.is(calculator.viewResult(3), 123)
+  t.is(0, calculator.viewResult())
+  t.is(123, calculator.viewResult(3))
 })
 
 test('returns a promise for method with no arguments', async t => {
@@ -131,10 +131,10 @@ test('returns different primitive values in the specified order for method with 
   const calculator = Substitute.for<Calculator>()
   calculator.add(1, Arg.any()).returns(1, NaN)
 
-  t.is(calculator.add(1, 1), 1)
-  t.is(calculator.add(1, 0), NaN)
-  t.is(calculator.add(1, 1), NaN)
-  t.is(calculator.add(1, 5), NaN)
+  t.is(1, calculator.add(1, 1))
+  t.is(NaN, calculator.add(1, 0))
+  t.is(NaN, calculator.add(1, 1))
+  t.is(NaN, calculator.add(1, 5))
 })
 
 test('returns another substituted instance for method with arguments', t => {
@@ -145,7 +145,7 @@ test('returns another substituted instance for method with arguments', t => {
 
   const result = calculator.add(1, 1)
 
-  t.is(result, <number>addResult)
+  t.is(<number>addResult, result)
   t.is(result.toLocaleString(), 'What a weird number')
 })
 
@@ -172,9 +172,9 @@ test('returns different primitive values in the specified order on a property', 
   const calculator = Substitute.for<Calculator>()
   calculator.isEnabled.returns(false, true)
 
-  t.is(calculator.isEnabled, false)
-  t.is(calculator.isEnabled, true)
-  t.is(calculator.isEnabled, true)
+  t.is(false, calculator.isEnabled)
+  t.is(true, calculator.isEnabled)
+  t.is(true, calculator.isEnabled)
 })
 
 test('returns another substituted instance on a property', async t => {

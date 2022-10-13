@@ -12,7 +12,7 @@ test('issue 59 - Mock function with optional parameters', (t) => {
   echoer.maybeEcho('foo').returns('bar')
   echoer.maybeEcho().returns('baz')
 
-  t.is(echoer.maybeEcho('foo'), 'bar')
+  t.is('bar', echoer.maybeEcho('foo'))
   echoer.received().maybeEcho('foo')
-  t.is(echoer.maybeEcho(), 'baz')
+  t.is('baz', echoer.maybeEcho())
 })

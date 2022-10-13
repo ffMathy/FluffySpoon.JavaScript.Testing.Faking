@@ -46,7 +46,7 @@ test('clears received calls on a substitute', t => {
   t.is(calculator[SubstituteNode.instance].recorder.indexedRecords.size, 2)
 
   t.throws(() => calculator.received().add(1, 1))
-  t.is(calculator.add(1, 1), 2)
+  t.is(2, calculator.add(1, 1))
 })
 
 test('clears return values on a substitute', t => {
