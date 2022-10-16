@@ -26,6 +26,7 @@ export class SubstituteNode extends SubstituteNodeBase {
 
   private _context: SubstituteContext = 'none'
   private _disabledSubstituteMethods: boolean = false
+  private _retrySubstitutionExecutionAttempt: boolean = false
 
   private constructor(key: PropertyKey, parent?: SubstituteNode) {
     super(key, parent)
@@ -36,9 +37,14 @@ export class SubstituteNode extends SubstituteNodeBase {
       {
         get: function (target, property) {
           if (target.isSpecialProperty(property)) return target.evaluateSpecialProperty(property)
+          if (target._retrySubstitutionExecutionAttempt) {
+            const result = target.attemptSubstitutionExecution()
+            target._retrySubstitutionExecutionAttempt = false
+            return result[property]
+          }
           const newNode = SubstituteNode.createChild(property, target)
           if (target.isRoot() && !target.rootContext.substituteMethodsEnabled) newNode.disableSubstituteMethods()
-          if (target.isIntermediateNode() && target.isAssertion) newNode.executeAssertion()
+          if (target.isAssertion) newNode.executeAssertion()
           return newNode.read()
         },
         set: function (target, property, value) {
@@ -121,11 +127,7 @@ export class SubstituteNode extends SubstituteNodeBase {
   public read(): SubstituteNode | void | never {
     if ((this.parent?.isSubstitution ?? false) || this.context === 'clearSubstitute') return
     if (this.isAssertion) return this.proxy
-
-    const mostSuitableSubstitution = this.getMostSuitableSubstitution()
-    return mostSuitableSubstitution instanceof SubstituteNode
-      ? mostSuitableSubstitution.executeSubstitution(this.recordedArguments)
-      : this.proxy
+    return this.attemptSubstitutionExecution()
   }
 
   public write(value: any) {
@@ -138,6 +140,13 @@ export class SubstituteNode extends SubstituteNodeBase {
     const clearType: ClearType = this.recordedArguments.value[0] ?? ClearTypeMap.All
     const filter = clearTypeToFilterMap[clearType]
     this.recorder.clearRecords(filter)
+  }
+
+  private attemptSubstitutionExecution(): SubstituteNode | any {
+    const mostSuitableSubstitution = this.getMostSuitableSubstitution()
+    return mostSuitableSubstitution instanceof SubstituteNode
+      ? mostSuitableSubstitution.executeSubstitution(this.recordedArguments)
+      : this.proxy
   }
 
   public executeSubstitution(contextArguments: RecordedArguments) {
@@ -169,12 +178,11 @@ export class SubstituteNode extends SubstituteNodeBase {
   public executeAssertion(): void | never {
     if (!this.isIntermediateNode()) throw new Error('Not possible')
     if (!this.parent.recordedArguments.hasArguments()) throw new TypeError('Parent args')
-    const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
-
     const expectedCount = this.parent.recordedArguments.value[0] ?? undefined
     const finiteExpectation = expectedCount !== undefined
     if (finiteExpectation && (!Number.isInteger(expectedCount) || expectedCount < 0)) throw new Error('Expected count has to be a positive integer')
 
+    const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
     const hasRecordedCalls = siblings.length > 0
     const allRecordedArguments = siblings.map(sibling => sibling.recordedArguments)
 
@@ -190,8 +198,9 @@ export class SubstituteNode extends SubstituteNodeBase {
     if (!hasRecordedCalls || siblings.some(sibling => sibling.propertyType === this.propertyType)) {
       const actualCount = allRecordedArguments.filter(r => r.match(this.recordedArguments)).length
       const matchedExpectation = (!finiteExpectation && actualCount > 0) || expectedCount === actualCount
+      if (matchedExpectation) return
 
-      if (!matchedExpectation) throw SubstituteException.forCallCountMissMatch(
+      throw SubstituteException.forCallCountMissMatch(
         { expected: expectedCount, received: actualCount },
         { type: this.propertyType, value: this.property },
         { expected: this.recordedArguments, received: allRecordedArguments }
@@ -217,13 +226,21 @@ export class SubstituteNode extends SubstituteNodeBase {
     if (this.context === 'didNotReceive') this._recordedArguments = RecordedArguments.from([0])
   }
 
-  private getMostSuitableSubstitution(): SubstituteNode {
-    const nodes = this.getAllSiblings().filter(node => node.isSubstitution &&
-      node.propertyType === this.propertyType &&
-      node.recordedArguments.match(this.recordedArguments)
+  private getMostSuitableSubstitution(): SubstituteNode | void {
+    const commonSuitableSubstitutionsSet = this.getAllSiblings().filter(node => node.isSubstitution)
+    const strictSuitableSubstitutionsSet = commonSuitableSubstitutionsSet.filter(
+      node => node.propertyType === this.propertyType && node.recordedArguments.match(this.recordedArguments)
     )
-    const sortedNodes = RecordedArguments.sort([...nodes])
-    return sortedNodes[0]
+    const potentialSuitableSubstitutionsSet = this.propertyType === PropertyTypeMap.Property && !this._retrySubstitutionExecutionAttempt ?
+      commonSuitableSubstitutionsSet.filter(node => node.propertyType === PropertyTypeMap.Method) :
+      []
+
+    const strictSuitableSubstitutions = [...strictSuitableSubstitutionsSet]
+    const potentialSuitableSubstitutions = [...potentialSuitableSubstitutionsSet]
+    const hasSuitableSubstitutions = strictSuitableSubstitutions.length > 0
+    const onlySubstitutionsWithThisNodePropertyType = potentialSuitableSubstitutions.length === 0
+    if (onlySubstitutionsWithThisNodePropertyType && hasSuitableSubstitutions) return RecordedArguments.sort(strictSuitableSubstitutions)[0]
+    if (!onlySubstitutionsWithThisNodePropertyType) this._retrySubstitutionExecutionAttempt = true
   }
 
   private isSpecialProperty(property: PropertyKey): property is SpecialProperty {
