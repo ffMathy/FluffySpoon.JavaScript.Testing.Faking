@@ -69,12 +69,13 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
 
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
 
+type TryToExpandNonArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: []) => unknown ? () => void : {}
+type TryToExpandArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: any) => any ? FunctionSubstituteWithOverloads<TObject[TProperty], true> : {}
+
 type TerminatingObject<T> = {
-    [P in keyof T]:
-    T[P] extends (...args: infer F) => any ?
-    F extends [] ? () => void :
-    FunctionSubstituteWithOverloads<T[P], true> :
-    T[P];
+    [P in keyof T]: TryToExpandNonArgumentedTerminatingFunction<T, P> & TryToExpandArgumentedTerminatingFunction<T, P> & T[P];
 }
 
 type TryToExpandNonArgumentedFunctionSubstitute<TObject, TProperty extends keyof TObject> =

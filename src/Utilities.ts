@@ -10,7 +10,7 @@ export const PropertyType = {
 export const isAssertionMethod = (property: PropertyKey): property is AssertionMethod =>
   property === 'received' || property === 'didNotReceive'
 
-export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => property === 'clearSubstitute'
+export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => property === 'clearSubstitute' || property === 'mimick'
 
 export const isSubstitutionMethod = (property: PropertyKey): property is SubstitutionMethod =>
   property === 'mimicks' || property === 'returns' || property === 'throws' || property === 'resolves' || property === 'rejects'
