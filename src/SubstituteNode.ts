@@ -190,11 +190,12 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     if (finiteExpectation && (!Number.isInteger(expectedCount) || expectedCount < 0)) throw new Error('Expected count has to be a positive integer')
 
     const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
-    const hasRecordedCalls = siblings.length > 0
+    const hasBeenCalled = siblings.length > 0
+    const hasSiblingOfSamePropertyType = siblings.some(sibling => sibling.propertyType === this.propertyType)
     const allRecordedArguments = siblings.map(sibling => sibling.recordedArguments)
 
     if (
-      !hasRecordedCalls &&
+      !hasBeenCalled &&
       (!finiteExpectation || expectedCount > 0)
     ) throw SubstituteException.forCallCountMissMatch( // Here we don't know here if it's a property or method, so we should throw something more generic
       { expected: expectedCount, received: 0 },
@@ -202,18 +203,31 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       { expected: this.recordedArguments, received: allRecordedArguments }
     )
 
-    if (!hasRecordedCalls || siblings.some(sibling => sibling.propertyType === this.propertyType)) {
+    if (!hasBeenCalled || hasSiblingOfSamePropertyType) {
+      this._scheduledAssertionException = undefined
       const actualCount = allRecordedArguments.filter(r => r.match(this.recordedArguments)).length
       const matchedExpectation = (!finiteExpectation && actualCount > 0) || expectedCount === actualCount
       if (matchedExpectation) return
-
-      throw SubstituteException.forCallCountMissMatch(
+      const exception = SubstituteException.forCallCountMissMatch(
         { expected: expectedCount, received: actualCount },
         { type: this.propertyType, value: this.property },
         { expected: this.recordedArguments, received: allRecordedArguments }
       )
+      const potentialMethodAssertion = this.propertyType === PropertyTypeMap.Property && siblings.some(sibling => sibling.propertyType === PropertyTypeMap.Method)
+      if (potentialMethodAssertion) this.schedulePropertyAssertionException(exception)
+      else throw exception
     }
   }
+
+  private schedulePropertyAssertionException(exception: SubstituteException) {
+    this._scheduledAssertionException = exception
+    process.nextTick(() => {
+      const nodeIsStillProperty = this.propertyType === PropertyTypeMap.Property
+      if (nodeIsStillProperty && this._scheduledAssertionException !== undefined) throw this._scheduledAssertionException
+    })
+  }
+
+  private _scheduledAssertionException: SubstituteException | undefined
 
   private handleSetter(value: any) {
     this._accessorType = 'set'
