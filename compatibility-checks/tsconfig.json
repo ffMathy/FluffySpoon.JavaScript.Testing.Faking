@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "ESNext",
+    "baseUrl": ".",
+    "declaration": true,
+    "outDir": "dist",
+    "strict": true,
+    "removeComments": true
+  },
+  "include": [
+    "test-runners/**/*",
+    "test/**/*"
+  ]
+}

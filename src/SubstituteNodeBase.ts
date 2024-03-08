@@ -63,8 +63,8 @@ export abstract class SubstituteNodeBase extends Function {
     return typeof this._parent === 'undefined'
   }
 
-  protected isIntermediateNode(): this is this & { parent: ThisType<SubstituteNodeBase> } {
-    return !this.isRoot()
+  protected hasDepthOfAtLeast<TDepth extends number>(depth: TDepth): this is (TDepth extends 0 ? this & { parent: undefined } : this & { parent: ThisType<SubstituteNodeBase> }) {
+    return this.depth >= depth
   }
 
   protected getAllSiblings(): RecordsSet<this> {
@@ -74,7 +74,4 @@ export abstract class SubstituteNodeBase extends Function {
   protected hasChild(): this is this & { child: ThisType<SubstituteNodeBase> } {
     return this.child instanceof SubstituteNodeBase
   }
-
-  public abstract read(): void
-  public abstract write(value: any): void
 }

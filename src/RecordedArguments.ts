@@ -2,6 +2,13 @@ import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 import { Argument, AllArguments } from './Arguments'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
+const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
+  plain: 0,
+  'with-predicate': 1,
+  wildcard: 2,
+  none: 4
+}
+
 export class RecordedArguments {
   private _argumentsClass?: ArgumentsClass
   private _value?: any[]
@@ -23,18 +30,9 @@ export class RecordedArguments {
 
   static sort<T extends { recordedArguments: RecordedArguments }>(objectWithArguments: T[]): T[] {
     return objectWithArguments.sort((a, b) => {
-      const aClass = a.recordedArguments.argumentsClass
-      const bClass = b.recordedArguments.argumentsClass
-
-      if (aClass === bClass) return 0
-      if (aClass === 'plain') return -1
-      if (bClass === 'plain') return 1
-
-      if (aClass === 'with-predicate') return -1
-      if (bClass === 'with-predicate') return 1
-
-      if (aClass === 'wildcard') return -1
-      return 1
+      const aClass = a.recordedArguments.argumentsClass ?? 'none'
+      const bClass = b.recordedArguments.argumentsClass ?? 'none'
+      return argumentsClassDigitMapper[aClass] - argumentsClassDigitMapper[bClass]
     })
   }
 

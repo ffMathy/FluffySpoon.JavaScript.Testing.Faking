@@ -44,8 +44,8 @@ export type FunctionSubstitute<TArguments extends any[], TReturnType> =
     ((...args: TArguments) => (TReturnType & MockObjectMixin<TArguments, TReturnType>)) &
     ((allArguments: AllArguments<TArguments>) => (TReturnType & MockObjectMixin<TArguments, TReturnType>))
 
-export type NoArgumentFunctionSubstitute<TReturnType> = (() => (TReturnType & NoArgumentMockObjectMixin<TReturnType>))
-export type PropertySubstitute<TReturnType> = (TReturnType & NoArgumentMockObjectMixin<TReturnType>);
+export type NoArgumentFunctionSubstitute<TReturnType> = () => TReturnType & NoArgumentMockObjectMixin<TReturnType>;
+export type PropertySubstitute<TReturnType> = TReturnType & NoArgumentMockObjectMixin<TReturnType>;
 
 type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType;
 
@@ -69,20 +69,25 @@ type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixi
 
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
 
+type TryToExpandNonArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: []) => unknown ? () => void : {}
+type TryToExpandArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: any) => any ? FunctionSubstituteWithOverloads<TObject[TProperty], true> : {}
+
 type TerminatingObject<T> = {
-    [P in keyof T]:
-    T[P] extends (...args: infer F) => any ?
-    F extends [] ? () => void :
-    FunctionSubstituteWithOverloads<T[P], true> :
-    T[P];
+    [P in keyof T]: TryToExpandNonArgumentedTerminatingFunction<T, P> & TryToExpandArgumentedTerminatingFunction<T, P> & T[P];
 }
 
+type TryToExpandNonArgumentedFunctionSubstitute<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: []) => infer R ? NoArgumentFunctionSubstitute<R> : {}
+
+type TryToExpandArgumentedFunctionSubstitute<TObject, TProperty extends keyof TObject> =
+    TObject[TProperty] extends (...args: infer F) => infer R ? F extends [] ? {} : FunctionSubstituteWithOverloads<TObject[TProperty]> : {}
+
+type TryToExpandPropertySubstitute<TObject, TProperty extends keyof TObject> = PropertySubstitute<TObject[TProperty]>
+
 type ObjectSubstituteTransformation<K, T = OmitProxyMethods<K>> = {
-    [P in keyof T]:
-    T[P] extends (...args: infer F) => infer R ?
-    F extends [] ? NoArgumentFunctionSubstitute<R> :
-    FunctionSubstituteWithOverloads<T[P]> :
-    PropertySubstitute<T[P]>;
+    [P in keyof T]: TryToExpandNonArgumentedFunctionSubstitute<T, P> & TryToExpandArgumentedFunctionSubstitute<T, P> & TryToExpandPropertySubstitute<T, P>;
 }
 
 export type OmitProxyMethods<T> = Omit<T, FirstLevelMethod>;
