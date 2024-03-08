@@ -1,4 +1,5 @@
 import type { AllArguments } from './Arguments';
+import { clearSubstitute, didNotReceive, mimick, received } from './Symbols';
 import type { ClearType, FirstLevelMethod } from './Types';
 
 type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
@@ -87,9 +88,9 @@ type ObjectSubstituteTransformation<K, T = OmitProxyMethods<K>> = {
 
 export type OmitProxyMethods<T> = Omit<T, FirstLevelMethod>;
 export type ObjectSubstitute<T> = ObjectSubstituteTransformation<T> & {
-    received(amount?: number): TerminatingObject<T>;
-    didNotReceive(): TerminatingObject<T>;
-    mimick(instance: OmitProxyMethods<T>): void;
-    clearSubstitute(clearType?: ClearType): void;
+    [received](amount?: number): TerminatingObject<T>;
+    [didNotReceive](): TerminatingObject<T>;
+    [mimick](instance: OmitProxyMethods<T>): void;
+    [clearSubstitute](clearType?: ClearType): void;
 }
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<infer K> ? K : never;

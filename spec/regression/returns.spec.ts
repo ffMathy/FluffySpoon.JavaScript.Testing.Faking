@@ -32,6 +32,8 @@ test('returns a primitive value for method with specific arguments', t => {
 
   calculator.add(1, 1).returns(2)
 
+  calculator.clearSubstitute
+
   t.is(2, calculator.add(1, 1))
   t.is(2, calculator.add(1, 1))
   t.true(types.isProxy(noResult))

@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, SubstituteOf } from '../src'
+import { Substitute, SubstituteOf, clearSubstitute, received } from '../src'
 import { SubstituteNode } from '../src/SubstituteNode'
 
 interface Calculator {
@@ -17,13 +17,13 @@ type InstanceReturningSubstitute<T> = SubstituteOf<T> & {
 test('clears everything on a substitute', t => {
   const calculator = Substitute.for<Calculator>() as InstanceReturningSubstitute<Calculator>
   calculator.add(1, 1)
-  calculator.received().add(1, 1)
-  calculator.clearSubstitute()
+  calculator[received]().add(1, 1)
+  calculator[clearSubstitute]()
 
   t.is(calculator[SubstituteNode.instance].recorder.records.size, 0)
   t.is(calculator[SubstituteNode.instance].recorder.indexedRecords.size, 0)
 
-  t.throws(() => calculator.received().add(1, 1))
+  t.throws(() => calculator[received]().add(1, 1))
 
   // explicitly using 'all'
   calculator.add(1, 1)
