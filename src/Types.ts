@@ -1,3 +1,5 @@
+import { RecordedArguments } from './RecordedArguments'
+
 export type PropertyType = 'method' | 'property'
 export type AssertionMethod = 'received' | 'didNotReceive'
 export type ConfigurationMethod = 'clearSubstitute' | 'mimick'
@@ -10,3 +12,10 @@ export type SubstituteContext = SubstituteMethod | 'none'
 export type ClearType = 'all' | 'receivedCalls' | 'substituteValues'
 
 export type FilterFunction<T> = (item: T) => boolean
+
+export type SubstituteNodeModel = {
+  propertyType: PropertyType
+  key: PropertyKey
+  recordedArguments: RecordedArguments
+  stack?: string
+}
