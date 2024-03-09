@@ -1,49 +1,48 @@
-import { PropertyType } from './Types'
-import { RecordedArguments } from './RecordedArguments'
-import { PropertyType as PropertyTypeMap, stringifyArguments, stringifyCalls, textModifier, plurify } from './Utilities'
+import { SubstituteNodeModel } from './Types'
+import { stringifyReceivedCalls, TextBuilder, stringifyExpectation } from './Utilities'
 
-enum SubstituteExceptionTypes {
-  CallCountMissMatch = 'CallCountMissMatch',
-  PropertyNotMocked = 'PropertyNotMocked'
-}
+const SubstituteExceptionType = {
+  callCountMismatch: 'CallCountMismatch',
+  PropertyNotMocked: 'PropertyNotMocked'
+} as const
+type SubstituteExceptionType = typeof SubstituteExceptionType[keyof typeof SubstituteExceptionType]
 
 export class SubstituteException extends Error {
-  type?: SubstituteExceptionTypes
+  type?: SubstituteExceptionType
 
-  constructor(msg: string, exceptionType?: SubstituteExceptionTypes) {
+  constructor(msg: string, exceptionType?: SubstituteExceptionType) {
     super(msg)
-    Error.captureStackTrace(this, SubstituteException)
     this.name = new.target.name
     this.type = exceptionType
+    const errorConstructor = exceptionType !== undefined ? SubstituteException[`for${exceptionType}`] : undefined
+    Error.captureStackTrace(this, errorConstructor)
   }
 
-  static forCallCountMissMatch(
-    count: { expected: number | undefined, received: number },
-    property: { type: PropertyType, value: PropertyKey },
-    calls: { expected: RecordedArguments, received: RecordedArguments[] }
+  static forCallCountMismatch(
+    expected: { count: number | undefined, call: SubstituteNodeModel },
+    received: { matchCount: number, calls: SubstituteNodeModel[] }
   ) {
-    const propertyValue = textModifier.bold(property.value.toString())
-    const commonMessage = `Expected ${textModifier.bold(
-      count.expected === undefined ? '1 or more' : count.expected.toString()
-    )} ${plurify('call', count.expected)} to the ${textModifier.italic(property.type)} ${propertyValue}`
+    const callPath = `@Substitute.${expected.call.key.toString()}`
 
-    const messageForMethods = property.type === PropertyTypeMap.Method ? ` with ${stringifyArguments(calls.expected)}` : '' // should also apply for setters (instead of methods only)
-    const receivedMessage = `, but received ${textModifier.bold(count.received < 1 ? 'none' : count.received.toString())} of such calls.`
+    const textBuilder = new TextBuilder()
+      .add('Call count mismatch in ')
+      .add('@Substitute.', t => t.underline())
+      .add(expected.call.key.toString(), t => t.bold().underline())
+      .add(':')
+      .newLine().add('Expected to receive ')
+      .addParts(...stringifyExpectation(expected))
+      .add(', but received ')
+      .add(received.matchCount < 1 ? 'none' : received.matchCount.toString(), t => t.faint())
+      .add('.')
+    if (received.calls.length > 0) textBuilder.newLine().add(`All property or method calls to ${callPath} received so far:${stringifyReceivedCalls(callPath, expected.call, received.calls)}`)
 
-    const callTrace = calls.received.length > 0
-      ? `\nAll calls received to ${textModifier.italic(property.type)} ${propertyValue}:${stringifyCalls(calls.received)}`
-      : ''
-
-    return new this(
-      commonMessage + messageForMethods + receivedMessage + callTrace,
-      SubstituteExceptionTypes.CallCountMissMatch
-    )
+    return new this(textBuilder.toString(), SubstituteExceptionType.callCountMismatch)
   }
 
   static forPropertyNotMocked(property: PropertyKey) {
     return new this(
       `There is no mock for property: ${property.toString()}`,
-      SubstituteExceptionTypes.PropertyNotMocked
+      SubstituteExceptionType.PropertyNotMocked
     )
   }
 
