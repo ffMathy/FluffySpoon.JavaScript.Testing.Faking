@@ -4,7 +4,7 @@ import { SubstituteNodeBase } from './SubstituteNodeBase'
 import { RecordedArguments } from './RecordedArguments'
 import { ClearType as ClearTypeMap, PropertyType as PropertyTypeMap, isAssertionMethod, isSubstituteMethod, isSubstitutionMethod, textModifier, isConfigurationMethod } from './Utilities'
 import { SubstituteException } from './SubstituteException'
-import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType } from './Types'
+import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType, SubstituteNodeModel } from './Types'
 import type { ObjectSubstitute } from './Transformations'
 
 const instance = Symbol('Substitute:Instance')
@@ -17,7 +17,7 @@ const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNode>> = 
 type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
 type RootContext = { substituteMethodsEnabled: boolean }
 
-export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitute<unknown> {
+export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitute<unknown>, SubstituteNodeModel {
   private _proxy: SubstituteNode
   private _rootContext: RootContext
 
@@ -27,6 +27,8 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
 
   private _context: SubstituteContext = 'none'
   private _retrySubstitutionExecutionAttempt: boolean = false
+
+  public stack?: string
 
   private constructor(key: PropertyKey, parent?: SubstituteNode) {
     super(key, parent)
@@ -44,6 +46,7 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
             newNode.assignContext(property)
             return newNode[property].bind(newNode)
           }
+          Error.captureStackTrace(newNode, this.get)
           return newNode.attemptSubstitutionExecution()
         },
         set: function (target, property, value) {
@@ -58,6 +61,7 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
             if (isSubstitutionMethod(target.property)) return target.parent.assignContext(target.property)
             if (target.parent.isAssertion) return target.executeAssertion()
           }
+          Error.captureStackTrace(target, this.apply)
           return target.isAssertion ? target.proxy : target.attemptSubstitutionExecution()
         }
       }
@@ -185,7 +189,7 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   private executeAssertion(): void | never {
     if (!this.hasDepthOfAtLeast(2)) throw new Error('Not possible')
     if (!this.parent.recordedArguments.hasArguments()) throw new TypeError('Parent args')
-    const expectedCount = this.parent.recordedArguments.value[0] ?? undefined
+    const expectedCount: number | undefined = this.parent.recordedArguments.value[0] ?? undefined
     const finiteExpectation = expectedCount !== undefined
     if (finiteExpectation && (!Number.isInteger(expectedCount) || expectedCount < 0)) throw new Error('Expected count has to be a positive integer')
 
@@ -197,10 +201,9 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     if (
       !hasBeenCalled &&
       (!finiteExpectation || expectedCount > 0)
-    ) throw SubstituteException.forCallCountMissMatch( // Here we don't know here if it's a property or method, so we should throw something more generic
-      { expected: expectedCount, received: 0 },
-      { type: this.propertyType, value: this.property },
-      { expected: this.recordedArguments, received: allRecordedArguments }
+    ) throw SubstituteException.forCallCountMismatch( // Here we don't know here if it's a property or method, so we should throw something more generic
+      { count: expectedCount, call: this },
+      { matchCount: 0, calls: siblings }
     )
 
     if (!hasBeenCalled || hasSiblingOfSamePropertyType) {
@@ -208,10 +211,9 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       const actualCount = allRecordedArguments.filter(r => r.match(this.recordedArguments)).length
       const matchedExpectation = (!finiteExpectation && actualCount > 0) || expectedCount === actualCount
       if (matchedExpectation) return
-      const exception = SubstituteException.forCallCountMissMatch(
-        { expected: expectedCount, received: actualCount },
-        { type: this.propertyType, value: this.property },
-        { expected: this.recordedArguments, received: allRecordedArguments }
+      const exception = SubstituteException.forCallCountMismatch(
+        { count: expectedCount, call: this },
+        { matchCount: actualCount, calls: siblings }
       )
       const potentialMethodAssertion = this.propertyType === PropertyTypeMap.Property && siblings.some(sibling => sibling.propertyType === PropertyTypeMap.Method)
       if (potentialMethodAssertion) this.schedulePropertyAssertionException(exception)
