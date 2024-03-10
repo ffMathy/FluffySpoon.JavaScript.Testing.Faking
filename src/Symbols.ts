@@ -2,7 +2,7 @@
 export const received = Symbol('received');
 export const didNotReceive = Symbol('didNotReceive');
 export const mimick = Symbol('mimick');
-export const clearSubstitute = Symbol('clearSubstitute');
+export const clearReceivedCalls = Symbol('clearReceivedCalls');
 
 export const mimicks = Symbol('mimicks');
 export const throws = Symbol('throws');

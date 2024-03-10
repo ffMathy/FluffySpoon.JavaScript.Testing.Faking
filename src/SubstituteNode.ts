@@ -6,6 +6,7 @@ import { ClearType as ClearTypeMap, PropertyType as PropertyTypeMap, isAssertion
 import { SubstituteException } from './SubstituteException'
 import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType } from './Types'
 import type { ObjectSubstitute } from './Transformations'
+import { didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from './Symbols'
 
 const instance = Symbol('Substitute:Instance')
 const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNode>> = {
@@ -114,17 +115,17 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     return this._recordedArguments
   }
 
-  public received(amount?: number): SubstituteNode {
+  public [received](amount?: number): SubstituteNode {
     this.handleMethod([amount])
     return this.proxy
   }
 
-  public didNotReceive(): SubstituteNode {
+  public [didNotReceive](): SubstituteNode {
     this.handleMethod([0])
     return this.proxy
   }
 
-  public mimick() {
+  public [mimick]() {
     throw new Error('Mimick is not implemented yet')
   }
 
@@ -165,17 +166,17 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       ? this.child.recordedArguments.value?.shift()
       : this.child.recordedArguments.value[0]
     switch (substitutionMethod) {
-      case 'throws':
+      case throws:
         throw substitutionValue
-      case 'mimicks':
+      case mimicks:
         if (this.propertyType === PropertyTypeMap.Property) return substitutionValue()
         if (!contextArguments.hasArguments()) throw new TypeError('Context arguments cannot be undefined')
         return substitutionValue(...contextArguments.value)
-      case 'resolves':
+      case resolves:
         return Promise.resolve(substitutionValue)
-      case 'rejects':
+      case rejects:
         return Promise.reject(substitutionValue)
-      case 'returns':
+      case returns:
         return substitutionValue
       default:
         throw SubstituteException.generic(`Substitution method '${substitutionMethod}' not implemented`)
