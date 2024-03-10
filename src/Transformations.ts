@@ -1,6 +1,5 @@
 import type { AllArguments } from './Arguments';
-import { clearReceivedCalls, didNotReceive, mimick, received } from './Symbols';
-import type { ClearType, FirstLevelMethod } from './Types';
+import type { FirstLevelMethod } from './Types';
 
 type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
     TFunc extends {
@@ -91,11 +90,22 @@ type ObjectSubstituteTransformation<K, T = OmitProxyMethods<K>> = {
     [P in keyof T]: TryToExpandNonArgumentedFunctionSubstitute<T, P> & TryToExpandArgumentedFunctionSubstitute<T, P> & TryToExpandPropertySubstitute<T, P>;
 }
 
+export const received = Symbol('received');
+export const didNotReceive = Symbol('didNotReceive');
+export const mimick = Symbol('mimick');
+export const clearReceivedCalls = Symbol('clearReceivedCalls');
+
+export const mimicks = Symbol('mimicks');
+export const throws = Symbol('throws');
+export const returns = Symbol('returns');
+export const resolves = Symbol('resolves');
+export const rejects = Symbol('rejects');
+
 export type OmitProxyMethods<T> = Omit<T, FirstLevelMethod>;
 export type ObjectSubstitute<T> = ObjectSubstituteTransformation<T> & {
     [received](amount?: number): TerminatingObject<T>;
     [didNotReceive](): TerminatingObject<T>;
     [mimick](instance: OmitProxyMethods<T>): void;
-    [clearReceivedCalls](clearType?: ClearType): void;
+    [clearReceivedCalls](): void;
 }
 export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<infer K> ? K : never;

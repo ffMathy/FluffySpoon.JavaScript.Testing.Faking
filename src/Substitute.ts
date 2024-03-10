@@ -2,6 +2,7 @@ import { DisabledSubstituteObject, ObjectSubstitute } from './Transformations'
 import { SubstituteNode } from './SubstituteNode'
 
 export type SubstituteOf<T> = ObjectSubstitute<T> & T
+
 type InstantiableSubstitute<T extends SubstituteOf<unknown>> = T & { [SubstituteNode.instance]: SubstituteNode }
 
 export class Substitute {

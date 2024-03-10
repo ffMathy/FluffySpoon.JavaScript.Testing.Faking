@@ -1,4 +1,4 @@
-import type { clearReceivedCalls, didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from "./Symbols"
+import type { clearReceivedCalls, didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from "./Transformations"
 
 export type PropertyType = 'method' | 'property'
 export type AssertionMethod = typeof received | typeof didNotReceive
