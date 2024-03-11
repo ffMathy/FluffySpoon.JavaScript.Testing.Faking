@@ -4,7 +4,7 @@ import { Recorder } from '../src/Recorder'
 import { RecordsSet } from '../src/RecordsSet'
 import { Substitute } from '../src/Substitute'
 import { SubstituteNodeBase } from '../src/SubstituteNodeBase'
-import { returns } from '../src/Transformations'
+import { returns } from '../src'
 
 const nodeFactory = (key: string) => {
   const node = Substitute.for<SubstituteNodeBase>()

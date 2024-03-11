@@ -1,8 +1,7 @@
 import test from 'ava'
 
-import { Substitute, SubstituteOf, clearReceivedCalls, received } from '../src'
+import { Substitute, SubstituteOf, clearReceivedCalls, received, returns } from '../src'
 import { SubstituteNode } from '../src/SubstituteNode'
-import { returns } from '../src/Transformations'
 
 interface Calculator {
   add(a: number, b: number): number
