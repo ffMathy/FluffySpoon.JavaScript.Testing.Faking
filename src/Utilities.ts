@@ -1,6 +1,7 @@
 import { inspect } from 'util'
 import { RecordedArguments } from './RecordedArguments'
 import type { AssertionMethod, ConfigurationMethod, SubstituteMethod, SubstitutionMethod } from './Types'
+import { clearReceivedCalls, didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from './Transformations'
 
 export const PropertyType = {
   Method: 'method',
@@ -8,21 +9,16 @@ export const PropertyType = {
 } as const
 
 export const isAssertionMethod = (property: PropertyKey): property is AssertionMethod =>
-  property === 'received' || property === 'didNotReceive'
+  property === received || property === didNotReceive
 
-export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => property === 'clearSubstitute' || property === 'mimick'
+export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => 
+  property === clearReceivedCalls || property === mimick
 
 export const isSubstitutionMethod = (property: PropertyKey): property is SubstitutionMethod =>
-  property === 'mimicks' || property === 'returns' || property === 'throws' || property === 'resolves' || property === 'rejects'
+  property === mimicks || property === returns || property === throws || property === resolves || property === rejects
 
 export const isSubstituteMethod = (property: PropertyKey): property is SubstituteMethod =>
   isSubstitutionMethod(property) || isConfigurationMethod(property) || isAssertionMethod(property)
-
-export const ClearType = {
-  All: 'all',
-  ReceivedCalls: 'receivedCalls',
-  SubstituteValues: 'substituteValues'
-} as const
 
 export const stringifyArguments = (args: RecordedArguments) => textModifier.faint(
   args.hasArguments() ?

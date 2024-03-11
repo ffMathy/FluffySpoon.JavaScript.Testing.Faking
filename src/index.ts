@@ -2,7 +2,6 @@ import { Substitute, SubstituteOf } from './Substitute'
 
 export { Arg } from './Arguments'
 export { Substitute, SubstituteOf }
-export { ClearType } from './Utilities'
-export { clearReceivedCalls, didNotReceive, mimick, received } from './Transformations'
+export { clearReceivedCalls, didNotReceive, mimick, received, mimicks, rejects, resolves, returns, throws } from './Transformations'
 
 export default Substitute

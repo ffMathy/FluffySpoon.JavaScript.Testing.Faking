@@ -2,6 +2,7 @@ import test from 'ava'
 
 import { Substitute, SubstituteOf, clearReceivedCalls, received } from '../src'
 import { SubstituteNode } from '../src/SubstituteNode'
+import { returns } from '../src/Transformations'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -17,7 +18,7 @@ type InstanceReturningSubstitute<T> = SubstituteOf<T> & {
 test('clears received calls on a substitute', t => {
   const calculator = Substitute.for<Calculator>() as InstanceReturningSubstitute<Calculator>
   calculator.add(1, 1)
-  calculator.add(1, 1).returns(2)
+  calculator.add(1, 1)[returns](2)
   calculator[clearReceivedCalls]();
 
   t.is(calculator[SubstituteNode.instance].recorder.records.size, 2)

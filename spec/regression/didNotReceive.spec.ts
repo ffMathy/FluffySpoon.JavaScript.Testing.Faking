@@ -1,6 +1,7 @@
 import test from 'ava'
 import { Substitute, Arg, didNotReceive, received } from '../../src'
 import { SubstituteException } from '../../src/SubstituteException'
+import { returns } from '../../src/Transformations'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -35,7 +36,7 @@ test('not setting a property correctly asserts the call count', t => {
 
 test('not calling a method with mock correctly asserts the call count', t => {
   const calculator = Substitute.for<Calculator>()
-  calculator.add(1, 1).returns(2)
+  calculator.add(1, 1)[returns](2)
 
   calculator[didNotReceive]().add(1, 1)
   t.throws(() => calculator[received](1).add(1, 1), { instanceOf: SubstituteException })
@@ -44,7 +45,7 @@ test('not calling a method with mock correctly asserts the call count', t => {
 
 test('not getting a property with mock correctly asserts the call count', t => {
   const calculator = Substitute.for<Calculator>()
-  calculator.isEnabled.returns(true)
+  calculator.isEnabled[returns](true)
 
   calculator[didNotReceive]().isEnabled
   t.throws(() => calculator[received](1).isEnabled, { instanceOf: SubstituteException })

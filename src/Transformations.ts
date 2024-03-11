@@ -1,6 +1,17 @@
 import type { AllArguments } from './Arguments';
 import type { FirstLevelMethod } from './Types';
 
+export const received = Symbol('received');
+export const didNotReceive = Symbol('didNotReceive');
+export const mimick = Symbol('mimick');
+export const clearReceivedCalls = Symbol('clearReceivedCalls');
+
+export const mimicks = Symbol('mimicks');
+export const throws = Symbol('throws');
+export const returns = Symbol('returns');
+export const resolves = Symbol('resolves');
+export const rejects = Symbol('rejects');
+
 type FunctionSubstituteWithOverloads<TFunc, Terminating = false> =
     TFunc extends {
         (...args: infer A1): infer R1;
@@ -50,21 +61,21 @@ export type PropertySubstitute<TReturnType> = TReturnType & NoArgumentMockObject
 type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType;
 
 type MockObjectPromise<TReturnType> = TReturnType extends Promise<infer U> ? {
-    resolves: OneArgumentRequiredFunction<U, void>;
-    rejects: OneArgumentRequiredFunction<any, void>;
+    [resolves]: OneArgumentRequiredFunction<U, void>;
+    [rejects]: OneArgumentRequiredFunction<any, void>;
 } : {}
 
 type BaseMockObjectMixin<TReturnType> = MockObjectPromise<TReturnType> & {
-    returns: OneArgumentRequiredFunction<TReturnType, void>;
-    throws: OneArgumentRequiredFunction<any, never>;
+    [returns]: OneArgumentRequiredFunction<TReturnType, void>;
+    [throws]: OneArgumentRequiredFunction<any, never>;
 }
 
 type NoArgumentMockObjectMixin<TReturnType> = BaseMockObjectMixin<TReturnType> & {
-    mimicks: OneArgumentRequiredFunction<() => TReturnType, void>;
+    [mimicks]: OneArgumentRequiredFunction<() => TReturnType, void>;
 }
 
 type MockObjectMixin<TArguments extends any[], TReturnType> = BaseMockObjectMixin<TReturnType> & {
-    mimicks: OneArgumentRequiredFunction<(...args: TArguments) => TReturnType, void>;
+    [mimicks]: OneArgumentRequiredFunction<(...args: TArguments) => TReturnType, void>;
 }
 
 type TerminatingFunction<TArguments extends any[]> = ((...args: TArguments) => void) & ((arg: AllArguments<TArguments>) => void)
@@ -90,17 +101,6 @@ type ObjectSubstituteTransformation<K, T = OmitProxyMethods<K>> = {
     [P in keyof T]: TryToExpandNonArgumentedFunctionSubstitute<T, P> & TryToExpandArgumentedFunctionSubstitute<T, P> & TryToExpandPropertySubstitute<T, P>;
 }
 
-export const received = Symbol('received');
-export const didNotReceive = Symbol('didNotReceive');
-export const mimick = Symbol('mimick');
-export const clearReceivedCalls = Symbol('clearReceivedCalls');
-
-export const mimicks = Symbol('mimicks');
-export const throws = Symbol('throws');
-export const returns = Symbol('returns');
-export const resolves = Symbol('resolves');
-export const rejects = Symbol('rejects');
-
 export type OmitProxyMethods<T> = Omit<T, FirstLevelMethod>;
 export type ObjectSubstitute<T> = ObjectSubstituteTransformation<T> & {
     [received](amount?: number): TerminatingObject<T>;
@@ -108,4 +108,3 @@ export type ObjectSubstitute<T> = ObjectSubstituteTransformation<T> & {
     [mimick](instance: OmitProxyMethods<T>): void;
     [clearReceivedCalls](): void;
 }
-export type DisabledSubstituteObject<T> = T extends ObjectSubstitute<infer K> ? K : never;

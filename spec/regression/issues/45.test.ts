@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, received } from '../../../src'
 
 class DependencyClass {
     public methodOne() { }
@@ -30,7 +30,7 @@ test('issue 45 Checking received calls off at times', async t => {
     subject.callToMethodTwo()
 
     t.notThrows(() => {
-        mock.received(1).methodOne()
-        mock.received(1).methodTwo(Arg.is(x => x === 'string'))
+        mock[received](1).methodOne()
+        mock[received](1).methodTwo(Arg.is(x => x === 'string'))
     })
 })
