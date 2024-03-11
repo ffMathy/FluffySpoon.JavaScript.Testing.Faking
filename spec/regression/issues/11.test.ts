@@ -1,5 +1,5 @@
 import test from 'ava'
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, received, returns } from '../../../src'
 
 type Addands = {
     op1: number

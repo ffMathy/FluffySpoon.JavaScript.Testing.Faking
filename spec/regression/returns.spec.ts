@@ -1,7 +1,7 @@
 import test from 'ava'
 import { types } from 'util'
 
-import { Substitute, Arg } from '../../src'
+import { Substitute, Arg, returns } from '../../src'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -19,9 +19,6 @@ interface Calculator {
 test('returns a primitive value for method with no arguments', t => {
   const calculator = Substitute.for<Calculator>()
   calculator.clear().returns()
-  // calculator.add(1, 2).toExponential()
-  // calculator.isEnabled2.viewResult().returns(3)
-  // calculator.other().viewResult().returns(2)
 
   t.is(void 0 as void, calculator.clear())
 })

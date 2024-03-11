@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg, SubstituteOf } from '../../src'
+import { Substitute, Arg, SubstituteOf, received, mimicks, resolves, returns } from '../../src'
 
 class Dummy {
 
@@ -20,7 +20,7 @@ export class Example {
 	set v(x: string | null | undefined) {
 	}
 
-	received(stuff: number | string) {
+	received(_stuff: string) {
 
 	}
 
@@ -28,7 +28,7 @@ export class Example {
 		return Promise.resolve(new Dummy())
 	}
 
-	foo(): string | undefined | null {
+	foo(_arg?: string): string | undefined | null {
 		return 'stuff'
 	}
 
@@ -47,22 +47,13 @@ function initialize() {
 
 const textModifierRegex = /\x1b\[\d+m/g
 
-test('class with method called \'received\' can be used for call count verification when proxies are suspended', t => {
-	initialize()
+test('class with method called \'received\' can be used for call count verification when using symbols', t => {
+	const substitute = Substitute.for<Example>()
 
-	Substitute.disableFor(substitute).received(2)
+	substitute.received("foo")
 
-	t.throws(() => substitute.received(2).received(2))
-	t.notThrows(() => substitute.received(1).received(2))
-})
-
-test('class with method called \'received\' can be used for call count verification', t => {
-	initialize()
-
-	Substitute.disableFor(substitute).received('foo')
-
-	t.notThrows(() => substitute.received(1).received('foo'))
-	t.throws(() => substitute.received(2).received('foo'))
+	t.notThrows(() => substitute[received](1).received("foo"))
+	t.throws(() => substitute[received](2).received("foo"))
 })
 
 test('class string field set received', t => {
@@ -79,16 +70,16 @@ test('class string field set received', t => {
 	runLogic(substitute)
 
 
-	t.notThrows(() => substitute.received().v = 'hello')
-	t.notThrows(() => substitute.received(5).v = Arg.any())
-	t.notThrows(() => substitute.received().v = Arg.any())
-	t.notThrows(() => substitute.received(2).v = 'hello')
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
+	t.notThrows(() => substitute[received]().v = 'hello')
+	t.notThrows(() => substitute[received](5).v = Arg.any())
+	t.notThrows(() => substitute[received]().v = Arg.any())
+	t.notThrows(() => substitute[received](2).v = 'hello')
+	t.notThrows(() => substitute[received](2).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
 
-	t.throws(() => substitute.received(2).v = Arg.any())
-	t.throws(() => substitute.received(1).v = Arg.any())
-	t.throws(() => substitute.received(1).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
-	t.throws(() => substitute.received(3).v = 'hello')
+	t.throws(() => substitute[received](2).v = Arg.any())
+	t.throws(() => substitute[received](1).v = Arg.any())
+	t.throws(() => substitute[received](1).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
+	t.throws(() => substitute[received](3).v = 'hello')
 })
 
 test('resolving promises works', async t => {
@@ -117,9 +108,9 @@ test('class method received', t => {
 	void substitute.c('hi', 'there')
 	void substitute.c('hi', 'there')
 
-	t.notThrows(() => substitute.received(4).c('hi', 'there'))
-	t.notThrows(() => substitute.received(1).c('hi', 'the1re'))
-	t.notThrows(() => substitute.received().c('hi', 'there'))
+	t.notThrows(() => substitute[received](4).c('hi', 'there'))
+	t.notThrows(() => substitute[received](1).c('hi', 'the1re'))
+	t.notThrows(() => substitute[received]().c('hi', 'there'))
 
 	const expectedMessage = 'Expected 7 calls to the method c with arguments [\'hi\', \'there\'], but received 4 of such calls.\n' +
 		'All calls received to method c:\n' +
@@ -128,7 +119,7 @@ test('class method received', t => {
 		'-> call with arguments [\'hi\', \'there\']\n' +
 		'-> call with arguments [\'hi\', \'there\']\n' +
 		'-> call with arguments [\'hi\', \'there\']'
-	const { message } = t.throws(() => { substitute.received(7).c('hi', 'there') })
+	const { message } = t.throws(() => { substitute[received](7).c('hi', 'there') })
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 })
 
@@ -138,14 +129,14 @@ test('received call matches after partial mocks using property instance mimicks'
 	substitute.d.mimicks(() => instance.d)
 	substitute.c('lala', 'bar')
 
-	substitute.received(1).c('lala', 'bar')
-	substitute.received(1).c('lala', 'bar')
+	substitute[received](1).c('lala', 'bar')
+	substitute[received](1).c('lala', 'bar')
 
-	t.notThrows(() => substitute.received(1).c('lala', 'bar'))
+	t.notThrows(() => substitute[received](1).c('lala', 'bar'))
 	const expectedMessage = 'Expected 2 calls to the method c with arguments [\'lala\', \'bar\'], but received 1 of such calls.\n' +
 		'All calls received to method c:\n' +
 		'-> call with arguments [\'lala\', \'bar\']'
-	const { message } = t.throws(() => substitute.received(2).c('lala', 'bar'))
+	const { message } = t.throws(() => substitute[received](2).c('lala', 'bar'))
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 	t.deepEqual(substitute.d, 1337)
 })

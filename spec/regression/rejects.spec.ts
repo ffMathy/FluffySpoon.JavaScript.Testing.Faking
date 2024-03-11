@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg } from '../../src'
+import { Substitute, Arg, rejects } from '../../src'
 
 interface Calculator {
   getMemory(): Promise<number>

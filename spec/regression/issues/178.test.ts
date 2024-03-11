@@ -2,7 +2,7 @@ import test, { ExecutionContext, ThrowsExpectation } from 'ava'
 import * as fakeTimers from '@sinonjs/fake-timers'
 import { types } from 'util'
 
-import { Substitute } from '../../../src'
+import { Substitute, didNotReceive, received, returns } from '../../../src'
 import { SubstituteException } from '../../../src/SubstituteException'
 
 interface Library {

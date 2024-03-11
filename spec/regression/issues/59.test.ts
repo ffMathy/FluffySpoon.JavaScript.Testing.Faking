@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute } from '../../../src'
+import { Substitute, received, returns } from '../../../src'
 
 interface IEcho {
   echo(a: string): string

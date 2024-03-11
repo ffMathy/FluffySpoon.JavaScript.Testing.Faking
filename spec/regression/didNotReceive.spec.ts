@@ -1,5 +1,5 @@
 import test from 'ava'
-import { Substitute, Arg } from '../../src'
+import { Substitute, Arg, didNotReceive, received, returns } from '../../src'
 import { SubstituteException } from '../../src/SubstituteException'
 
 interface Calculator {
@@ -13,7 +13,7 @@ test('not calling a method correctly asserts the call count', t => {
   const calculator = Substitute.for<Calculator>()
 
   calculator.didNotReceive().add(1, 1)
-  t.throws(() => calculator.received(1).add(1, 1), { instanceOf: SubstituteException })
+  t.throws(() => calculator.received().add(1, 1), { instanceOf: SubstituteException })
   t.throws(() => calculator.received().add(Arg.all()), { instanceOf: SubstituteException })
 })
 
