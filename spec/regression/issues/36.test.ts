@@ -49,7 +49,7 @@ class Service {
 
 test('issue 36 - promises returning object with properties', async t => {
     const emptyFetch = Substitute.for<IFetch>()
-    emptyFetch.getUpdates(Key.create())[returns](Promise.resolve<IData>(IData.create()))
+    emptyFetch.getUpdates(Key.create()).returns(Promise.resolve<IData>(IData.create()))
     const result = await emptyFetch.getUpdates(Key.create())
     t.true(result.serverCheck instanceof Date, 'given date is instanceof Date')
     t.deepEqual(result.data, [1], 'arrays are deep equal')
@@ -58,12 +58,12 @@ test('issue 36 - promises returning object with properties', async t => {
 test('using objects or classes as arguments should be able to match mock', async t => {
     const db = Substitute.for<IFetch>()
     const data = IData.create()
-    db.getUpdates(Key.create())[returns](Promise.resolve(data))
+    db.getUpdates(Key.create()).returns(Promise.resolve(data))
     const service = new Service(db)
 
     await service.handle(Key.create())
 
-    db[received](1).storeUpdates(Arg.is((arg: IData) =>
+    db.received(1).storeUpdates(Arg.is((arg: IData) =>
         arg.serverCheck instanceof Date &&
         arg instanceof IData &&
         arg.data[0] === 100

@@ -14,12 +14,12 @@ test('issue 23: mimick received should not call method', t => {
 
   let calls = 0
 
-  mockedCalculator.add(Arg.all())[mimicks]((a, b) => {
+  mockedCalculator.add(Arg.all()).mimicks((a, b) => {
     t.deepEqual(++calls, 1, 'mimick called twice')
     return a + b
   })
 
   mockedCalculator.add(1, 1) // ok
 
-  mockedCalculator[received](1).add(1, 1) // not ok, calls mimick func
+  mockedCalculator.received(1).add(1, 1) // not ok, calls mimick func
 })

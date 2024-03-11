@@ -8,7 +8,7 @@ import { returns } from '../src'
 
 const nodeFactory = (key: string) => {
   const node = Substitute.for<SubstituteNodeBase>()
-  node.key[returns](key)
+  node.key.returns(key)
   return node
 }
 

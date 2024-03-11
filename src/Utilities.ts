@@ -1,7 +1,7 @@
 import { inspect } from 'util'
 import { RecordedArguments } from './RecordedArguments'
 import type { AssertionMethod, ConfigurationMethod, SubstituteMethod, SubstitutionMethod } from './Types'
-import { clearReceivedCalls, didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from './Transformations'
+import { ClearReceivedCallsPropertyKey, DidNotReceivePropertyKey, MimickPropertyKey, MimicksPropertyKey, ReceivedPropertyKey, RejectsPropertyKey, ResolvesPropertyKey, ReturnsPropertyKey, ThrowsPropertyKey, clearReceivedCalls, didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws } from './Transformations'
 
 export const PropertyType = {
   Method: 'method',
@@ -9,16 +9,24 @@ export const PropertyType = {
 } as const
 
 export const isAssertionMethod = (property: PropertyKey): property is AssertionMethod =>
-  property === received || property === didNotReceive
+  isReceivedFunction(property) || 
+  isDidNotReceiveFunction(property)
 
 export const isConfigurationMethod = (property: PropertyKey): property is ConfigurationMethod => 
-  property === clearReceivedCalls || property === mimick
+  isClearReceivedCallsFunction(property) || 
+  isMimickFunction(property)
 
 export const isSubstitutionMethod = (property: PropertyKey): property is SubstitutionMethod =>
-  property === mimicks || property === returns || property === throws || property === resolves || property === rejects
+  isMimicksFunction(property) || 
+  isReturnsFunction(property) || 
+  isThrowsFunction(property) || 
+  isResolvesFunction(property) || 
+  isRejectsFunction(property)
 
 export const isSubstituteMethod = (property: PropertyKey): property is SubstituteMethod =>
-  isSubstitutionMethod(property) || isConfigurationMethod(property) || isAssertionMethod(property)
+  isSubstitutionMethod(property) || 
+  isConfigurationMethod(property) || 
+  isAssertionMethod(property)
 
 export const stringifyArguments = (args: RecordedArguments) => textModifier.faint(
   args.hasArguments() ?
@@ -27,7 +35,8 @@ export const stringifyArguments = (args: RecordedArguments) => textModifier.fain
 )
 
 export const stringifyCalls = (calls: RecordedArguments[]) => {
-  if (calls.length === 0) return ' (no calls)'
+  if (calls.length === 0) 
+    return ' (no calls)'
 
   const key = '\n-> call with '
   const callsDetails = calls.map(stringifyArguments)
@@ -42,3 +51,44 @@ export const textModifier = {
 }
 
 export const plurify = (str: string, count?: number) => `${str}${count === 1 ? '' : 's'}`
+
+export function isDidNotReceiveFunction(property: PropertyKey): property is DidNotReceivePropertyKey {
+  return property === didNotReceive || property === 'didNotReceive'
+}
+
+export function isReceivedFunction(property: PropertyKey): property is ReceivedPropertyKey {
+  return property === received || property === 'received'
+}
+
+export function isClearReceivedCallsFunction(property: PropertyKey): property is ClearReceivedCallsPropertyKey {
+  return property === clearReceivedCalls || property === 'clearReceivedCalls'
+}
+
+export function isMimickFunction(property: PropertyKey): property is MimickPropertyKey {
+  return property === mimick || property === 'mimick'
+}
+
+export function isRejectsFunction(property: PropertyKey): property is RejectsPropertyKey {
+  return property === rejects || property === 'rejects'
+}
+
+export function isResolvesFunction(property: PropertyKey): property is ResolvesPropertyKey {
+  return property === resolves || property === 'resolves'
+}
+
+export function isThrowsFunction(property: PropertyKey): property is ThrowsPropertyKey {
+  return property === throws || property === 'throws'
+}
+
+export function isReturnsFunction(property: PropertyKey): property is ReturnsPropertyKey {
+  return property === returns || property === 'returns'
+}
+
+export function isMimicksFunction(property: PropertyKey): property is MimicksPropertyKey {
+  return property === mimicks || property === 'mimicks'
+}
+
+// https://www.totaltypescript.com/concepts/the-prettify-helper
+export type Prettify<T> = {
+  [K in keyof T]: T[K];
+} & {};

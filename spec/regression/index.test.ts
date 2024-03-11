@@ -20,7 +20,7 @@ export class Example {
 	set v(x: string | null | undefined) {
 	}
 
-	received(stuff: number | string) {
+	received(_stuff: string) {
 
 	}
 
@@ -28,7 +28,7 @@ export class Example {
 		return Promise.resolve(new Dummy())
 	}
 
-	foo(): string | undefined | null {
+	foo(_arg?: string): string | undefined | null {
 		return 'stuff'
 	}
 
@@ -48,12 +48,12 @@ function initialize() {
 const textModifierRegex = /\x1b\[\d+m/g
 
 test('class with method called \'received\' can be used for call count verification when using symbols', t => {
-	initialize()
+	const substitute = Substitute.for<Example>()
 
-	substitute.received(2)
+	substitute.received("foo")
 
-	t.throws(() => substitute[received](2).received(2))
-	t.notThrows(() => substitute[received](1).received(2))
+	t.notThrows(() => substitute[received](1).received("foo"))
+	t.throws(() => substitute[received](2).received("foo"))
 })
 
 test('class string field set received', t => {
@@ -85,7 +85,7 @@ test('class string field set received', t => {
 test('resolving promises works', async t => {
 	initialize()
 
-	substitute.returnPromise()[resolves](1338)
+	substitute.returnPromise().resolves(1338)
 
 	t.is(1338, await substitute.returnPromise() as number)
 })
@@ -93,7 +93,7 @@ test('resolving promises works', async t => {
 test('class void returns', t => {
 	initialize()
 
-	substitute.foo()[returns](void 0, null)
+	substitute.foo().returns(void 0, null)
 
 	t.is(substitute.foo(), void 0)
 	t.is(substitute.foo(), null)
@@ -126,7 +126,7 @@ test('class method received', t => {
 test('received call matches after partial mocks using property instance mimicks', t => {
 	initialize()
 
-	substitute.d[mimicks](() => instance.d)
+	substitute.d.mimicks(() => instance.d)
 	substitute.c('lala', 'bar')
 
 	substitute[received](1).c('lala', 'bar')
@@ -144,7 +144,7 @@ test('received call matches after partial mocks using property instance mimicks'
 test('partial mocks using property instance mimicks', t => {
 	initialize()
 
-	substitute.d[mimicks](() => instance.d)
+	substitute.d.mimicks(() => instance.d)
 
 	t.deepEqual(substitute.d, 1337)
 })

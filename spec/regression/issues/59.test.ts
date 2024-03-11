@@ -9,10 +9,10 @@ interface IEcho {
 
 test('issue 59 - Mock function with optional parameters', (t) => {
   const echoer = Substitute.for<IEcho>()
-  echoer.maybeEcho('foo')[returns]('bar')
-  echoer.maybeEcho()[returns]('baz')
+  echoer.maybeEcho('foo').returns('bar')
+  echoer.maybeEcho().returns('baz')
 
   t.is('bar', echoer.maybeEcho('foo'))
-  echoer[received]().maybeEcho('foo')
+  echoer.received().maybeEcho('foo')
   t.is('baz', echoer.maybeEcho())
 })
