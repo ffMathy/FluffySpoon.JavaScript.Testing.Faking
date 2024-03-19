@@ -1,5 +1,5 @@
 import { SubstituteNodeModel } from './Types'
-import { stringifyReceivedCalls, TextBuilder, stringifyExpectation } from './Utilities'
+import { stringify, TextBuilder } from './utilities'
 
 const SubstituteExceptionType = {
   callCountMismatch: 'CallCountMismatch',
@@ -30,11 +30,11 @@ export class SubstituteException extends Error {
       .add(expected.call.key.toString(), t => t.bold().underline())
       .add(':')
       .newLine().add('Expected to receive ')
-      .addParts(...stringifyExpectation(expected))
+      .addParts(...stringify.expectation(expected))
       .add(', but received ')
       .add(received.matchCount < 1 ? 'none' : received.matchCount.toString(), t => t.faint())
       .add('.')
-    if (received.calls.length > 0) textBuilder.newLine().add(`All property or method calls to ${callPath} received so far:${stringifyReceivedCalls(callPath, expected.call, received.calls)}`)
+    if (received.calls.length > 0) textBuilder.newLine().add(`All property or method calls to ${callPath} received so far:${stringify.receivedCalls(callPath, expected.call, received.calls)}`)
 
     return new this(textBuilder.toString(), SubstituteExceptionType.callCountMismatch)
   }
