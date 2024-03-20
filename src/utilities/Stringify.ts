@@ -1,10 +1,11 @@
-import { inspect } from 'node:util'
+import { InspectOptions, inspect } from 'node:util'
 import { RecordedArguments } from '../RecordedArguments'
 import { SubstituteNodeModel } from '../Types'
 import { TextBuilder, TextPart } from './TextBuilder'
+import * as is from './Guards'
 
-const stringifyArguments = (args: RecordedArguments) => args.hasArguments()
-  ? `(${args.value.map(x => inspect(x, { colors: true })).join(', ')})`
+const stringifyArguments = (args: RecordedArguments, options?: InspectOptions) => args.hasArguments()
+  ? `(${args.value.map(x => inspect(x, { colors: true, ...options })).join(', ')})`
   : ''
 
 const matchBasedPrefix = (isMatch?: boolean) => {
@@ -42,7 +43,7 @@ const stringifyExpectation = (expected: { count: number | undefined, call: Subst
     .add(expected.call.propertyType, t => t.bold())
     .add(plurify(' call', expected.count), t => t.bold())
     .add(' matching ')
-    .addParts(...stringifyCall({ callPath: expected.call.key.toString() })(expected.call).map(t => t.bold()))
+    .addParts(...stringifyCall({ callPath: expected.call.property.toString() })(expected.call).map(t => t.bold()))
   return textBuilder.parts
 }
 
@@ -59,10 +60,29 @@ const stringifyReceivedCalls = (callPath: string, expected: SubstituteNodeModel,
   return textBuilder.newLine().toString()
 }
 
-// const stringifyNode
+const stringifyRootNode = (_node: SubstituteNodeModel, stringifiedChildNodes: string) => {
+  const instanceName = '@Substitute'
+  return instanceName + ' {' + stringifiedChildNodes + '\n}'
+
+}
+
+const stringifyNode = (node: SubstituteNodeModel, childNode: SubstituteNodeModel | undefined, options: InspectOptions) => {
+  const hasContext = !is.CONTEXT.none(node.context)
+  const args = stringifyArguments(node.recordedArguments, options)
+  const label = is.CONTEXT.substitution(node.context) ?
+    ' => ' :
+    is.CONTEXT.assertion(node.context) ?
+      `${childNode?.property.toString()}` :
+      ''
+  const s = hasContext ? `${label}${inspect(childNode?.recordedArguments, options)}` : ''
+
+  return `${node.propertyType}<${node.property.toString()}>: ${args}${s}`
+}
 
 export const stringify = {
   call: stringifyCall,
   expectation: stringifyExpectation,
-  receivedCalls: stringifyReceivedCalls
+  receivedCalls: stringifyReceivedCalls,
+  rootNode: stringifyRootNode,
+  node: stringifyNode
 }
