@@ -2,17 +2,16 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { SubstituteNodeBase } from './SubstituteNodeBase'
 import { RecordedArguments } from './RecordedArguments'
-// TODO: implement rest of constants and guards (AccessorType, Context, Filter functions, ...)
-import { constants, is } from './utilities'
+import { constants, is, stringify } from './utilities'
 import { SubstituteException } from './SubstituteException'
-import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType, SubstituteNodeModel } from './Types'
+import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType, SubstituteNodeModel, AccessorType } from './Types'
 import type { ObjectSubstitute } from './Transformations'
 
 const instance = Symbol('Substitute:Instance')
-const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNode>> = {
+const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNodeModel>> = {
   all: () => true,
-  receivedCalls: node => !node.hasContext,
-  substituteValues: node => node.isSubstitution
+  receivedCalls: node => is.CONTEXT.none(node.context),
+  substituteValues: node => is.CONTEXT.substitution(node.context)
 }
 
 type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
@@ -23,10 +22,10 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   private _rootContext: RootContext
 
   private _propertyType: PropertyType = constants.PROPERTY.property
-  private _accessorType: 'get' | 'set' = 'get'
+  private _accessorType: AccessorType = constants.ACCESSOR.get
   private _recordedArguments: RecordedArguments = RecordedArguments.none()
 
-  private _context: SubstituteContext = 'none'
+  private _context: SubstituteContext = constants.CONTEXT.none
   private _retrySubstitutionExecutionAttempt: boolean = false
 
   public stack?: string
@@ -233,7 +232,7 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   private _scheduledAssertionException: SubstituteException | undefined
 
   private handleSetter(value: any) {
-    this._accessorType = 'set'
+    this._accessorType = constants.ACCESSOR.set
     this._recordedArguments = RecordedArguments.from([value])
   }
 
@@ -277,28 +276,6 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   }
 
   private printableForm(_: number, options: InspectOptions): string {
-    // TODO: Refactor this to use a TextBuilder via stringify utility
-    return this.isRoot() ? this.printRootNode(options) : this.printNode(options)
-  }
-
-  private printRootNode(options: InspectOptions): string {
-    const records = inspect(this.recorder, options)
-    const instanceName = '@Substitute'
-    return instanceName + ' {' + records + '\n}'
-  }
-
-  private printNode(options: InspectOptions): string {
-    const hasContext = this.hasContext
-    const args = inspect(this.recordedArguments, options)
-    const label = this.isSubstitution ?
-      '=> ' :
-      this.isAssertion ?
-        `${this.child?.property.toString()}` :
-        ''
-    const s = hasContext ? `${label}${inspect(this.child?.recordedArguments, options)}` : ''
-
-    const printableNode = `${this.propertyType}<${this.property.toString()}>: ${args}${s}`
-    return printableNode
-    // return hasContext ? textModifier.italic(printableNode) : printableNode
+    return this.isRoot() ? stringify.rootNode(this, inspect(this.recorder, options)) : stringify.node(this, this.child, options)
   }
 }

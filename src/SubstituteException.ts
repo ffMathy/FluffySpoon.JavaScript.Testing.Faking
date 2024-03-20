@@ -1,14 +1,8 @@
-import { SubstituteNodeModel } from './Types'
-import { stringify, TextBuilder } from './utilities'
-
-const SubstituteExceptionType = {
-  callCountMismatch: 'CallCountMismatch',
-  PropertyNotMocked: 'PropertyNotMocked'
-} as const
-type SubstituteExceptionType = typeof SubstituteExceptionType[keyof typeof SubstituteExceptionType]
+import { SubstituteNodeModel, SubstituteExceptionType } from './Types'
+import { stringify, TextBuilder, constants } from './utilities'
 
 export class SubstituteException extends Error {
-  type?: SubstituteExceptionType
+  public type?: SubstituteExceptionType
 
   constructor(msg: string, exceptionType?: SubstituteExceptionType) {
     super(msg)
@@ -18,16 +12,16 @@ export class SubstituteException extends Error {
     Error.captureStackTrace(this, errorConstructor)
   }
 
-  static forCallCountMismatch(
+  public static forCallCountMismatch(
     expected: { count: number | undefined, call: SubstituteNodeModel },
     received: { matchCount: number, calls: SubstituteNodeModel[] }
   ) {
-    const callPath = `@Substitute.${expected.call.key.toString()}`
+    const callPath = `@Substitute.${expected.call.property.toString()}`
 
     const textBuilder = new TextBuilder()
       .add('Call count mismatch in ')
       .add('@Substitute.', t => t.underline())
-      .add(expected.call.key.toString(), t => t.bold().underline())
+      .add(expected.call.property.toString(), t => t.bold().underline())
       .add(':')
       .newLine().add('Expected to receive ')
       .addParts(...stringify.expectation(expected))
@@ -36,17 +30,17 @@ export class SubstituteException extends Error {
       .add('.')
     if (received.calls.length > 0) textBuilder.newLine().add(`All property or method calls to ${callPath} received so far:${stringify.receivedCalls(callPath, expected.call, received.calls)}`)
 
-    return new this(textBuilder.toString(), SubstituteExceptionType.callCountMismatch)
+    return new this(textBuilder.toString(), constants.EXCEPTION.callCountMismatch)
   }
 
-  static forPropertyNotMocked(property: PropertyKey) {
+  public static forPropertyNotMocked(property: PropertyKey) {
     return new this(
       `There is no mock for property: ${property.toString()}`,
-      SubstituteExceptionType.PropertyNotMocked
+      constants.EXCEPTION.propertyNotMocked
     )
   }
 
-  static generic(message: string) {
+  public static generic(message: string) {
     return new this(message)
   }
 }
