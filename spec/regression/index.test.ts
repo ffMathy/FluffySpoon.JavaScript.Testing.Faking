@@ -121,13 +121,19 @@ test('class method received', t => {
 	t.notThrows(() => substitute.received(1).c('hi', 'the1re'))
 	t.notThrows(() => substitute.received().c('hi', 'there'))
 
-	const expectedMessage = 'Expected 7 calls to the method c with arguments [\'hi\', \'there\'], but received 4 of such calls.\n' +
-		'All calls received to method c:\n' +
-		'-> call with arguments [\'hi\', \'there\']\n' +
-		'-> call with arguments [\'hi\', \'the1re\']\n' +
-		'-> call with arguments [\'hi\', \'there\']\n' +
-		'-> call with arguments [\'hi\', \'there\']\n' +
-		'-> call with arguments [\'hi\', \'there\']'
+	const expectedMessage = 'Call count mismatch in @Substitute.c:\n' +
+		`Expected to receive 7 method calls matching c('hi', 'there'), but received 4.\n` +
+		'All property or method calls to @Substitute.c received so far:\n' +
+		`› ✔ @Substitute.c('hi', 'there')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:114:18)\n` +
+		`› ✘ @Substitute.c('hi', 'the1re')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:115:18)\n` +
+		`› ✔ @Substitute.c('hi', 'there')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:116:18)\n` +
+		`› ✔ @Substitute.c('hi', 'there')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:117:18)\n` +
+		`› ✔ @Substitute.c('hi', 'there')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:118:18)\n`
 	const { message } = t.throws(() => { substitute.received(7).c('hi', 'there') })
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 })
@@ -142,9 +148,11 @@ test('received call matches after partial mocks using property instance mimicks'
 	substitute.received(1).c('lala', 'bar')
 
 	t.notThrows(() => substitute.received(1).c('lala', 'bar'))
-	const expectedMessage = 'Expected 2 calls to the method c with arguments [\'lala\', \'bar\'], but received 1 of such calls.\n' +
-		'All calls received to method c:\n' +
-		'-> call with arguments [\'lala\', \'bar\']'
+	const expectedMessage = 'Call count mismatch in @Substitute.c:\n' +
+		`Expected to receive 2 method calls matching c('lala', 'bar'), but received 1.\n` +
+		'All property or method calls to @Substitute.c received so far:\n' +
+		`› ✔ @Substitute.c('lala', 'bar')\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:145:13)\n`
 	const { message } = t.throws(() => substitute.received(2).c('lala', 'bar'))
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 	t.deepEqual(substitute.d, 1337)

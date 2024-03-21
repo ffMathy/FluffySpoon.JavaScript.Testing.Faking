@@ -3,11 +3,14 @@ type ArgumentOptions = {
   inverseMatch?: boolean
 }
 class BaseArgument<T> {
+  private _description: string
   constructor(
-    private _description: string,
+    description: string,
     private _matchingFunction: PredicateFunction<T>,
     private _options?: ArgumentOptions
-  ) { }
+  ) {
+    this._description = `${this._options?.inverseMatch ? 'Not ' : ''}${description}`
+  }
 
   matches(arg: T) {
     const inverseMatch = this._options?.inverseMatch ?? false
@@ -33,7 +36,7 @@ export class Argument<T> extends BaseArgument<T> {
 export class AllArguments<T extends any[]> extends BaseArgument<T> {
   private readonly _type = 'AllArguments';
   constructor() {
-    super('{all}', () => true, {})
+    super('Arg.all{}', () => true, {})
   }
   get type(): 'AllArguments' {
     return this._type // TODO: Needed?
@@ -60,7 +63,7 @@ export namespace Arg {
 
   type Is = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>) => ReturnArg<ExtractFirstArg<T>>
   const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options?: ArgumentOptions) => new Argument(
-    `{predicate ${toStringify(predicate)}}`, predicate, options
+    `Arg.is{${toStringify(predicate)}}`, predicate, options
   )
   export const is = createInversable(isFunction) as Inversable<Is>
 
@@ -79,7 +82,7 @@ export namespace Arg {
   type Any = <T extends AnyType = 'any'>(type?: T) => MapAnyReturn<T>
 
   const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
-    const description = `{type ${type}}`
+    const description = `Arg.any{${type}}`
     const predicate = (x: any) => {
       switch (type) {
         case 'any':
