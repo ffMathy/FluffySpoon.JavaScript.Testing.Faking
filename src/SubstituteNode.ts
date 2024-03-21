@@ -14,7 +14,7 @@ const clearTypeToFilterMap: Record<ClearType, FilterFunction<SubstituteNodeModel
   substituteValues: node => is.CONTEXT.substitution(node.context)
 }
 
-type SpecialProperty = typeof instance | typeof inspect.custom | 'then'
+type SpecialProperty = typeof instance | typeof inspect.custom | typeof Symbol.toPrimitive | 'then' | 'toJSON'
 type RootContext = { substituteMethodsEnabled: boolean }
 
 export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitute<unknown>, SubstituteNodeModel {
@@ -259,14 +259,16 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   }
 
   private isSpecialProperty(property: PropertyKey): property is SpecialProperty {
-    return property === SubstituteNode.instance || property === inspect.custom || property === 'then'
+    return property === SubstituteNode.instance || property === inspect.custom || property === Symbol.toPrimitive || property === 'then' || property === 'toJSON'
   }
 
   private evaluateSpecialProperty(property: SpecialProperty) {
     switch (property) {
       case SubstituteNode.instance:
         return this
+      case 'toJSON':
       case inspect.custom:
+      case Symbol.toPrimitive:
         return this.printableForm.bind(this)
       case 'then':
         return
