@@ -1,6 +1,6 @@
 import test from 'ava'
 import { Arg } from '../../src'
-import { Argument } from '../../src/Arguments'
+import { Argument } from '../../src/shared'
 
 const testObject = { "foo": "bar" }
 const testArray = ["a", 1, true]
