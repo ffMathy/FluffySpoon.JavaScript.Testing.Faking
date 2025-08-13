@@ -10,7 +10,6 @@ type TestRunner = {
 
 test.describe('Verifies test runner compatibility', () => {
   const failingExec = (command: string): string => {
-    process.env
     const { FORCE_COLOR, ...environment } = { ...process.env, CI: '1', NO_COLOR: '1' } as Partial<Record<string, string>>
     try {
       execSync(command, { env: environment, stdio: 'pipe' })
@@ -43,11 +42,10 @@ test.describe('Verifies test runner compatibility', () => {
           `Could not find the expected failure location in the output. Expected "${testRunner.failureLocationText}"`
         )
         assert.ok(
-          result.includes('SubstituteException: Expected'),
+          result.includes('SubstituteException: Call count mismatch'),
           `Could not find the expected exception message in the output: ${result}`
         )
       })
     })
   })
 })
-
