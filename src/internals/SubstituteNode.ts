@@ -2,58 +2,58 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { SubstituteNodeBase } from './SubstituteNodeBase'
 import { RecordedArguments } from './RecordedArguments'
-// import { PropertyType as PropertyTypeMap, isAssertionMethod, isSubstituteMethod, isSubstitutionMethod, textModifier, isConfigurationMethod, isThrowsFunction, isMimicksFunction, isResolvesFunction, isRejectsFunction, isReturnsFunction } from './Utilities'
 import { SubstituteException } from './SubstituteException'
-import type { FilterFunction, SubstituteContext, SubstitutionMethod, ClearType, PropertyType, SubstituteNodeModel, AccessorType } from './Types'
-import type { ObjectSubstitute, OmitProxyMethods } from './Transformations'
-import { didNotReceive, mimick, mimicks, received, rejects, resolves, returns, throws, clearReceivedCalls } from './Transformations'
-import { constants, is, stringify } from './utilities'
+import { is, stringify, transform } from './utilities'
+
+import { constants } from './Constants'
+import type { SubstituteContext, PropertyType, SubstituteNodeModel, AccessorType, SubstituteMethod, SubstitutionMethod } from './Types'
+import { constants as sharedConstants } from '../shared/Constants'
+
 
 export const instance = Symbol('Substitute:Instance')
 
 type SpecialProperty = typeof instance | typeof inspect.custom | typeof Symbol.toPrimitive | 'then' | 'toJSON'
-
-type RootContext = { substituteMethodsEnabled: boolean }
+type TT = Exclude<keyof typeof sharedConstants.CONTEXT, 'none' | 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'>
+type ObjectSubstitute<T> = {
+  [P in typeof sharedConstants.CONTEXT[TT]['raw'] | typeof sharedConstants.CONTEXT[TT]['symbol']]: 
+    (...args: any[]) => T | void | Promise<T> | Promise<void>
+}
 
 export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitute<unknown>, SubstituteNodeModel {
   private _proxy: SubstituteNode
-  private _rootContext: RootContext
 
   private _propertyType: PropertyType = constants.PROPERTY.property
   private _accessorType: AccessorType = constants.ACCESSOR.get
   private _recordedArguments: RecordedArguments = RecordedArguments.none()
 
-  private _context: SubstituteContext = constants.CONTEXT.none
+  private _context: SubstituteContext = sharedConstants.CONTEXT.none.symbol
   private _retrySubstitutionExecutionAttempt: boolean = false
 
   public stack?: string
 
   private constructor(key: PropertyKey, parent?: SubstituteNode) {
     super(key, parent)
-    if (this.isRoot()) {
-      this._rootContext = {}
-    }
-    else {
-      this._rootContext = this.root.rootContext
-    }
 
     this._proxy = new Proxy(
       this,
       {
         get: function (target, property) {
           if (target.isSpecialProperty(property)) {
-            // console.log('specialProperty', property)
             return target.evaluateSpecialProperty(property)
           }
 
           if (target._retrySubstitutionExecutionAttempt) {
-            // console.log('reattemptSubstitutionExecution', property)
             return target.reattemptSubstitutionExecution()[property]
           }
 
           const newNode = SubstituteNode.createChild(property, target)
           if (target.isAssertion) newNode.executeAssertion()
-          if (target.isRoot() && target.rootContext.substituteMethodsEnabled && (is.method.assertion(property) || is.method.configuration(property))) {
+          if (target.hasDepthOfAtLeast(1) && !target.hasContext && is.method.assertion(target.property)) {
+            target.assignContext(target.property)
+            target[target.property](...Array.isArray(target.recordedArguments.value) ? target.recordedArguments.value : [undefined])
+            if (target.isAssertion) newNode.executeAssertion()
+          }
+          if (target.isRoot() && is.method.contextValue(property) && (is.method.assertion(property) || is.method.configuration(property))) {
             newNode.assignContext(property)
             return newNode[property].bind(newNode)
           }
@@ -65,6 +65,12 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
           newNode.handleSetter(value)
           if (target.isAssertion)
             newNode.executeAssertion()
+
+          if (target.hasDepthOfAtLeast(1) && !target.hasContext && is.method.assertion(target.property)) {
+            target.assignContext(target.property)
+            target[target.property](...Array.isArray(target.recordedArguments.value) ? target.recordedArguments.value : [undefined])
+            if (target.isAssertion) newNode.executeAssertion()
+          }
 
           return true
         },
@@ -82,19 +88,19 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   }
 
   public received(amount?: number | undefined) {
-    return this[received](amount);
+    return this[sharedConstants.CONTEXT.received.symbol](amount);
   }
 
   public didNotReceive() {
-    return this[didNotReceive]();
+    return this[sharedConstants.CONTEXT.didNotReceive.symbol]();
   }
 
-  public mimick(instance: OmitProxyMethods<unknown>) {
-    return this[mimick](instance);
+  public mimick(instance: unknown) {
+    return this[sharedConstants.CONTEXT.mimick.symbol](instance);
   }
 
   public clearReceivedCalls() {
-    return this[clearReceivedCalls]();
+    return this[sharedConstants.CONTEXT.clearReceivedCalls.symbol]();
   }
 
   public static createRoot(): SubstituteNode {
@@ -109,24 +115,20 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     return this._proxy
   }
 
-  public get rootContext(): RootContext {
-    return this._rootContext
-  }
-
   get context(): SubstituteContext {
     return this._context
   }
 
   get hasContext(): boolean {
-    return this.context !== 'none'
+    return this.context !== sharedConstants.CONTEXT.none.symbol
   }
 
   get isSubstitution(): boolean {
-    return is.method.substitution(this.context)
+    return is.CONTEXT.substitution(this.context)
   }
 
   get isAssertion(): boolean {
-    return is.method.assertion(this.context)
+    return is.CONTEXT.assertion(this.context)
   }
 
   get property(): PropertyKey {
@@ -145,21 +147,21 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     return this._recordedArguments
   }
 
-  public [received](amount?: number): SubstituteNode {
+  public [sharedConstants.CONTEXT.received.symbol](amount?: number): SubstituteNode {
     this.handleMethod([amount])
     return this.proxy
   }
 
-  public [didNotReceive](): SubstituteNode {
+  public [sharedConstants.CONTEXT.didNotReceive.symbol](): SubstituteNode {
     this.handleMethod([0])
     return this.proxy
   }
 
-  public [mimick](_instance: OmitProxyMethods<unknown>) {
+  public [sharedConstants.CONTEXT.mimick.symbol](_instance: unknown) {
     throw new Error('Mimick is not implemented yet')
   }
 
-  public [clearReceivedCalls](): void {
+  public [sharedConstants.CONTEXT.clearReceivedCalls.symbol](): void {
     this.handleMethod([])
 
     const filter = (node: SubstituteNode) => is.CONTEXT.none(node.context)
@@ -170,10 +172,10 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
     return types.isProxy(this) ? this[inspect.custom](...args) : this.printableForm(...args)
   }
 
-  private assignContext(context: SubstituteContext): void {
-    if (!is.method.substitute(context))
-      throw new Error(`Cannot assign context for property ${context.toString()}`)
-    this._context = context
+  private assignContext(context: SubstituteMethod): void {
+    this._context = typeof context === 'string' ? 
+      transform.rawSymbolContextMap[context] : 
+      context
   }
 
   private reattemptSubstitutionExecution(): SubstituteNode | any {
@@ -184,7 +186,6 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
 
   private attemptSubstitutionExecution(): SubstituteNode | any {
     const mostSuitableSubstitution = this.getMostSuitableSubstitution()
-    // console.log('mostSuitableSubstitution', mostSuitableSubstitution)
     return mostSuitableSubstitution instanceof SubstituteNode
       ? mostSuitableSubstitution.executeSubstitution(this.recordedArguments)
       : this.proxy
@@ -202,21 +203,21 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       ? this.child.recordedArguments.value?.shift()
       : this.child.recordedArguments.value[0]
     switch (substitutionMethod) {
-      case throws:
+      case sharedConstants.CONTEXT.throws.symbol:
       case 'throws':
         throw substitutionValue
-      case mimicks:
+      case sharedConstants.CONTEXT.mimicks.symbol:
       case 'mimicks':
         if (is.PROPERTY.property(this.propertyType)) return substitutionValue()
         if (!contextArguments.hasArguments()) throw new TypeError('Context arguments cannot be undefined')
         return substitutionValue(...contextArguments.value)
-      case resolves:
+      case sharedConstants.CONTEXT.resolves.symbol:
       case 'resolves':
         return Promise.resolve(substitutionValue)
-      case rejects:
+      case sharedConstants.CONTEXT.rejects.symbol:
       case 'rejects':
         return Promise.reject(substitutionValue)
-      case returns:
+      case sharedConstants.CONTEXT.returns.symbol:
       case 'returns':
         return substitutionValue
       default:
@@ -237,11 +238,11 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       return
     }
 
-    const siblings = [...this.getAllSiblings().filter(n => !n.hasContext && n.accessorType === this.accessorType)]
+    const withContext = this.parent.property === sharedConstants.CONTEXT.received.symbol
+    const siblings = [...this.getAllSiblings().filter(n => (withContext || !n.hasContext) && n.accessorType === this.accessorType)]
     const hasBeenCalled = siblings.length > 0
     const hasSiblingOfSamePropertyType = siblings.some(sibling => sibling.propertyType === this.propertyType)
     const allRecordedArguments = siblings.map(sibling => sibling.recordedArguments)
-
     if (
       !hasBeenCalled &&
       (!finiteExpectation || expectedCount > 0)
@@ -283,7 +284,6 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
   private handleMethod(rawArguments: any[]): void {
     this._propertyType = constants.PROPERTY.method
     this._recordedArguments = RecordedArguments.from(rawArguments)
-    // console.log('handleMethod', rawArguments);
   }
 
   private getMostSuitableSubstitution(): SubstituteNode | void {

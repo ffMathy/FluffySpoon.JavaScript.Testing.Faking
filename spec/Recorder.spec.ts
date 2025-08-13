@@ -1,10 +1,9 @@
 import test from 'ava'
 
-import { Recorder } from '../src/Recorder'
-import { RecordsSet } from '../src/RecordsSet'
-import { Substitute } from '../src/Substitute'
-import { SubstituteNodeBase } from '../src/SubstituteNodeBase'
-import { returns } from '../src'
+import { Recorder } from '../src/internals/Recorder'
+import { RecordsSet } from '../src/internals/RecordsSet'
+import { Substitute } from '../src/api/Substitute'
+import { SubstituteNodeBase } from '../src/internals/SubstituteNodeBase'
 
 const nodeFactory = (key: string) => {
   const node = Substitute.for<SubstituteNodeBase>()

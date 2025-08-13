@@ -1,5 +1,5 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
-import { Argument, AllArguments } from './Arguments'
+import { Argument, AllArguments } from '../shared'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {

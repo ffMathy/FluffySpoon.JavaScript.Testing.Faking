@@ -1,6 +1,6 @@
 import test from 'ava'
-import { Substitute, Arg, received, returns } from '../../src'
-import { SubstituteException } from '../../src/SubstituteException'
+import { Substitute, Arg } from '../../src'
+import { SubstituteException } from '../../src/internals/SubstituteException'
 
 interface Calculator {
   add(a: number, b: number): number

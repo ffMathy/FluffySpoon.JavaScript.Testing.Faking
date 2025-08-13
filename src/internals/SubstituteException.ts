@@ -1,5 +1,6 @@
 import { SubstituteNodeModel, SubstituteExceptionType } from './Types'
-import { stringify, TextBuilder, constants } from './utilities'
+import { stringify, TextBuilder } from './utilities'
+import { constants } from './Constants'
 
 export class SubstituteException extends Error {
   public type?: SubstituteExceptionType

@@ -1,5 +1,5 @@
-import { ObjectSubstitute } from './Transformations'
-import { SubstituteNode } from './SubstituteNode'
+import { ObjectSubstitute } from './types'
+import { SubstituteNode } from '../internals'
 
 export type SubstituteOf<T> = ObjectSubstitute<T> & T
 

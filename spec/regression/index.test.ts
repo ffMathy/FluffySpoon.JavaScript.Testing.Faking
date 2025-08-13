@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg, SubstituteOf, received, mimicks, resolves, returns } from '../../src'
+import { Substitute, Arg, SubstituteOf, received } from '../../src'
 
 class Dummy {
 
@@ -116,16 +116,16 @@ test('class method received', t => {
 		`Expected to receive 7 method calls matching c('hi', 'there'), but received 4.\n` +
 		'All property or method calls to @Substitute.c received so far:\n' +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:114:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:105:18)\n` +
 		`› ✘ @Substitute.c('hi', 'the1re')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:115:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:106:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:116:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:107:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:117:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:108:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:118:18)\n`
-	const { message } = t.throws(() => { substitute.received(7).c('hi', 'there') })
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:109:18)\n`
+	const { message } = t.throws(() => { substitute[received](7).c('hi', 'there') })
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 })
 
@@ -143,8 +143,8 @@ test('received call matches after partial mocks using property instance mimicks'
 		`Expected to receive 2 method calls matching c('lala', 'bar'), but received 1.\n` +
 		'All property or method calls to @Substitute.c received so far:\n' +
 		`› ✔ @Substitute.c('lala', 'bar')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:145:13)\n`
-	const { message } = t.throws(() => substitute.received(2).c('lala', 'bar'))
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:136:13)\n`
+	const { message } = t.throws(() => substitute[received](2).c('lala', 'bar'))
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 	t.deepEqual(substitute.d, 1337)
 })

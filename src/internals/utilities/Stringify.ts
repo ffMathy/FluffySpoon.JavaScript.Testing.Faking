@@ -40,7 +40,7 @@ const stringifyExpectation = (expected: { count: number | undefined, call: Subst
   const textBuilder = new TextBuilder()
   textBuilder.add(expected.count === undefined ? '1 or more' : expected.count.toString(), t => t.bold())
     .add(' ')
-    .add(expected.call.propertyType, t => t.bold())
+    .add(expected.call.propertyType.description!, t => t.bold())
     .add(plurify(' call', expected.count), t => t.bold())
     .add(' matching ')
     .addParts(...stringifyCall({ callPath: expected.call.property.toString() })(expected.call).map(t => t.bold()))
@@ -76,7 +76,7 @@ const stringifyNode = (node: SubstituteNodeModel, childNode: SubstituteNodeModel
       ''
   const s = hasContext ? `${label}${inspect(childNode?.recordedArguments, options)}` : ''
 
-  return `${node.propertyType}<${node.property.toString()}>: ${args}${s}`
+  return `${node.propertyType.description}<${node.property.toString()}>: ${args}${s}`
 }
 
 export const stringify = {
