@@ -6,7 +6,7 @@ import { SubstituteException } from './SubstituteException'
 import { is, stringify, transform } from './utilities'
 
 import { constants } from './Constants'
-import type { SubstituteContext, PropertyType, SubstituteNodeModel, AccessorType, SubstituteMethod, SubstitutionMethod } from './Types'
+import type { SubstituteContext, PropertyType, SubstituteNodeModel, AccessorType, SubstituteMethod, SubstitutionMethod, AssertionMethod } from './Types'
 import { constants as sharedConstants } from '../shared/Constants'
 
 
@@ -48,10 +48,12 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
 
           const newNode = SubstituteNode.createChild(property, target)
           if (target.isAssertion) newNode.executeAssertion()
-          if (target.hasDepthOfAtLeast(1) && !target.hasContext && is.method.assertion(target.property)) {
+          const unresolvedAssertionFollowedBySubstitution = !target.hasContext && is.method.assertion(target.property) && !is.method.substitution(newNode.property)
+          if (target.hasDepthOfAtLeast(1) && unresolvedAssertionFollowedBySubstitution) {
             target.assignContext(target.property)
-            target[target.property](...Array.isArray(target.recordedArguments.value) ? target.recordedArguments.value : [undefined])
+            target[target.context as AssertionMethod](...Array.isArray(target.recordedArguments.value) ? target.recordedArguments.value : [undefined])
             if (target.isAssertion) newNode.executeAssertion()
+            // if (target.isConfiguration) newNode.executeConfiguration()
           }
           if (target.isRoot() && is.method.contextValue(property) && (is.method.assertion(property) || is.method.configuration(property))) {
             newNode.assignContext(property)
@@ -238,7 +240,8 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
       return
     }
 
-    const withContext = this.parent.property === sharedConstants.CONTEXT.received.symbol
+    // const withContext = this.parent.property === sharedConstants.CONTEXT.received.symbol
+    const withContext = false
     const siblings = [...this.getAllSiblings().filter(n => (withContext || !n.hasContext) && n.accessorType === this.accessorType)]
     const hasBeenCalled = siblings.length > 0
     const hasSiblingOfSamePropertyType = siblings.some(sibling => sibling.propertyType === this.propertyType)

@@ -26,6 +26,4 @@ export type ObjectSubstituteMethods<T> =
   (T extends { mimick: any } ? 
     { [mimick](instance: T): void } :
     { mimick(instance: T): void }) &
-  (T extends { clearReceivedCalls: any } ? 
-    { [clearReceivedCalls](): void } :
-    { clearReceivedCalls(): void })
+  { [clearReceivedCalls](): void }

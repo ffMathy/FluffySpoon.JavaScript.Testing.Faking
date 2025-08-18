@@ -1,7 +1,7 @@
 import test from 'ava'
 
-import { Substitute, SubstituteOf } from '../src'
-import { SubstituteNode, instance } from '../src/internals/SubstituteNode'
+import { Substitute, SubstituteOf, clearReceivedCalls } from '../../src'
+import { SubstituteNode, instance } from '../../src/internals/SubstituteNode'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -14,11 +14,11 @@ type InstanceReturningSubstitute<T> = SubstituteOf<T> & {
   [instance]: SubstituteNode
 }
 
-test.skip('clears received calls on a substitute', t => {
+test('clears received calls on a substitute', t => {
   const calculator = Substitute.for<Calculator>() as InstanceReturningSubstitute<Calculator>
   calculator.add(1, 1)
   calculator.add(1, 1).returns(2)
-  calculator.clearReceivedCalls();
+  calculator[clearReceivedCalls]();
 
   t.is(calculator[instance].recorder.records.size, 2)
   t.is(calculator[instance].recorder.indexedRecords.size, 2)

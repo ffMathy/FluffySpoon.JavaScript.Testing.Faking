@@ -1,6 +1,6 @@
 
 module.exports = {
-	files: ['spec/**/*.ts'],
+	files: ['spec/**/*.spec.ts'],
 	typescript: {
 		compile: false,
 		rewritePaths: {
