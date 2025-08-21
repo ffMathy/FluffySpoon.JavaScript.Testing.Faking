@@ -2,7 +2,7 @@ import test from 'ava'
 import { inspect } from 'util'
 
 import { Arg } from '../src'
-import { RecordedArguments } from '../src/RecordedArguments'
+import { RecordedArguments } from '../src/internals/RecordedArguments'
 
 const testObject = { 'foo': 'bar' }
 const testArray = ['a', 1, true]

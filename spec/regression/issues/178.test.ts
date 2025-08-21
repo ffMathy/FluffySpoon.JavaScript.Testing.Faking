@@ -3,7 +3,7 @@ import * as fakeTimers from '@sinonjs/fake-timers'
 import { types } from 'util'
 
 import { Substitute } from '../../../src'
-import { SubstituteException } from '../../../src/SubstituteException'
+import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 interface Library {
   subSection: Subsection

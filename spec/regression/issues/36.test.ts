@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, received, returns } from '../../../src'
 
 class Key {
     private constructor(private _value: string) { }

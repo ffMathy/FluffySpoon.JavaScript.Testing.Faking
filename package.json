@@ -46,10 +46,10 @@
     "devDependencies": {
         "@ava/typescript": "^3.0.1",
         "@sinonjs/fake-timers": "^11.2.2",
-        "@types/node": "^18.19.22",
+        "@types/node": "^18.19.122",
         "@types/sinonjs__fake-timers": "^8.1.5",
         "ava": "^4.3.3",
-        "typescript": "^4.8.4"
+        "typescript": "^5.9.2"
     },
     "volta": {
         "node": "18.19.1"

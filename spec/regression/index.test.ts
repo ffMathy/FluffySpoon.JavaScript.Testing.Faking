@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg, SubstituteOf } from '../../src'
+import { Substitute, Arg, SubstituteOf, received } from '../../src'
 
 class Dummy {
 
@@ -20,7 +20,7 @@ export class Example {
 	set v(x: string | null | undefined) {
 	}
 
-	received(stuff: number | string) {
+	received(_stuff: string) {
 
 	}
 
@@ -28,7 +28,7 @@ export class Example {
 		return Promise.resolve(new Dummy())
 	}
 
-	foo(): string | undefined | null {
+	foo(_arg?: string): string | undefined | null {
 		return 'stuff'
 	}
 
@@ -47,22 +47,13 @@ function initialize() {
 
 const textModifierRegex = /\x1b\[\d+m/g
 
-test('class with method called \'received\' can be used for call count verification when proxies are suspended', t => {
-	initialize()
+test('class with method called \'received\' can be used for call count verification when using symbols', t => {
+	const substitute = Substitute.for<Example>()
 
-	Substitute.disableFor(substitute).received(2)
+	substitute.received("foo")
 
-	t.throws(() => substitute.received(2).received(2))
-	t.notThrows(() => substitute.received(1).received(2))
-})
-
-test('class with method called \'received\' can be used for call count verification', t => {
-	initialize()
-
-	Substitute.disableFor(substitute).received('foo')
-
-	t.notThrows(() => substitute.received(1).received('foo'))
-	t.throws(() => substitute.received(2).received('foo'))
+	t.notThrows(() => substitute[received](1).received("foo"))
+	t.throws(() => substitute[received](2).received("foo"))
 })
 
 test('class string field set received', t => {
@@ -79,16 +70,16 @@ test('class string field set received', t => {
 	runLogic(substitute)
 
 
-	t.notThrows(() => substitute.received().v = 'hello')
-	t.notThrows(() => substitute.received(5).v = Arg.any())
-	t.notThrows(() => substitute.received().v = Arg.any())
-	t.notThrows(() => substitute.received(2).v = 'hello')
-	t.notThrows(() => substitute.received(2).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
+	t.notThrows(() => substitute[received]().v = 'hello')
+	t.notThrows(() => substitute[received](5).v = Arg.any())
+	t.notThrows(() => substitute[received]().v = Arg.any())
+	t.notThrows(() => substitute[received](2).v = 'hello')
+	t.notThrows(() => substitute[received](2).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
 
-	t.throws(() => substitute.received(2).v = Arg.any())
-	t.throws(() => substitute.received(1).v = Arg.any())
-	t.throws(() => substitute.received(1).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
-	t.throws(() => substitute.received(3).v = 'hello')
+	t.throws(() => substitute[received](2).v = Arg.any())
+	t.throws(() => substitute[received](1).v = Arg.any())
+	t.throws(() => substitute[received](1).v = Arg.is(x => typeof x === 'string' && x.indexOf('ll') > -1))
+	t.throws(() => substitute[received](3).v = 'hello')
 })
 
 test('resolving promises works', async t => {
@@ -117,24 +108,24 @@ test('class method received', t => {
 	void substitute.c('hi', 'there')
 	void substitute.c('hi', 'there')
 
-	t.notThrows(() => substitute.received(4).c('hi', 'there'))
-	t.notThrows(() => substitute.received(1).c('hi', 'the1re'))
-	t.notThrows(() => substitute.received().c('hi', 'there'))
+	t.notThrows(() => substitute[received](4).c('hi', 'there'))
+	t.notThrows(() => substitute[received](1).c('hi', 'the1re'))
+	t.notThrows(() => substitute[received]().c('hi', 'there'))
 
 	const expectedMessage = 'Call count mismatch in @Substitute.c:\n' +
 		`Expected to receive 7 method calls matching c('hi', 'there'), but received 4.\n` +
 		'All property or method calls to @Substitute.c received so far:\n' +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:114:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:105:18)\n` +
 		`› ✘ @Substitute.c('hi', 'the1re')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:115:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:106:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:116:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:107:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:117:18)\n` +
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:108:18)\n` +
 		`› ✔ @Substitute.c('hi', 'there')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:118:18)\n`
-	const { message } = t.throws(() => { substitute.received(7).c('hi', 'there') })
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:109:18)\n`
+	const { message } = t.throws(() => { substitute[received](7).c('hi', 'there') })
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 })
 
@@ -144,16 +135,16 @@ test('received call matches after partial mocks using property instance mimicks'
 	substitute.d.mimicks(() => instance.d)
 	substitute.c('lala', 'bar')
 
-	substitute.received(1).c('lala', 'bar')
-	substitute.received(1).c('lala', 'bar')
+	substitute[received](1).c('lala', 'bar')
+	substitute[received](1).c('lala', 'bar')
 
-	t.notThrows(() => substitute.received(1).c('lala', 'bar'))
+	t.notThrows(() => substitute[received](1).c('lala', 'bar'))
 	const expectedMessage = 'Call count mismatch in @Substitute.c:\n' +
 		`Expected to receive 2 method calls matching c('lala', 'bar'), but received 1.\n` +
 		'All property or method calls to @Substitute.c received so far:\n' +
 		`› ✔ @Substitute.c('lala', 'bar')\n` +
-		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:145:13)\n`
-	const { message } = t.throws(() => substitute.received(2).c('lala', 'bar'))
+		`    called at <anonymous> (${process.cwd()}/spec/regression/index.test.ts:136:13)\n`
+	const { message } = t.throws(() => substitute[received](2).c('lala', 'bar'))
 	t.is(message.replace(textModifierRegex, ''), expectedMessage)
 	t.deepEqual(substitute.d, 1337)
 })

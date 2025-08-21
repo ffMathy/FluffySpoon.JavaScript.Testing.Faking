@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, received, mimicks } from '../../../src'
 
 interface CalculatorInterface {
   add(a: number, b: number): number

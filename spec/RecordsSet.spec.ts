@@ -1,6 +1,6 @@
 import test, { ExecutionContext } from 'ava'
 
-import { RecordsSet } from '../src/RecordsSet'
+import { RecordsSet } from '../src/internals/RecordsSet'
 
 const dataArray = [1, 2, 3]
 function* dataArrayGenerator() {
