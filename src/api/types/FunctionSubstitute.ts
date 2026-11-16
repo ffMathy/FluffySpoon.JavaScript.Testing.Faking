@@ -63,13 +63,16 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
   ] :
   NoOverloads
 
+// `unknown` (not `{}`) when there is no signature, so that `FunctionSubstitute<...> & TValue` is exactly `TValue` for a
+// member that is not callable: `{} & undefined` is `never` (TypeScript >= 4.8), which would drop `undefined` from an
+// optional property in the assertion view (TD-7).
 type PositionalSignature<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
   (...args: TOverload['arguments']) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
-  {}
+  unknown
 
 type AllArgumentsSignature<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
   (allArguments: AllArguments<TOverload['arguments']>) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
-  {}
+  unknown
 
 // All positional signatures come before the `Arg.all()` signatures, so a call with a single matcher
 // (`Arg.any()`, `Arg.is(...)`) resolves against the real parameter lists first (T:TY-10).
@@ -85,10 +88,10 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView> 
 
 /**
  * The call signatures a member of type `TFunction` has on a substitute, one pair per overload: the overload's own
- * parameter list, and a single `Arg.all()` argument. `{}` when `TFunction` is not callable.
+ * parameter list, and a single `Arg.all()` argument. `unknown` when `TFunction` is not callable.
  */
 export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substitute'> =
-  IsNever<TFunction> extends true ? {} :
+  IsNever<TFunction> extends true ? unknown :
   IsAny<TFunction> extends true ? (...args: any[]) => CallResult<TView, any[], any> :
   // Not `[TFunction] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TFunction.
   OverloadSignatures<Overloads<TFunction>, TView>

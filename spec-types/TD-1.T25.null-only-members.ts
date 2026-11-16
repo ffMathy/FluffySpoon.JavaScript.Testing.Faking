@@ -28,6 +28,8 @@ members.find(Arg.any()).returns(null)
 assert<Equals<typeof members.nothing, null>>()
 assert<Equals<typeof members.missing, undefined>>()
 assert<Equals<typeof members.either, null | undefined>>()
+members.received().nothing = null
+members.received().maybeNothing = undefined
 members.received().find('1')
 const asMembers: Members = members
 

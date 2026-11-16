@@ -17,7 +17,7 @@ export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
  */
 type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 
-// All views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
+// The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
 //
 // Members whose type is only `null` and/or `undefined` (`error?: undefined`, `ownerDocument: null`) get no setup API:
@@ -47,20 +47,29 @@ type SubstituteMembers<T> = {
 /** The members of a substitute (without the assertion and configuration methods). */
 export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>>
 
+// In the assertion view, a member that is not callable keeps its declared type, including `undefined` for an optional
+// property (`sub.received().note = undefined`, TD-7). A callable member offers the assertion signatures (calls return
+// nothing) on the member type without `null | undefined`.
 type AssertionMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
 
-type AssertionMembers<T> = {
-  [P in keyof T]-?:
-    P extends 'then' ? never :
-    P extends 'toJSON' ? never :
-    AssertionMember<T[P]>
-}
+type AssertionMemberOf<T, P extends keyof T> =
+  P extends 'then' ? never :
+  P extends 'toJSON' ? never :
+  AssertionMember<T[P]>
+
+// For a type with a string index signature, the homomorphic mapping (with `-?`) keeps the named members next to the
+// index signature (T:TY-8); `-?` removes `undefined` from optional named members there.
+type IndexedAssertionMembers<T> = { [P in keyof T]-?: AssertionMemberOf<T, P> }
+
+// Every other type is mapped over its keys without copying the modifiers (the key set is not written as `keyof T`):
+// all members are required, and an optional property keeps `undefined` in its type, which `-?` would remove.
+type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemberOf<T, P> }
 
 /**
  * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
  * member type (`sub.received().isEnabled = true`).
  */
-export type TerminatingObject<T> = AssertionMembers<Members<T>>
+export type TerminatingObject<T> = string extends keyof T ? IndexedAssertionMembers<T> : AssertionMembers<T>
 
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
