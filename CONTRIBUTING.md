@@ -73,7 +73,7 @@ ava runs two groups of tests:
 To run a single file or test, use ava's options after building the specs, for example:
 
 ```sh
-npm run build:spec && npx ava spec/regression/returns.spec.ts --match '*sequence*'
+npm run build:spec && npx ava spec/regression/returns.spec.ts --match '*order*'
 ```
 
 ### Type tests
