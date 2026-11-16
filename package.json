@@ -41,7 +41,9 @@
     ],
     "scripts": {
         "build": "rm -rf dist && tsc",
-        "test": "npm run build -- -p spec && ava"
+        "test": "npm run test:types && npm run build -- -p spec && ava",
+        "test:types": "tsc -p spec-types && tsc -p spec-types/loose",
+        "test:types:min-ts": "npm run build && node spec-types/min-ts/check.js"
     },
     "devDependencies": {
         "@ava/typescript": "^3.0.1",
