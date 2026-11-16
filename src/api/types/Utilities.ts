@@ -47,6 +47,15 @@ export type ValueKind<T> = [NonNullable<T>] extends [never] ? any : 'value'
 export type IndexKind<T> = IndexKindOf<T & {}>
 type IndexKindOf<T> = T extends unknown ? (string extends keyof T ? 'indexed' : 'plain') : never
 
+/**
+ * `any` for a concrete type, `'generic'` for a type parameter (and other types whose keys depend on one). The keys of
+ * a concrete type are property keys, so the check is decided. `keyof T` of a type parameter is generic, so TypeScript
+ * leaves the check undecided, on every version: the checked type is deliberately not wrapped in a tuple, which
+ * TypeScript 3.6 to 4.x would decide eagerly. An interface instantiated with a type parameter (`Box<T>`) has concrete
+ * keys and counts as concrete.
+ */
+export type GenericKind<T> = keyof T extends PropertyKey ? any : 'generic'
+
 /** The names the library uses: these are the names whose presence in a type the typings check. */
 export type LibraryMemberName = 'received' | 'didNotReceive' | 'returns' | 'throws' | 'resolves' | 'rejects' | 'mimicks'
 
