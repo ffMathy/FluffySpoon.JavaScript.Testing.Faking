@@ -82,6 +82,11 @@ export class Substitution {
     return this.args?.rank ?? 0
   }
 
+  /** The value the next use would give, without using it. */
+  public peekValue(): any {
+    return this.values.length === 0 ? undefined : this.values[this._next]
+  }
+
   /** The values are used in order and the last one keeps being used (NSubstitute semantics). */
   public nextValue(): any {
     const values = this.values

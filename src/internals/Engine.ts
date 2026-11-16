@@ -1,6 +1,6 @@
 import { inspect, InspectOptions, types } from 'util'
 
-import { isSubstituteProxy, substituteMarker } from '../shared'
+import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { CallSite, Frame, sameExpression } from './CallSite'
@@ -481,7 +481,8 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const delegate = hasMember(mimicked.instance, key) ||
       !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
     const value = delegate ? mimicked.instance[key] : undefined
-    if (delegate && typeof value !== 'function') {
+    // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
+    if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
       linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
       return value
     }
@@ -745,6 +746,47 @@ const createConfigureProxy = (state: SubstituteState): any => {
   })
 }
 
+/*
+ * D31: a nested setup through a member or a call (`sub[configure]().config.port.returns(1)`) that already answers
+ * with a value (a configured return value, or the mimicked instance's value) goes to that value when it is a
+ * substitute, as in NSubstitute. Members of a real value cannot be configured: that is a usage error, so that the
+ * nested setup is never silently ignored and never silently replaces the earlier setup.
+ */
+
+/** The configure view of a substitute value: of this copy of the library directly, of another copy through its symbol. */
+const configureViewOf = (value: any): any => {
+  if (Object.getPrototypeOf(value) === faceTargetPrototype) {
+    const face = value[INTERNAL] as Face | undefined
+    if (face !== undefined) return createConfigureProxy(faceState(face))
+  }
+  return value[constants.CONTEXT.configure.symbol]()
+}
+
+const nestedOfRealValueError = (path: string, member: string, reason: string, start: Function) => SubstituteException.generic(
+  `Cannot configure ${path}: ${member} ${reason}, which is not a substitute, and members of a real value cannot be ` +
+  `configured. Configure ${member} to return a substitute (e.g. Substitute.for()) and configure that one, ` +
+  `or configure what ${member} returns as a whole.`,
+  start
+)
+
+/** The configure view to forward a nested setup to, or undefined when the member or call does not answer yet. */
+const forwardNestedSetup = (
+  path: string, member: string, substitution: Substitution | undefined, mimicked: { value: unknown } | undefined, start: Function
+): any => {
+  if (substitution !== undefined && substitution.method !== 'auto') {
+    if (substitution.method !== 'returns')
+      throw nestedOfRealValueError(path, member, `is configured with ${substitution.method}()`, start)
+    const value = substitution.peekValue()
+    if (isSubstituteProxy(value)) return configureViewOf(value)
+    throw nestedOfRealValueError(path, member, `returns ${formatValue(value, false)}`, start)
+  }
+  if (mimicked !== undefined) {
+    if (isSubstituteProxy(mimicked.value)) return configureViewOf(mimicked.value)
+    throw nestedOfRealValueError(path, member, `is mimicked with ${formatValue(mimicked.value, false)}`, start)
+  }
+  return undefined
+}
+
 const configureMember = (state: SubstituteState, key: PropertyKey): any => {
   const context = contextMethodOf(key)
   if (context !== undefined) return contextFunction(context, () => state, undefined)
@@ -756,6 +798,15 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       if (method !== undefined) return function substitution(...values: any[]) {
         state.setPropertySubstitution(key, method, values)
       }
+      // D31: through a member that answers with a value already
+      const substitution = state.propertySubstitution(key)
+      const instance = state.mimicked?.instance
+      const mimickedValue = substitution === undefined && instance !== undefined && hasMember(instance, key) ? instance[key] : undefined
+      // a real method of a mimicked instance reads as a handle (see realGet), so nested setups configure that handle
+      const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || isSubstituteProxy(mimickedValue))
+        ? { value: mimickedValue } : undefined
+      const forwarded = forwardNestedSetup(`${state.memberPath(key)}.${keyToString(property)}`, keyToString(key), substitution, mimicked, get)
+      if (forwarded !== undefined) return forwarded[property]
       // D26: call/apply/bind are members here like any other: setups through them configure the member reading
       return configureMember(state.propertyEntry(key).state, property)
     },
@@ -778,6 +829,21 @@ const nestedEntry = (state: SubstituteState, key: PropertyKey, specification: Re
 }
 
 /**
+ * Where a nested setup through a call goes (D31): the substitute that the call already returns, or the
+ * auto-substitute registered for the specification. For an argument list without matchers, the substitution that
+ * answers that call now counts; for one with matchers, the substitution configured with the same specification.
+ */
+const nestedSetupTarget = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, property: PropertyKey | undefined, start: Function): any => {
+  const answering = specification.argumentsClass === 'plain'
+    ? state.findCallSubstitution(key, new ArgumentHashes(specification.value!))
+    : state.callSubstitutionFor(key, specification)
+  const call = `${memberLabel(key)}${formatArguments(specification.value, false)}`
+  const path = `${state.memberPath(key)}${formatArguments(specification.value, false)}${property === undefined ? '(...)' : `.${keyToString(property)}`}`
+  const forwarded = forwardNestedSetup(path, call, answering, undefined, start)
+  return forwarded !== undefined ? forwarded : createConfigureProxy(nestedEntry(state, key, specification).state)
+}
+
+/**
  * A call in a setup: `.returns(...)` configures it, anything else configures the auto-substitute it returns.
  *
  * `stringAssertion` marks a call of the string `received` / `didNotReceive` with Arg matchers among its
@@ -797,7 +863,7 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
         state.addCallSubstitution(key, specification, method, values)
       }
       if (stringAssertion) return assertionMember(state, property, assertionCount(get), get)
-      return configureMember(nestedEntry(state, key, specification).state, property)
+      return nestedSetupTarget(state, key, specification, property, get)[property]
     },
     set: function set(_target: unknown, property: PropertyKey, value: unknown) {
       if (!stringAssertion) throw configureSetError(set)
@@ -805,7 +871,7 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-      return configureCall(nestedEntry(state, key, specification).state, SELF, RecordedArguments.forSpecification(args))
+      return nestedSetupTarget(state, key, specification, undefined, apply)(...args)
     }
   })
 }

@@ -425,6 +425,72 @@ test('ENG2-7 (D28) a substitute is not a jest asymmetric matcher unless asymmetr
   matcher.received(1).asymmetricMatch(42)
 })
 
+test('ENG2-11 (D31) nested configure() setups through a configured or mimicked member go to its substitute, or fail', t => {
+  // a property configured to return a substitute: the nested setup goes to that substitute
+  const app = Substitute.for<any>()
+  const config = Substitute.for<any>()
+  config.port.returns(80)
+  app.config.returns(config)
+  app[configure]().config.port.returns(1)
+  t.is(app.config, config)
+  t.is(app.config.port, 1)
+
+  // a call configured to return a substitute: the earlier setups of that substitute are kept
+  const container = Substitute.for<any>()
+  const repository = Substitute.for<any>()
+  repository.find(2).returns('two')
+  container.getRepo().returns(repository)
+  container[configure]().getRepo().find(1).returns('one')
+  t.is(container.getRepo(), repository)
+  t.is(container.getRepo().find(1), 'one')
+  t.is(container.getRepo().find(2), 'two')
+  // ... also when a matcher setup answers the call, and for a function substitute that is called
+  const lookup = Substitute.for<any>()
+  lookup.get(Arg.any()).returns(repository)
+  lookup[configure]().get(5).find(3).returns('three')
+  t.is(lookup.get(5), repository)
+  t.is(repository.find(3), 'three')
+  const callback = Substitute.for<any>()
+  const factory = Substitute.for<any>()
+  factory.make().returns(callback)
+  factory[configure]().make()(7).returns('seven')
+  t.is(callback(7), 'seven')
+
+  // mimicked: a substitute value gets the setup, a real value is a usage error
+  const mimicked = Substitute.for<any>()
+  mimicked[mimick]({ config, settings: { port: 80 } })
+  mimicked[configure]().config.host.returns('example.org')
+  t.is(mimicked.config, config)
+  t.is(mimicked.config.host, 'example.org')
+  const mimickedError = t.throws<SubstituteException>(() => mimicked[configure]().settings.port.returns(1), { instanceOf: SubstituteException })
+  t.true(plain(mimickedError.message).startsWith(
+    'Cannot configure @Substitute.settings.port: settings is mimicked with { port: 80 }, which is not a substitute, ' +
+    'and members of a real value cannot be configured.'))
+  t.is(mimicked.settings.port, 80)
+
+  // configured real values are a usage error, and nothing is replaced
+  const real = Substitute.for<any>()
+  real.options.returns({ retries: 3 })
+  real.load().returns([1])
+  real.connection.throws(new Error('down'))
+  t.throws(() => real[configure]().options.retries.returns(5), { instanceOf: SubstituteException, message: /options returns \{ retries: 3 \}, which is not a substitute/ })
+  t.throws(() => real[configure]().load().length.returns(5), { instanceOf: SubstituteException, message: /Cannot configure @Substitute\.load\(\)\.length: load\(\) returns \[ 1 \]/ })
+  t.throws(() => real[configure]().connection.isOpen.returns(true), { instanceOf: SubstituteException, message: /connection is configured with throws\(\)/ })
+  t.deepEqual(real.options, { retries: 3 })
+  t.deepEqual(real.load(), [1])
+
+  // members that do not answer with a value yet keep working as before
+  const fresh = Substitute.for<any>()
+  fresh[configure]().config.port.returns(1)
+  fresh[configure]().getRepo(Arg.any()).find(1).returns('one')
+  t.is(fresh.config.port, 1)
+  t.is(fresh.getRepo(9).find(1), 'one')
+  const partial = Substitute.for<any>()
+  partial[mimick]({ load: () => 'real' })
+  partial[configure]().config.port.returns(2)
+  t.is(partial.config.port, 2)
+})
+
 test('ENG2-12 (D32) methods read from the value of a member configured as property and method run on that value', t => {
   const sizes = Substitute.for<any>()
   sizes.size(Arg.any()).returns(10)
