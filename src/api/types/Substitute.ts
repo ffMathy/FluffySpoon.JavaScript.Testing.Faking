@@ -55,6 +55,33 @@ type SubstituteMembers<TMembers, T> = {
 /** The members of a substitute (without the assertion and configuration methods), each with its setup API. */
 export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>, T>
 
+// Unions whose variants declare a member as only null/undefined (T36, R3TD-4):
+//   { data: string[]; error: null } | { data: null; error: Error }
+//   { ok: true; value: string; error?: undefined } | { ok: false; value?: undefined; error: Error }
+// The members above are mapped from the members the variants have in common, so `data` has the setup API of
+// `string[] | null`. `SubstituteOf<T>` intersects them with `T`, i.e. with each variant, and in the variant where
+// `data` is `null` the setup API meets `null`. That gives `never`, and TypeScript drops a variant that has a `never`
+// member which is `null` or a literal in one of the intersected types. When every variant has such a member, the whole
+// substitute became `never`.
+// The patch below gives such a member the type `never` itself in that variant. TypeScript keeps a variant in which one
+// of the intersected types declares the member as `never`, so every variant is kept. The member then reads as the
+// setup API intersected with the other variants' types (`result.data` is `string[]` with `.returns(...)`), and each
+// variant of the substitute is still assignable to that variant of `T`.
+
+// The members that are only null/undefined in `TVariant` but not in every variant of `T`.
+type VariantNullKeys<TVariant, T> = {
+  [P in keyof TVariant]-?:
+    [NonNullable<TVariant[P]>] extends [never] ? (P extends keyof T ? ([NonNullable<T[P]>] extends [never] ? never : P) : never) :
+    never
+}[keyof TVariant]
+
+// `unknown` for a type that is not a union (and in generic code, where the check cannot be decided).
+type VariantPatch<TVariant, T> = [T] extends [TVariant] ? unknown : { [P in VariantNullKeys<TVariant, T>]: never }
+
+/** For a union `T`, a union of one patch per variant (see above); `unknown` for any other type. */
+export type UnionVariantPatch<T> = UnionVariantPatchOf<T & {}, T>
+type UnionVariantPatchOf<TVariant, T> = TVariant extends unknown ? VariantPatch<TVariant, T> : never
+
 // In the assertion view, a member that is not callable keeps its declared type, including `undefined` for an optional
 // property (`sub.received().note = undefined`, TD-7). A callable member offers the assertion signatures (calls return
 // nothing) on the member type without `null | undefined`.
