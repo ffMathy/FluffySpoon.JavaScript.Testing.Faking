@@ -2,6 +2,8 @@
 // TD-10 / T32 The public API carries documentation comments that editors show (quick info), in the BUILT package
 // typings (dist/*.d.ts). Each `/*@name*/` marker in the consumer below sits right before an identifier; the check asks
 // the TypeScript language service for the quick info at that identifier and fails when it has no documentation.
+// R3TD-3 / T35 At an `Arg.is.not(...)` / `Arg.any.not(...)` call site (and on `.not` itself) the documentation
+// describes the inverse matcher, and at `Arg.is(...)` / `Arg.any(...)` it does not (see `expectations` below).
 //
 //   npm run build && node spec-types/TD-10.T32.jsdoc.js
 //
@@ -35,6 +37,10 @@ calculator.add(/*@Arg*/Arg.any(), 2)
 calculator.add(Arg./*@Arg.any*/any('number'), Arg.any./*@Arg.any.not*/not('number'))
 calculator.add(Arg./*@Arg.is*/is(x => x > 0), Arg.is./*@Arg.is.not*/not(x => x === 0))
 calculator.add(Arg./*@Arg.all*/all())
+const notZero = Arg.is./*@Arg.is.not (standalone)*/not((x: number) => x === 0)
+const isNot = Arg.is./*@Arg.is.not (not called)*/not
+const anyNot = Arg.any./*@Arg.any.not (not called)*/not
+calculator.add(Arg.any./*@Arg.any.not (no type)*/not(), notZero)
 
 calculator.add(1, 2)./*@returns()*/returns(3)
 calculator.add(1, 2)./*@throws()*/throws(new Error())
@@ -93,6 +99,15 @@ for (const diagnostic of diagnostics) {
   console.log(`FAIL the consumer does not compile: ${ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')}`)
 }
 
+// R3TD-3 / T35 What the documentation must (or must not) say at some markers: [marker name pattern, text pattern,
+// whether the text must be present, what is checked].
+const expectations = [
+  [/^Arg\.(is|any)\.not\b/, /^The inverse of `Arg\.(is|any)`/, true, 'describes the inverse matcher'],
+  [/^Arg\.is\.not\b/, /falsy/i, true, 'says that the predicate returns a falsy value'],
+  [/^Arg\.any\.not\b/, /\bNOT of the given type\b/, true, 'says that the argument is not of the type'],
+  [/^Arg\.(is|any)$/, /\binverse\b/i, false, 'describes the matcher itself, not its inverse']
+]
+
 const marker = /\/\*@(.+?)\*\//g
 let match
 let count = 0
@@ -104,6 +119,12 @@ while ((match = marker.exec(consumer)) !== null) {
   if (documentation === '') {
     failed = true
     console.log(`FAIL ${name}: no documentation comment`)
+    continue
+  }
+  const wrong = expectations.filter(([names, text, present]) => names.test(name) && text.test(documentation) !== present)
+  if (wrong.length > 0) {
+    failed = true
+    for (const [, , , what] of wrong) console.log(`FAIL ${name}: the documentation ${what}: ${documentation.split('\n')[0]}`)
   } else {
     console.log(`ok   ${name}: ${documentation.split('\n')[0].slice(0, 90)}`)
   }
