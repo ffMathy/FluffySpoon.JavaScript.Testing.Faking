@@ -140,6 +140,23 @@ test('F1 the compatibility checks bundle the packed package and run vitest with 
   t.regex(fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8'), /name: 'vitest-inline'/)
 })
 
+test('P2 the compatibility checks bundle CommonJS code that require()s the package with each documented workaround', t => {
+  const compatibility = path.join(root, 'compatibility-checks')
+  const helper = fs.readFileSync(path.join(compatibility, 'bundlers', 'require-helper.cjs'), 'utf8')
+  t.regex(helper, /require\('@fluffy-spoon\/substitute'\)/, 'the fixture is CommonJS code that require()s the package')
+  t.regex(fs.readFileSync(path.join(compatibility, 'bundlers', 'require-entry.mjs'), 'utf8'), /from '\.\/require-helper\.cjs'/)
+  const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
+  const p2 = bundlers.slice(bundlers.indexOf('const requireBundlers'))
+  t.true(p2.length < bundlers.length, 'test/bundlers.ts has the P2 checks')
+  // README "Importing" and MIGRATION "Imports and packaging" name these settings.
+  t.regex(p2, /commonjs\(\{ esmExternals: true \}\)/, 'commonjs({ esmExternals: true }) with the package external')
+  t.regex(p2, /commonjs\(\{ esmExternals: \[packageName\] \}\)/, 'commonjs({ esmExternals: [the package] }) with the package external')
+  t.regex(p2, /noExternal: \[packageName\]/, 'Vite with ssr.noExternal: [the package]')
+  t.regex(p2, /nodeResolve\(\{ preferBuiltins: true \}\), commonjs\(\)\]/, 'Rollup with the package bundled')
+  t.regex(p2, /documented caveat/, 'the caveat itself (default options, package external) is checked too')
+  t.regex(bundlers, /const packageName = '@fluffy-spoon\/substitute'/)
+})
+
 test('P28 the compatibility checks use substitutes inside jest matchers', t => {
   const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
   t.is(compatibility.scripts['validate:jest-matchers'], 'jest test-runners/jest-matchers/**.ts')
@@ -230,6 +247,47 @@ test('F2 exports["."] falls back to the CommonJS entry for Node.js versions with
   t.regex(ciWorkflow, /MINIMUM_ESM_NODE_13_VERSION:\s*'13\.7\.0'/)
   t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.EXPORTS_FALLBACK_NODE_VERSION\s*\}\}[\s\S]*?node require\.js/)
   t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.MINIMUM_ESM_NODE_13_VERSION\s*\}\}[\s\S]*?node require\.js\s*\n\s*node import\.mjs/)
+})
+
+test('R3TD-5 CONTRIBUTING.md, MIGRATION.md and the deep-import smoke test agree on the Node.js versions where deep imports work', t => {
+  const { deepImportSupport } = require('./smoke/deep-import-support')
+  // Measured with the packed package on each of these Node.js versions:
+  // [version, the form without .js works, the form with .js works]
+  const measured = [
+    ['v10.0.0', true, true], ['v12.0.0', true, true], ['v12.16.0', true, true],
+    ['v12.17.0', false, false], ['v12.18.0', false, false], ['v12.19.0', false, false],
+    ['v12.20.0', true, false], ['v12.22.12', true, false],
+    ['v13.0.0', false, false], ['v13.1.0', false, false], ['v13.7.0', false, false], ['v13.14.0', false, false],
+    ['v14.0.0', false, false], ['v14.13.0', true, false], ['v14.18.0', true, false],
+    ['v14.19.0', true, true], ['v14.21.3', true, true],
+    ['v16.0.0', true, false], ['v16.8.0', true, false],
+    ['v16.9.0', true, true], ['v16.20.2', true, true], ['v18.20.8', true, true], ['v20.20.2', true, true],
+    ['v22.0.0', true, true], ['v24.22.3', true, true], ['v26.13.1', true, true]
+  ]
+  for (const [version, withoutExtension, withExtension] of measured) {
+    t.deepEqual(deepImportSupport(version), { withoutExtension, withExtension }, version)
+  }
+  t.deepEqual(deepImportSupport('14.12.0'), { withoutExtension: false, withExtension: false }, '14.12.0 (no subpath patterns yet)')
+  t.is(deepImportSupport('v15.14.0'), undefined, '15.x was never checked, so nothing is claimed for it')
+
+  // The documents state the same ranges. Comment markers and line breaks do not matter.
+  const prose = file => readText(file).replace(/^[ \t]*\/\/ ?/gm, '').replace(/\s+/g, ' ')
+  const range = (from, to) => `${from.replace(/\./g, '\\.')}\\s*(?:to|-|–)\\s*${to.replace(/\./g, '\\.')}`
+  const fail = new RegExp(`${range('12.17', '12.19')}, (?:all of )?13\\.x and ${range('14.0', '14.12')}`)
+  const withoutOnly = new RegExp(`${range('12.20', '12.22')}, ${range('14.13', '14.18')} and ${range('16.0', '16.8')}[^.;]*?only the form without \`\\.js\` works`)
+  for (const file of ['CONTRIBUTING.md', 'MIGRATION.md', 'packaging/smoke/deep-imports.js', 'packaging/smoke/deep-import-support.js']) {
+    // t.true instead of t.regex, so that a failure names the file instead of printing all of it.
+    const text = prose(file)
+    t.true(fail.test(text), `${file}: deep imports fail on 12.17 to 12.19, 13.x and 14.0 to 14.12`)
+    t.true(withoutOnly.test(text), `${file}: on 12.20 to 12.22, 14.13 to 14.18 and 16.0 to 16.8 only the form without .js works`)
+    t.false(/12\.17 to 12\.22|14\.0 to 14\.18/.test(text), `${file} does not claim that deep imports fail where the form without .js works`)
+  }
+
+  // CI runs the smoke test, which checks the table on the running version, on every old Node.js version it installs.
+  const minimumNode = workflowJob(ciWorkflow, 'minimum-node')
+  const steps = minimumNode.split(/\n {6}- /).filter(step => /node require\.js/.test(step))
+  t.is(steps.length, 4, 'four smoke test steps')
+  for (const step of steps) t.regex(step, /node deep-imports\.js/, step.split('\n')[0])
 })
 
 test('G:CI-1 the release workflow only publishes to registries it can authenticate against', t => {
