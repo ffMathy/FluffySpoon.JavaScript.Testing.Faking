@@ -140,6 +140,23 @@ test('F1 the compatibility checks bundle the packed package and run vitest with 
   t.regex(fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8'), /name: 'vitest-inline'/)
 })
 
+test('P2 the compatibility checks bundle CommonJS code that require()s the package with each documented workaround', t => {
+  const compatibility = path.join(root, 'compatibility-checks')
+  const helper = fs.readFileSync(path.join(compatibility, 'bundlers', 'require-helper.cjs'), 'utf8')
+  t.regex(helper, /require\('@fluffy-spoon\/substitute'\)/, 'the fixture is CommonJS code that require()s the package')
+  t.regex(fs.readFileSync(path.join(compatibility, 'bundlers', 'require-entry.mjs'), 'utf8'), /from '\.\/require-helper\.cjs'/)
+  const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
+  const p2 = bundlers.slice(bundlers.indexOf('const requireBundlers'))
+  t.true(p2.length < bundlers.length, 'test/bundlers.ts has the P2 checks')
+  // README "Importing" and MIGRATION "Imports and packaging" name these settings.
+  t.regex(p2, /commonjs\(\{ esmExternals: true \}\)/, 'commonjs({ esmExternals: true }) with the package external')
+  t.regex(p2, /commonjs\(\{ esmExternals: \[packageName\] \}\)/, 'commonjs({ esmExternals: [the package] }) with the package external')
+  t.regex(p2, /noExternal: \[packageName\]/, 'Vite with ssr.noExternal: [the package]')
+  t.regex(p2, /nodeResolve\(\{ preferBuiltins: true \}\), commonjs\(\)\]/, 'Rollup with the package bundled')
+  t.regex(p2, /documented caveat/, 'the caveat itself (default options, package external) is checked too')
+  t.regex(bundlers, /const packageName = '@fluffy-spoon\/substitute'/)
+})
+
 test('P28 the compatibility checks use substitutes inside jest matchers', t => {
   const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
   t.is(compatibility.scripts['validate:jest-matchers'], 'jest test-runners/jest-matchers/**.ts')

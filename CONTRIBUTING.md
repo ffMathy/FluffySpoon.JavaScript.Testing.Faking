@@ -148,6 +148,16 @@ not against `src/`, and checks two things:
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
   `test-runners/vitest-inline/exports.test.ts`, which checks the same.
+  It also bundles `bundlers/require-entry.mjs`, which imports CommonJS code that `require()`s the package
+  (`bundlers/require-helper.cjs`). With `@rollup/plugin-commonjs` on default options and the package kept external,
+  that `require()` gets the `Substitute` class instead of the exports object (Vite 7 and older SSR builds do the
+  same, since they externalize dependencies). README "Importing" and MIGRATION "Imports and packaging" document
+  this and its workarounds, and the check makes sure each of them gives the exports object:
+  `commonjs({ esmExternals: true })`, `commonjs({ esmExternals: ['@fluffy-spoon/substitute'] })`, bundling the
+  package, Vite's `ssr.noExternal: ['@fluffy-spoon/substitute']`, and the default externals of the Vite version
+  in use (Vite 8 bundles with Rolldown and is not affected). It also checks that the caveat itself still holds,
+  so the documentation is updated when the tools change. Bundles that keep the package external are written to
+  `node_modules/.substitute-bundles/` there, where Node.js can resolve the installed package, and removed afterwards.
 
 Run them with:
 
