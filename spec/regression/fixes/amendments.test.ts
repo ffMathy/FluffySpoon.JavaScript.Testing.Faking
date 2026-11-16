@@ -435,3 +435,18 @@ test('D10 / D11 received(Arg...) followed by a member access is an assertion and
   overlapping[configure]().received(Arg.any()).returns('configured')
   t.is(overlapping.received(8), 'configured')
 })
+
+test('D18 an assignment assertion lists the assignments under "All property assignments to"', t => {
+  const settings = Substitute.for<any>()
+  settings.isEnabled = true
+  void settings.isEnabled
+  const message = messageOf(() => { settings.received(1).isEnabled = false })
+  t.true(message.startsWith(
+    'Call count mismatch in @Substitute.isEnabled:\n' +
+    'Expected to receive 1 property assignment matching isEnabled = false, but received none.\n' +
+    'All property assignments to @Substitute.isEnabled received so far:\n' +
+    '› ✘ @Substitute.isEnabled = true\n'
+  ))
+  t.is(listedLines(message).length, 1)
+  t.true(messageOf(() => settings.received(2).isEnabled).includes('All property or method calls to @Substitute.isEnabled received so far:'))
+})

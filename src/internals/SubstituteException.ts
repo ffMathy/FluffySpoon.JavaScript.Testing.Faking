@@ -117,7 +117,9 @@ export class SubstituteException extends Error {
     if (mismatch.explanation !== undefined) textBuilder.add(` ${mismatch.explanation}`)
 
     if (mismatch.listed.length > 0) {
-      textBuilder.newLine().add(`All property or method calls to ${memberPath} received so far:`)
+      // an assignment assertion lists only the assignments, the others list reads and calls
+      const heading = expected.kind === 'set' ? 'All property assignments to' : 'All property or method calls to'
+      textBuilder.newLine().add(`${heading} ${memberPath} received so far:`)
       const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
       for (const listed of shown) {
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
