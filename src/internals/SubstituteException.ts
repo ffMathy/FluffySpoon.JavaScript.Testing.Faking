@@ -29,7 +29,11 @@ export type CallCountMismatch = {
   expected: CallCountExpectation
   /** How many matching calls were received, already phrased (e.g. 'none', '4', '2 property reads and 1 method call'). */
   receivedText: string
+  /** Continues the expectation line, e.g. to explain what was received instead. */
+  explanation?: string
   listed: ListedCall[]
+  /** Lines after the listing that explain a likely mistake. */
+  hints?: string[]
 }
 
 const kindPhrase = (kind: ExpectedKind, count: number | undefined): string => {
@@ -42,6 +46,9 @@ const kindPhrase = (kind: ExpectedKind, count: number | undefined): string => {
 }
 
 const memberLabel = (key: PropertyKey): string => key === SELF ? '' : keyToString(key)
+
+/** D23: a failure message lists at most this many received calls, then "› … and N more". */
+export const MAX_LISTED_CALLS = 50
 
 const describeExpectedCall = (mismatch: CallCountMismatch, colors: boolean): string => {
   const { key, expected } = mismatch
@@ -107,10 +114,14 @@ export class SubstituteException extends Error {
       .add(', but received ')
       .add(mismatch.receivedText, t => t.faint())
       .add('.')
+    if (mismatch.explanation !== undefined) textBuilder.add(` ${mismatch.explanation}`)
 
     if (mismatch.listed.length > 0) {
-      textBuilder.newLine().add(`All property or method calls to ${memberPath} received so far:`)
-      for (const listed of mismatch.listed) {
+      // an assignment assertion lists only the assignments, the others list reads and calls
+      const heading = expected.kind === 'set' ? 'All property assignments to' : 'All property or method calls to'
+      textBuilder.newLine().add(`${heading} ${memberPath} received so far:`)
+      const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
+      for (const listed of shown) {
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
@@ -121,7 +132,15 @@ export class SubstituteException extends Error {
         if (listed.predicateThrew)
           textBuilder.newLine().add(`    (an Arg.is predicate threw while matching this call: ${describeError(listed.predicateError)})`, t => t.faint())
       }
+      const hidden = mismatch.listed.length - shown.length
+      if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
+    }
+
+    const hints = mismatch.hints ?? []
+    if (hints.length > 0) {
+      if (mismatch.listed.length === 0) textBuilder.newLine()
+      for (const hint of hints) textBuilder.add(hint).newLine()
     }
 
     return textBuilder.toString(colors)

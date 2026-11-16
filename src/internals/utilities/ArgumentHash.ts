@@ -1,12 +1,18 @@
 /**
- * A cheap structural fingerprint of an argument list, used to look up the auto-substitute cached for a
- * call in O(1) instead of comparing against every earlier argument list.
+ * Cheap fingerprints of an argument list, used to look up the auto-substitute cached for a call, or the literal
+ * substitutions that can answer a call, in O(1) instead of comparing against every earlier argument list.
  *
- * Contract: arguments that are deep strictly equal (util.isDeepStrictEqual) always get the same
- * fingerprint. The fingerprint may be coarser than equality (callers still compare with
- * isDeepStrictEqual inside a bucket). Functions, and therefore substitutes, are fingerprinted by
- * identity and are never traversed. Returns undefined when the arguments cannot be fingerprinted
- * (for example when a getter throws).
+ * Contract: arguments that are deep strictly equal (util.isDeepStrictEqual) always get the same structural and
+ * the same stable fingerprint. A fingerprint may be coarser than equality (callers still compare with
+ * isDeepStrictEqual inside a bucket). Functions, and therefore substitutes, are fingerprinted by identity and are
+ * never traversed. Returns undefined when the arguments cannot be fingerprinted (for example when a getter throws).
+ *
+ * - structural: looks into objects (two levels deep). It describes the arguments as they are now, so it goes
+ *   stale when an object in them is mutated later.
+ * - stable: an object only counts as "an object", so it never goes stale. Used for configured substitutions,
+ *   whose arguments are compared as they are when a call is made.
+ * - identity: an object counts by identity. Equal identity fingerprints mean the same primitives and the same
+ *   objects, so the arguments are equal however the objects were mutated since.
  */
 const objectIds = new WeakMap<object, number>()
 const symbolIds = new Map<symbol, number>()
@@ -35,7 +41,9 @@ const MAX_ITEMS = 8
 const MAX_KEYS = 16
 const MAX_STRING = 64
 
-const fingerprintValue = (value: unknown, depth: number): string => {
+type ObjectMode = 'structure' | 'stable' | 'identity'
+
+const fingerprintValue = (value: unknown, depth: number, objects: ObjectMode): string => {
   switch (typeof value) {
     case 'string':
       return `s${value.length}:${value.length > MAX_STRING ? value.slice(0, MAX_STRING) : value}`
@@ -54,11 +62,12 @@ const fingerprintValue = (value: unknown, depth: number): string => {
   }
   if (value === null) return 'N'
   const object = value as object
-  if (depth >= MAX_DEPTH) return 'O'
+  if (objects === 'identity') return `I${idOfObject(object)}`
+  if (objects === 'stable' || depth >= MAX_DEPTH) return 'O'
   if (Array.isArray(object)) {
     let fingerprint = `A${object.length}[`
     const length = Math.min(object.length, MAX_ITEMS)
-    for (let index = 0; index < length; index++) fingerprint += fingerprintValue(object[index], depth + 1) + ','
+    for (let index = 0; index < length; index++) fingerprint += fingerprintValue(object[index], depth + 1, objects) + ','
     return fingerprint + ']'
   }
   if (ArrayBuffer.isView(object)) return `V${object.byteLength}`
@@ -69,16 +78,23 @@ const fingerprintValue = (value: unknown, depth: number): string => {
   if (keys.length > MAX_KEYS) return `K${keys.length}`
   keys.sort()
   let fingerprint = '{'
-  for (const key of keys) fingerprint += `${key}:${fingerprintValue((object as any)[key], depth + 1)},`
+  for (const key of keys) fingerprint += `${key}:${fingerprintValue((object as any)[key], depth + 1, objects)},`
   return fingerprint + '}'
 }
 
-export const fingerprintArguments = (args: readonly unknown[]): string | undefined => {
+const fingerprintWith = (args: readonly unknown[], objects: ObjectMode): string | undefined => {
   try {
     let fingerprint = `${args.length}|`
-    for (const arg of args) fingerprint += fingerprintValue(arg, 0) + '|'
+    for (const arg of args) fingerprint += fingerprintValue(arg, 0, objects) + '|'
     return fingerprint
   } catch {
     return undefined
   }
 }
+
+/** Looks into objects; goes stale when they are mutated (see above). */
+export const fingerprintArguments = (args: readonly unknown[]): string | undefined => fingerprintWith(args, 'structure')
+/** Objects only count as objects, so it never goes stale. */
+export const stableFingerprintArguments = (args: readonly unknown[]): string | undefined => fingerprintWith(args, 'stable')
+/** Objects count by identity. */
+export const identityFingerprintArguments = (args: readonly unknown[]): string | undefined => fingerprintWith(args, 'identity')

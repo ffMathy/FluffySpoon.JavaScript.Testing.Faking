@@ -3,7 +3,7 @@ import { inspect } from 'util'
 import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { fingerprintArguments } from './utilities'
+import { fingerprintArguments, identityFingerprintArguments, stableFingerprintArguments } from './utilities'
 
 let substitutionOrder = 0
 
@@ -81,7 +81,93 @@ export class AutoEntry {
 
 type CallEntryIndex = {
   byFingerprint: Map<string, AutoEntry[]>
+  /** The entry last handed out for exactly these primitives and objects (see identityFingerprintArguments). */
+  byIdentity: Map<string, AutoEntry>
   unfingerprinted: AutoEntry[]
+}
+
+/** The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`. */
+const mostRecentMatch = (list: readonly Substitution[], actualArguments: readonly unknown[], best: Substitution | undefined): Substitution | undefined => {
+  for (let index = list.length - 1; index >= 0; index--) {
+    const candidate = list[index]
+    if (best !== undefined && candidate.order < best.order) return best
+    if (candidate.args!.matches(actualArguments)) return candidate
+  }
+  return best
+}
+
+/**
+ * The call substitutions configured for one member.
+ *
+ * All-literal substitutions (the most specific class, D4) are indexed by the stable fingerprint of their
+ * arguments, which deep strictly equal argument lists share and which does not change when an object in the
+ * arguments is mutated after the setup (literal arguments are compared as they are when the call is made, D15).
+ * A call therefore only compares against the literal substitutions with the same primitives in the same places:
+ * a single one for distinct primitive arguments, however many there are. Substitutions with Arg matchers are kept
+ * in a list.
+ */
+class CallSubstitutions {
+  private readonly _literal = new Map<string, Substitution[]>()
+  /** All-literal substitutions whose arguments could not be fingerprinted. */
+  private readonly _unindexed: Substitution[] = []
+  private readonly _withMatchers: Substitution[] = []
+  private _size = 0
+
+  public get size(): number {
+    return this._size
+  }
+
+  private listFor(args: RecordedArguments, create: boolean): Substitution[] | undefined {
+    if (args.argumentsClass !== 'plain') return this._withMatchers
+    const fingerprint = stableFingerprintArguments(args.value!)
+    if (fingerprint === undefined) return this._unindexed
+    let list = this._literal.get(fingerprint)
+    if (list === undefined && create) {
+      list = []
+      this._literal.set(fingerprint, list)
+    }
+    return list
+  }
+
+  /** Adds a substitution. One with the same specification is replaced (most recent wins). */
+  public add(substitution: Substitution): void {
+    const list = this.listFor(substitution.args!, true)!
+    const index = list.findIndex(existing => existing.args!.equals(substitution.args!))
+    if (index !== -1) list.splice(index, 1)
+    else this._size++
+    list.push(substitution)
+  }
+
+  /** The substitution configured with exactly this specification. */
+  public withSpecification(args: RecordedArguments): Substitution | undefined {
+    return this.listFor(args, false)?.find(substitution => substitution.args!.equals(args))
+  }
+
+  /** The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one. */
+  public match(actualArguments: readonly unknown[]): Substitution | undefined {
+    let best: Substitution | undefined
+    const fingerprint = stableFingerprintArguments(actualArguments)
+    if (fingerprint !== undefined) {
+      const list = this._literal.get(fingerprint)
+      if (list !== undefined) best = mostRecentMatch(list, actualArguments, best)
+    } else for (const list of this._literal.values()) best = mostRecentMatch(list, actualArguments, best)
+    best = mostRecentMatch(this._unindexed, actualArguments, best)
+    if (best !== undefined) return best
+
+    const withMatchers = this._withMatchers
+    for (let index = withMatchers.length - 1; index >= 0; index--) {
+      const candidate = withMatchers[index]
+      if (best !== undefined && candidate.rank >= best.rank) continue
+      if (candidate.args!.matches(actualArguments)) best = candidate
+    }
+    return best
+  }
+
+  public *all(): IterableIterator<Substitution> {
+    for (const list of this._literal.values()) yield* list
+    yield* this._unindexed
+    yield* this._withMatchers
+  }
 }
 
 const memberPath = (state: SubstituteState, key: PropertyKey): string =>
@@ -108,7 +194,7 @@ export class SubstituteState {
   private readonly _pendingReads = new Map<PropertyKey, CallRecord[]>()
 
   private readonly _propertySubstitutions = new Map<PropertyKey, Substitution>()
-  private readonly _callSubstitutions = new Map<PropertyKey, Substitution[]>()
+  private readonly _callSubstitutions = new Map<PropertyKey, CallSubstitutions>()
 
   private readonly _propertyEntries = new Map<PropertyKey, AutoEntry>()
   private readonly _callEntries = new Map<PropertyKey, CallEntryIndex>()
@@ -187,25 +273,23 @@ export class SubstituteState {
   /** Adds a call substitution. A substitution with the same specification is replaced (most recent wins). */
   public addCallSubstitution(key: PropertyKey, args: RecordedArguments, method: SubstitutionMethod | 'auto', values: readonly any[], entry?: AutoEntry): Substitution {
     const substitution = new Substitution('call', key, args, method, values, entry)
-    const list = this._callSubstitutions.get(key)
-    if (list === undefined) {
-      this._callSubstitutions.set(key, [substitution])
-      return substitution
+    let substitutions = this._callSubstitutions.get(key)
+    if (substitutions === undefined) {
+      substitutions = new CallSubstitutions()
+      this._callSubstitutions.set(key, substitutions)
     }
-    const index = list.findIndex(existing => existing.args!.equals(args))
-    if (index !== -1) list.splice(index, 1)
-    list.push(substitution)
+    substitutions.add(substitution)
     return substitution
   }
 
   public hasCallSubstitutions(key: PropertyKey): boolean {
-    const list = this._callSubstitutions.get(key)
-    return list !== undefined && list.length > 0
+    const substitutions = this._callSubstitutions.get(key)
+    return substitutions !== undefined && substitutions.size > 0
   }
 
   /** The substitution configured with exactly this specification, if any. */
   public callSubstitutionFor(key: PropertyKey, args: RecordedArguments): Substitution | undefined {
-    return this._callSubstitutions.get(key)?.find(substitution => substitution.args!.equals(args))
+    return this._callSubstitutions.get(key)?.withSpecification(args)
   }
 
   /**
@@ -213,15 +297,7 @@ export class SubstituteState {
    * then Arg.all()), and within a class the most recently configured one wins.
    */
   public findCallSubstitution(key: PropertyKey, actualArguments: readonly unknown[]): Substitution | undefined {
-    const list = this._callSubstitutions.get(key)
-    if (list === undefined) return undefined
-    let best: Substitution | undefined
-    for (let index = list.length - 1; index >= 0; index--) {
-      const candidate = list[index]
-      if (best !== undefined && candidate.rank >= best.rank) continue
-      if (candidate.args!.matches(actualArguments)) best = candidate
-    }
-    return best
+    return this._callSubstitutions.get(key)?.match(actualArguments)
   }
 
   // ---- auto-substitutes -----------------------------------------------------------------------
@@ -240,13 +316,28 @@ export class SubstituteState {
     return this._propertyEntries.get(key)?.materializedState !== undefined
   }
 
-  /** The auto-substitute for a call with these actual (literal) arguments. */
+  /**
+   * The auto-substitute for a call with these actual (literal) arguments. The same objects get the same
+   * auto-substitute even when they were mutated in between (their structural fingerprint has gone stale then),
+   * so that after `api.get(request).body.returns(1)` and `request.x = 1`, `api.get(request).body` is still 1 (D2).
+   */
   public callEntry(key: PropertyKey, actualArguments: any[]): AutoEntry {
     let index = this._callEntries.get(key)
     if (index === undefined) {
-      index = { byFingerprint: new Map(), unfingerprinted: [] }
+      index = { byFingerprint: new Map(), byIdentity: new Map(), unfingerprinted: [] }
       this._callEntries.set(key, index)
     }
+    const identity = identityFingerprintArguments(actualArguments)
+    if (identity !== undefined) {
+      const known = index.byIdentity.get(identity)
+      if (known !== undefined && known.args!.matches(actualArguments)) return known
+    }
+    const entry = this.structuralCallEntry(index, key, actualArguments)
+    if (identity !== undefined) index.byIdentity.set(identity, entry)
+    return entry
+  }
+
+  private structuralCallEntry(index: CallEntryIndex, key: PropertyKey, actualArguments: any[]): AutoEntry {
     const fingerprint = fingerprintArguments(actualArguments)
     let bucket: AutoEntry[] | undefined
     if (fingerprint === undefined) bucket = index.unfingerprinted
@@ -291,7 +382,7 @@ export class SubstituteState {
   /** Configured substitutions, for printing. */
   public substitutions(): Substitution[] {
     const all: Substitution[] = [...this._propertySubstitutions.values()]
-    for (const list of this._callSubstitutions.values()) all.push(...list)
+    for (const substitutions of this._callSubstitutions.values()) all.push(...substitutions.all())
     return all.sort((a, b) => a.order - b.order)
   }
 }
