@@ -101,7 +101,11 @@ test('R5-ADV-2 (E16) an ordinary test throws no exception inside the library whe
     // Node.js 20.20 and later
     "Node.js's own formatter": '',
     // source-map-support installs a data property
-    'an installed formatter': `Error.prepareStackTrace = (error, frames) => String(error) + frames.map(frame => '\\n    at ' + frame).join('')`
+    'an installed formatter': `Error.prepareStackTrace = (error, frames) => String(error) + frames.map(frame => '\\n    at ' + frame).join('')`,
+    // E15: a limit that cannot be lowered is found out without a failed assignment
+    'a read-only Error.stackTraceLimit': `Object.defineProperty(Error, 'stackTraceLimit', { value: 10, writable: false, configurable: true })`,
+    'a getter-only Error.stackTraceLimit': `Object.defineProperty(Error, 'stackTraceLimit', { get() { return 10 }, configurable: true })`,
+    'Object.freeze(Error)': `Object.freeze(Error)`
   }
   for (const [name, setup] of Object.entries(setups)) {
     const result = runScript(withDebugger(setup, ordinaryTest))
@@ -112,7 +116,49 @@ test('R5-ADV-2 (E16) an ordinary test throws no exception inside the library whe
     }
     // 45facfb: 40 pauses, two for every step of a chain (CallSite.js, peekFirstFrame and readFirstFrame)
     t.deepEqual(result.pauses, [], name)
-    t.deepEqual({ user: result.user, calledAt: result.calledAt }, { user: { id: 1 }, calledAt: true }, name)
+    // V8 collects no frames at all while the limit is an accessor (see R5V-3)
+    t.deepEqual({ user: result.user, calledAt: result.calledAt }, { user: { id: 1 }, calledAt: !name.includes('getter-only') }, name)
   }
   t.pass()
+})
+
+test('R5-ADV-2 (E16) a call site whose frame was read without throwing keeps exactly the text it would have had', t => {
+  // two captures at the same position: the frame of the first one is read (its call site is kept, E16), the second
+  // one is formatted by V8 as usual; the texts must be the same, and so must the frames, with any formatter
+  const callSites = path.resolve(__dirname, '../../../src/internals/CallSite.js')
+  const script = (setup: string) => `
+    ${setup}
+    const { captureStack, frameOfStack, stackText } = require(${JSON.stringify(callSites)})
+    function operation() { return captureStack(operation) }
+    function userCode() {
+      const holders = []
+      for (let index = 0; index < 2; index++) holders.push(operation())
+      return holders
+    }
+    const [read, unread] = userCode()
+    const frame = frameOfStack(read)
+    const formattedLater = typeof read.stack !== 'string'
+    const again = frameOfStack(unread) && frameOfStack(read)
+    const text = stackText(read)
+    console.log(JSON.stringify({ formattedLater, sameFrame: JSON.stringify(frame) === JSON.stringify(again), identical: text === stackText(unread),
+      userCode: / at userCode /.test(text), formatter: typeof Error.prepareStackTrace }))
+  `
+  const formatter = `(error, frames) => 'formatted ' + error + frames.map(frame => '\\n    at ' + frame).join('')`
+  const setups: Record<string, string> = {
+    "Node.js's own formatter": '',
+    'an installed formatter': `Error.prepareStackTrace = ${formatter}`,
+    'an accessor as stack-chain installs it': `
+      let current = ${formatter}
+      Object.defineProperty(Error, 'prepareStackTrace', { configurable: true, get: () => (error, frames) => current(error, frames), set: value => { current = value } })`,
+    // several frames (E15): the call sites are kept together
+    'a read-only Error.stackTraceLimit': `Error.prepareStackTrace = ${formatter}; Object.defineProperty(Error, 'stackTraceLimit', { value: 10, writable: false, configurable: true })`
+  }
+  for (const [name, setup] of Object.entries(setups)) {
+    const result = runScript(script(setup))
+    if (result.formatter !== 'function') {
+      t.log(`${name}: no formatter in ${process.version}`)
+      continue
+    }
+    t.deepEqual(result, { formattedLater: true, sameFrame: true, identical: true, userCode: true, formatter: 'function' }, name)
+  }
 })

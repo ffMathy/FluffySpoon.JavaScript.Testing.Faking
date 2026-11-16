@@ -8,10 +8,17 @@
  *
  * The engine also needs to know, now and then, whether two operations come from the same expression in a test (D25):
  * whether their first frames outside the library are in the same file and the same enclosing function. It reads that
- * from the same capture, with a prepareStackTrace that looks at the V8 call sites and then throws: V8 keeps nothing of
- * a formatting that throws, so the capture still formats normally when its text is read later (verified on Node.js 10
- * to 26). That saves a second capture per operation, which is what an operation costs most (E11). Reading the call
- * sites changes Error.prepareStackTrace only for that moment (E5).
+ * from the same capture, with a prepareStackTrace of its own that looks at the V8 call sites, which saves a second
+ * capture per operation, the thing an operation costs most (E11). Reading the call sites changes
+ * Error.prepareStackTrace only for that moment (E5). The capture must still format as usual when its text is read
+ * later:
+ * - E16: when Error.prepareStackTrace holds a formatter (Node.js's own from 20.20 on, or an installed one such as
+ *   source-map-support's or jest's), the call sites are kept as the capture's stack, and the formatter makes the text
+ *   from them when it is needed, as V8 would have called it (source maps included);
+ * - otherwise (Node.js before 20.20 without an installed formatter, Error.prepareStackTrace deleted, vm contexts such
+ *   as vitest's vm pools), it throws after looking at them: V8 keeps nothing of a formatting that throws (verified on
+ *   Node.js 10 to 26), and formats the capture normally later. A debugger set to pause on caught exceptions stops
+ *   there, inside the library.
  */
 
 type V8CallSite = {
@@ -37,6 +44,19 @@ const NONE: unique symbol = Symbol('none')
 const NONE_OWN: unique symbol = Symbol('no own property')
 /** E15: the last limit that could not be lowered for a moment (read-only, getter-only, frozen): it is not tried again. */
 let fixedLimit: unknown = NONE
+/** The last limit whose property was found to be assignable (so that it is not looked at on every capture). */
+let assignableLimit: unknown = NONE
+
+/**
+ * Whether Error.stackTraceLimit can be assigned without an exception (E16: a debugger set to pause on caught
+ * exceptions would stop at a failed assignment): a writable value, an accessor with a setter, or no property on an
+ * Error that can still get one.
+ */
+const limitIsAssignable = (): boolean => {
+  const descriptor = Object.getOwnPropertyDescriptor(errorConstructor, STACK_TRACE_LIMIT)
+  if (descriptor === undefined) return Object.isExtensible(errorConstructor)
+  return 'value' in descriptor ? descriptor.writable === true : typeof descriptor.set === 'function'
+}
 
 /**
  * Lowers Error.stackTraceLimit to 1 for a moment, and gives what to restore: NONE when it was left as it was, because
@@ -54,9 +74,15 @@ const lowerLimit = (): unknown => {
   if (limit === fixedLimit) return NONE
   // a limit that does not exist is restored by deleting it again, not by leaving an own property `undefined` behind
   if (limit === undefined && !Object.prototype.hasOwnProperty.call(errorConstructor, STACK_TRACE_LIMIT)) limit = NONE_OWN
+  let lowered = false
   try {
-    errorConstructor[STACK_TRACE_LIMIT] = 1
-  } catch {
+    if (limit === assignableLimit || limitIsAssignable()) {
+      assignableLimit = limit
+      errorConstructor[STACK_TRACE_LIMIT] = 1
+      lowered = true
+    }
+  } catch { /* it changed in the meantime */ }
+  if (!lowered) {
     fixedLimit = limit === NONE_OWN ? undefined : limit
     return NONE
   }
@@ -97,23 +123,38 @@ export const captureStack = (stackStart: Function): StackHolder => {
 
 /**
  * E16: the stack trace of a holder whose call sites were read while Error.prepareStackTrace held a formatter (Node.js's
- * own from 20.20 on, or an installed one such as source-map-support's): what the temporary formatter returned in its
- * place, so that V8 keeps nothing else. Its text is made when it is first needed, by the formatter in place then (the
- * one in place when the call sites were read if there is none any more), from the same call sites, as V8 would.
+ * own from 20.20 on, or an installed one such as source-map-support's) is what the temporary formatter returned in its
+ * place, so that V8 keeps nothing else: the call site itself (as usual, when there is one frame), or a DeferredStack
+ * with the call sites (when the limit could not be lowered, E15). Its text is made when it is first needed, from the
+ * same call sites, by the formatter in place then (or, if there is none any more, the one in place when call sites were
+ * last kept), called as V8 calls it.
  */
 class DeferredStack {
-  constructor(readonly callSites: readonly unknown[], readonly formatter: Function) { }
+  constructor(readonly callSites: readonly unknown[]) { }
+}
+/** The prototype of V8's call sites, seen when call sites are first kept. */
+let callSitePrototype: object | null | undefined
+/** The formatter in place when call sites were last kept. */
+let keptFormatter: Function | undefined
+
+/** The call sites kept as the stack of a holder (see DeferredStack), or undefined when it is anything else. */
+const keptCallSites = (stack: unknown): readonly unknown[] | undefined => {
+  if (stack instanceof DeferredStack) return stack.callSites
+  if (typeof stack === 'object' && stack !== null && callSitePrototype !== undefined && Object.getPrototypeOf(stack) === callSitePrototype) return [stack]
+  return undefined
 }
 
 /** The stack trace of a holder as text, formatted the usual way (undefined if it is not text). */
 export const stackText = (holder: StackHolder): string | undefined => {
   try {
     let stack = holder.stack
-    if (stack instanceof DeferredStack) {
+    const callSites = keptCallSites(stack)
+    if (callSites !== undefined) {
       const current = errorConstructor[PREPARE_STACK_TRACE]
-      const formatter = typeof current === 'function' ? current : stack.formatter
+      const format = typeof current === 'function' ? current : keptFormatter
+      if (format === undefined) return undefined
       // as V8 calls it: Node.js calls Error.prepareStackTrace(error, callSites) as a method of Error
-      stack = Reflect.apply(formatter, Error, [holder, stack.callSites])
+      stack = Reflect.apply(format, Error, [holder, callSites])
       holder.stack = stack
     }
     return typeof stack === 'string' ? stack : undefined
@@ -165,12 +206,20 @@ const peekFirstFrame = (_error: unknown, callSites: unknown): never => {
 
 /**
  * E16: reads the first frame without throwing (a debugger set to pause on caught exceptions would stop there), for a
- * holder whose text may be shown, while Error.prepareStackTrace holds a formatter: V8 keeps what this returns, a
- * DeferredStack with the call sites, and the text is made from them by that formatter when it is needed (stackText).
+ * holder whose text may be shown, while Error.prepareStackTrace holds a formatter: V8 keeps what this returns, the call
+ * sites (see DeferredStack), and the text is made from them by that formatter when it is needed (stackText).
  */
 const keepFirstFrame = (_error: unknown, callSites: unknown): unknown => {
   readCallSites(callSites)
-  return Array.isArray(callSites) && formatter !== undefined ? new DeferredStack(callSites, formatter) : undefined
+  if (!Array.isArray(callSites)) return undefined
+  keptFormatter = formatter
+  if (callSites.length === 1) {
+    // the call site itself is smaller than an array of one and a wrapper (D30)
+    const prototype = Object.getPrototypeOf(callSites[0])
+    if (callSitePrototype === undefined && prototype !== Object.prototype) callSitePrototype = prototype
+    if (prototype === callSitePrototype) return callSites[0]
+  }
+  return new DeferredStack(callSites)
 }
 
 /** Reads the first frame, and lets V8 keep the result: for a capture that is never shown (cheaper than a peek). */
@@ -188,8 +237,8 @@ type Prepare = typeof peekFirstFrame | typeof keepFirstFrame | typeof takeFirstF
  * restored or the property deleted. A property that cannot be redefined without changing it for good (a
  * non-configurable accessor, as the stack-chain package can install, or a non-configurable read-only value) is left
  * alone: then there is no frame, and adjacency decides (E2).
- * `keep`: the holder's text may be shown later. Then its call sites are kept for it: with a formatter in place, in a
- * DeferredStack (E16), otherwise by a peek that throws.
+ * `keep`: the holder's text may be shown later. Then its call sites are kept for it: with a formatter in place, as its
+ * stack (E16, see DeferredStack), otherwise by a peek that throws.
  */
 const readFirstFrame = (holder: StackHolder, keep: boolean): Frame | null => {
   let original: PropertyDescriptor | undefined
@@ -229,8 +278,9 @@ const readFirstFrame = (holder: StackHolder, keep: boolean): Frame | null => {
     } catch { /* it could be redefined a moment ago */ }
   }
   if (read) return readFrame
-  // read earlier: a deferred stack still has its call sites, a stack formatted as text has none left to look at
-  return stack instanceof DeferredStack ? frameOf(stack.callSites[0] as V8CallSite | undefined) : null
+  // read earlier: kept call sites are still there, a stack formatted as text has none left to look at
+  const callSites = keptCallSites(stack)
+  return callSites !== undefined ? frameOf(callSites[0] as V8CallSite | undefined) : null
 }
 
 /*
