@@ -4,7 +4,7 @@ import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { coarseHashArguments, hashArguments, identityHashArguments } from './utilities'
+import { coarseHashArguments, hashArguments, identityHashArguments, lastHashWasApproximate, refinedHashArguments } from './utilities'
 
 let substitutionOrder = 0
 
@@ -14,14 +14,40 @@ let substitutionOrder = 0
  */
 export class ArgumentHashes {
   private _structural?: number
+  private _approximate = false
+  private _refined?: number
   private _identity?: number | null
   private _coarse?: number
 
   constructor(public readonly args: readonly unknown[]) { }
 
   public get structural(): number {
-    if (this._structural === undefined) this._structural = hashArguments(this.args)
+    if (this._structural === undefined) {
+      this._structural = hashArguments(this.args)
+      this._approximate = lastHashWasApproximate()
+    }
     return this._structural
+  }
+
+  /**
+   * E13: whether the structural hash is a family hash for a wide object among the arguments (see ArgumentHash), which
+   * leaves out the keys outside the family. Several candidates with the same structural hash are then told apart by
+   * their refined hashes before they are compared with live deep equality.
+   */
+  public get approximate(): boolean {
+    void this.structural
+    return this._approximate
+  }
+
+  public get refined(): number {
+    if (!this.approximate) return this.structural
+    if (this._refined === undefined) this._refined = refinedHashArguments(this.args)
+    return this._refined
+  }
+
+  /** Whether the candidates in a bucket of this hash with these arguments can be equal to these arguments. */
+  public mayEqual(candidate: readonly unknown[] | undefined, candidates: number): boolean {
+    return candidates < 2 || candidate === undefined || !this.approximate || refinedHashArguments(candidate) === this.refined
   }
 
   /** E9: primitives and functions only (see coarseHashArguments): free to compute. */
@@ -134,6 +160,12 @@ export class AutoEntry {
     return wrapped
   }
 
+  /** The argument list of this call entry (the actual arguments, or the specification's). */
+  public get argumentList(): readonly unknown[] | undefined {
+    const args = this._args
+    return Array.isArray(args) ? args : (args as RecordedArguments | undefined)?.value
+  }
+
   /** Whether the arguments of this call entry match a call with these actual arguments. */
   public matchesCall(actualArguments: readonly unknown[]): boolean {
     const args = this._args
@@ -173,12 +205,15 @@ type CallEntryIndex = {
   byIdentity?: Buckets<AutoEntry>
 }
 
-/** The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`. */
-const mostRecentMatch = (list: readonly Substitution[], actualArguments: readonly unknown[], best: Substitution | undefined): Substitution | undefined => {
+/**
+ * The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`.
+ * `sameHash`: `list` holds the substitutions with the structural hash of the actual arguments (E13, see mayEqual).
+ */
+const mostRecentMatch = (list: readonly Substitution[], actual: ArgumentHashes, best: Substitution | undefined, sameHash: boolean): Substitution | undefined => {
   for (let index = list.length - 1; index >= 0; index--) {
     const candidate = list[index]
     if (best !== undefined && candidate.order < best.order) return best
-    if (candidate.args!.matches(actualArguments)) return candidate
+    if ((!sameHash || actual.mayEqual(candidate.args!.value, list.length)) && candidate.args!.matches(actual.args)) return candidate
   }
   return best
 }
@@ -224,8 +259,10 @@ class CallSubstitutions {
       this._withMatchers.push(substitution)
       return
     }
-    const hash = hashArguments(args.value!)
-    const replaced = bucketItems(this._literal, hash)?.find(existing => existing.args!.equals(args))
+    const hashes = new ArgumentHashes(args.value!)
+    const hash = hashes.structural
+    const bucket = bucketItems(this._literal, hash)
+    const replaced = bucket?.find(existing => hashes.mayEqual(existing.args!.value, bucket.length) && existing.args!.equals(args))
     if (replaced !== undefined) {
       bucketRemove(this._literal, hash, replaced)
       if (replaced.identity !== undefined) bucketRemove(this._byIdentity, replaced.identity, replaced)
@@ -242,8 +279,10 @@ class CallSubstitutions {
 
   /** The substitution configured with exactly this specification. */
   public withSpecification(args: RecordedArguments): Substitution | undefined {
-    const candidates = args.argumentsClass !== 'plain' ? this._withMatchers : bucketItems(this._literal, hashArguments(args.value!))
-    return candidates?.find(substitution => substitution.args!.equals(args))
+    if (args.argumentsClass !== 'plain') return this._withMatchers.find(substitution => substitution.args!.equals(args))
+    const hashes = new ArgumentHashes(args.value!)
+    const bucket = bucketItems(this._literal, hashes.structural)
+    return bucket?.find(substitution => hashes.mayEqual(substitution.args!.value, bucket.length) && substitution.args!.equals(args))
   }
 
   /** The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one. */
@@ -254,12 +293,12 @@ class CallSubstitutions {
       if (this._byIdentity.size > 0) {
         const identity = hashes.identity
         const sameObjects = identity === undefined ? undefined : bucketItems(this._byIdentity, identity)
-        if (sameObjects !== undefined) best = mostRecentMatch(sameObjects, actualArguments, best)
+        if (sameObjects !== undefined) best = mostRecentMatch(sameObjects, hashes, best, false)
         if (best !== undefined && best.order === this._latestLiteral) return best
       }
       if (this._coarse.has(hashes.coarse)) {
         const literal = bucketItems(this._literal, hashes.structural)
-        if (literal !== undefined) best = mostRecentMatch(literal, actualArguments, best)
+        if (literal !== undefined) best = mostRecentMatch(literal, hashes, best, true)
       }
       if (best !== undefined) return best
     }
@@ -447,7 +486,8 @@ export class SubstituteState {
     }
 
     const hash = actual.structural
-    let entry = bucketItems(index.byHash, hash)?.find(candidate => candidate.matchesCall(actualArguments))
+    const bucket = bucketItems(index.byHash, hash)
+    let entry = bucket?.find(candidate => actual.mayEqual(candidate.argumentList, bucket.length) && candidate.matchesCall(actualArguments))
     if (entry === undefined) {
       entry = new AutoEntry('call', this, key, actualArguments)
       bucketAdd(index.byHash, hash, entry)

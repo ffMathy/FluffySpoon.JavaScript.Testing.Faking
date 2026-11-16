@@ -1,6 +1,7 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
 import { SubstituteException } from './SubstituteException'
+import { FAMILY_KEYS, isInFamily } from './utilities/ArgumentHash'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -76,7 +77,7 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
  */
 const SCAN_BUDGET = 1024
 const MAX_SCAN_DEPTH = 32
-const MAX_SCANNED_ITEMS = 1024
+const MAX_SCANNED_ITEMS = FAMILY_KEYS - 1 // 1024
 const SCAN_ITEMS = 32768
 
 const tooWideToSearch = new WeakSet<object>()
@@ -103,6 +104,11 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
     return false
   }
   if (tooWideToSearch.has(container)) return false
+  // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
+  if (isInFamily(container)) {
+    tooWideToSearch.add(container)
+    return false
+  }
   const keys = Object.keys(container)
   const symbols = Object.getOwnPropertySymbols(container)
   const count = keys.length + symbols.length

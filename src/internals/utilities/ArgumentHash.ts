@@ -23,9 +23,11 @@ import { isDeepStrictEqual, types } from 'util'
  * - long arrays are sampled by position (their length, the first and the last items and items at a fixed stride),
  *   long strings and byte arrays likewise; the samples depend only on the length;
  * - objects with many keys, and large Maps and Sets, contribute every key, but only shallowly (primitives by value,
- *   objects by a constant tag), and the widest ones only their size;
- * - E9: within one hash, the shallow part of a wide object, Map or Set is computed once (by identity), however many
- *   values refer to it (rows that share a lookup table).
+ *   objects by a constant tag), and the widest objects and Maps only a sample of their values, chosen by key hash;
+ * - E13: wide objects whose keys are those of an earlier wide object are hashed by the values of a fixed list of keys
+ *   (a family, see below), without listing their keys, which costs more than anything else about them;
+ * - E9, E13: the shallow part of a wide object, Map or Set is computed once (by identity), across calls, however many
+ *   values refer to it (rows that share a lookup table) and however often it is passed.
  * No limit depends on the order of keys or of Map and Set entries, as deep strictly equal values may differ in it.
  * Arguments that cannot be read give the constant FALLBACK_HASH: anything that throws while it is read, such as a
  * throwing getter or a revoked proxy.
@@ -54,13 +56,14 @@ const BUDGET = 1024
 const MAX_DEPTH = 32
 /** Arrays with more items are sampled: the first and last SAMPLED_ITEMS / 4 items, and SAMPLED_ITEMS / 2 strided ones. */
 const SAMPLED_ITEMS = 256
-/** Objects with more keys, and Maps and Sets with more entries, are hashed shallowly. */
+/** Objects with more keys, and Maps and Sets with more entries, are hashed shallowly (and remembered, E13). */
 const MAX_ENTRIES = 256
 /**
- * Objects with more keys, and Maps and Sets with more entries, are hashed by their size only (E9: hashing 10,000 keys
- * shallowly takes about 3 ms; deep strictly equal values have the same size, and live equality sorts out the rest).
+ * Objects with more keys, and Maps with more entries, contribute every key but only a sample of about SAMPLED_ENTRIES
+ * values, chosen by the hash of their keys (E13).
  */
-const MAX_SCANNED_ENTRIES = 4096
+const MAX_SCANNED_ENTRIES = 65536
+const SAMPLED_ENTRIES = 256
 /** Strings and byte arrays that are longer are sampled, like arrays. */
 const SAMPLED_UNITS = 4096
 
@@ -70,7 +73,7 @@ const enum Tag {
   NaN = 0x6c078965, String = 0x0bad5eed, BigInt = 0x4cf5ad43, Symbol = 0x1f83d9ab, Function = 0x5be0cd19,
   Array = 0x6a09e667, Object = 0x3c6ef373, Map = 0x510e527f, Set = 0x9b05688c, Date = 0x1f83d9ac,
   RegExp = 0x5be0cd1a, Bytes = 0x428a2f98, Boxed = 0x71374491, Identity = 0x2a5c4e2b, Arguments = 0x0f1bbcdc,
-  Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Wide = 0x3a8f05c5
+  Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Family = 0x3a8f05c5, Unsampled = 0x7c3b1d95
 }
 
 const mix = (hash: number, value: number): number => {
@@ -231,39 +234,121 @@ const isComparedAsError = (value: object): value is Error & { cause?: unknown, e
 /** Each child's share of an object's budget. */
 const share = (budget: number, children: number): number => children === 0 ? 0 : Math.floor((budget - 1) / children)
 
+const propertyIsEnumerable = Object.prototype.propertyIsEnumerable
+
 /** The own enumerable string and symbol keys (the keys deep strict equality compares). */
 const ownEnumerableKeys = (object: object): PropertyKey[] => {
   const keys: PropertyKey[] = Object.keys(object)
   const symbols = Object.getOwnPropertySymbols(object)
   for (let index = 0; index < symbols.length; index++)
-    if (Object.prototype.propertyIsEnumerable.call(object, symbols[index])) keys.push(symbols[index])
+    if (propertyIsEnumerable.call(object, symbols[index])) keys.push(symbols[index])
   return keys
 }
 
 const hashKey = (key: PropertyKey): number => typeof key === 'symbol' ? hashPrimitive(key) : hashString(key as string, Tag.Key)
 
-/**
- * E9: the hashes of the wide objects, Maps and Sets (more than MAX_ENTRIES entries) hashed so far by the current hash.
- * Their hash is shallow, so it does not depend on the budget or the depth they are reached with.
+/*
+ * E13: memory of the containers hashed shallowly (objects, Maps and Sets with more than MAX_ENTRIES entries), by
+ * identity and across calls, so that a wide container passed again (a lookup table passed to every call) is never
+ * listed or hashed again. Weak, so that it keeps nothing alive. Mutating an argument after it was passed is not
+ * supported (amended D15/D35): its hash stays the one of its first use.
+ * The hashes and the refined hashes (without families, see below) are remembered apart. A hash without a family is its
+ * refined hash as well, and is remembered as both.
  */
-let wideHashes: Map<object, number> | undefined
+const hashes = new WeakMap<object, number>()
+const refinedHashes = new WeakMap<object, number>()
+let remembered = false
 
-const rememberWide = (container: object, hash: number): number => {
-  if (wideHashes === undefined) wideHashes = new Map()
-  wideHashes.set(container, hash)
+/** Remembers the hash of a container hashed shallowly: as a refined hash too unless it is a family hash. */
+const remember = (container: object, hash: number, familyHash = false): number => {
+  if (!refining) hashes.set(container, hash)
+  if (refining || !familyHash) refinedHashes.set(container, hash)
+  remembered = true
   return hash
 }
 
-/** Runs one hash with a memory of wide containers of its own (a getter could start another hash while it runs). */
-const withWideHashes = <T>(hash: () => T): T => {
-  const outer = wideHashes
-  wideHashes = undefined
+/*
+ * E13: families. Listing the keys of a wide object costs more than anything else about it (Object.keys takes about
+ * 10 ms for 70,000 keys), and it is the only way to count them. So distinct wide objects with the same keys (state
+ * snapshots, translation tables per locale) are hashed by looking up a fixed list of keys, a family, without listing
+ * theirs: the first object with at least FAMILY_KEYS string keys that matches no family starts one, with FAMILY_KEYS
+ * of its keys. An object belongs to the first family whose keys are all its own enumerable keys, and is hashed by the
+ * values of those keys (shallowly). Deep strictly equal objects have the same keys, so they belong to the same family.
+ * Families are only ever added, and an object that belongs to none either starts one or comes after the last one was
+ * added (or has fewer than FAMILY_KEYS string keys, and can belong to none), so the family an object belongs to never
+ * changes: equal objects hash the same, whenever they are hashed.
+ * A family hash leaves out the keys outside the family (an object that gained keys hashes as before), so a lookup that
+ * finds more than one candidate with a family hash compares their refined hashes (without families) first.
+ * FAMILY_KEYS is above the number of keys the search for nested matchers looks into (RecordedArguments), so that an
+ * object in a family is known to be too wide to search, without listing its keys either.
+ */
+export const FAMILY_KEYS = 1025
+const MAX_FAMILIES = 16
+const families: string[][] = []
+/** The first key of each family: an object without it (as most objects are) is no member, found out at little cost. */
+const anchors: string[] = []
+/** The family found for an object (an object stays in its family, see above). */
+const familyMembers = new WeakMap<object, number>()
+const hasOwnProperty = Object.prototype.hasOwnProperty
+
+/**
+ * The index of the first family that the object belongs to, or -1. An object that cannot be looked up (a proxy that
+ * throws) belongs to none from there on.
+ */
+const familyOf = (object: object): number => {
+  const count = anchors.length
+  if (count === 0) return -1
   try {
-    return hash()
-  } finally {
-    wideHashes = outer
-  }
+    for (let index = 0; index < count; index++) {
+      if (!hasOwnProperty.call(object, anchors[index])) continue
+      const known = familyMembers.get(object)
+      if (known !== undefined) return known
+      const keys = families[index]
+      let all = true
+      for (let key = 0; key < keys.length && all; key++) all = propertyIsEnumerable.call(object, keys[key])
+      if (all) {
+        familyMembers.set(object, index)
+        return index
+      }
+    }
+  } catch { /* a proxy */ }
+  return -1
 }
+
+/**
+ * Whether an object is known to have more than FAMILY_KEYS - 1 own enumerable string keys without listing them: it
+ * belongs to a family (for RecordedArguments' search for nested matchers).
+ */
+export const isInFamily = (object: object): boolean => familyOf(object) !== -1
+
+/**
+ * Starts a family with FAMILY_KEYS of the object's keys (`keys`), spread over them, or gives -1 when it has not enough
+ * string keys. (Which of its keys they are does not matter, only that they never change.)
+ */
+const startFamily = (object: object, keys: readonly PropertyKey[]): number => {
+  const strings: string[] = []
+  for (let index = 0; index < keys.length; index++) if (typeof keys[index] === 'string') strings.push(keys[index] as string)
+  if (strings.length < FAMILY_KEYS) return -1
+  const family = Array.from({ length: FAMILY_KEYS }, (_, index) => strings[Math.floor(index * strings.length / FAMILY_KEYS)])
+  families.push(family)
+  anchors.push(family[0])
+  familyMembers.set(object, families.length - 1)
+  return families.length - 1
+}
+
+const familyHash = (object: object, family: number): number => {
+  const keys = families[family]
+  let h = mix(Tag.Family, family)
+  for (let index = 0; index < keys.length; index++) h = mix(h, shallowHash((object as any)[keys[index]]))
+  return h
+}
+
+/*
+ * The state of the current hash: whether it is a refined one (no families), and whether a family hash took part.
+ * Saved and restored around every hash, as a getter could start another hash while one runs.
+ */
+let refining = false
+let approximate = false
 
 /** The hash of one value with a budget of objects (see above). */
 const hashValue = (value: unknown, budget: number, depth: number): number => {
@@ -274,10 +359,17 @@ const hashValue = (value: unknown, budget: number, depth: number): number => {
 }
 
 const hashObject = (object: object, budget: number, depth: number): number => {
-  if (wideHashes !== undefined) {
-    const known = wideHashes.get(object)
-    if (known !== undefined) return known
+  if (remembered) {
+    const known = (refining ? refinedHashes : hashes).get(object)
+    if (known !== undefined) {
+      if (!refining && familyMembers.has(object)) approximate = true
+      return known
+    }
   }
+  return hashReadable(object, budget, depth)
+}
+
+const hashReadable = (object: object, budget: number, depth: number): number => {
   if (Array.isArray(object)) {
     const length = object.length
     const count = length <= SAMPLED_ITEMS ? length : SAMPLED_ITEMS
@@ -301,76 +393,152 @@ const hashObject = (object: object, budget: number, depth: number): number => {
   if (types.isSymbolObject(object)) return mix(Tag.Boxed, hashString(Symbol.prototype.toString.call(object), Tag.Symbol))
   if (isBigIntObject(object)) return mix(Tag.Boxed, hashString(String(object), Tag.BigInt))
 
-  // own enumerable string and symbol keys, in any order
+  return hashKeyed(object, budget, depth)
+}
+
+/**
+ * E13: whether the value of a key with this hash is part of the sample of an object with `count` keys (or a Map with
+ * `count` entries): all of them up to MAX_SCANNED_ENTRIES, then about SAMPLED_ENTRIES chosen by their key hash, so
+ * that deep strictly equal values, which have the same keys, choose the same ones, in any order.
+ */
+const sampled = (keyHash: number, count: number): boolean =>
+  count <= MAX_SCANNED_ENTRIES || (keyHash >>> 0) % Math.ceil(count / SAMPLED_ENTRIES) === 0
+
+/** Objects and class instances by their own enumerable string and symbol keys and their values, in any key order. */
+const hashKeyed = (object: object, budget: number, depth: number): number => {
+  const error = isComparedAsError(object) ? object : undefined
+  const tag = types.isArgumentsObject(object) ? Tag.Arguments : error !== undefined ? Tag.Error : Tag.Object
+  if (!refining) {
+    const family = familyOf(object)
+    if (family !== -1) return withFamily(object, tag, family, error, depth)
+  }
+
   const keys = ownEnumerableKeys(object)
   const count = keys.length
-  const error = isComparedAsError(object) ? object : undefined
-  let h = mix(types.isArgumentsObject(object) ? Tag.Arguments : error !== undefined ? Tag.Error : Tag.Object, count)
-  if (count > MAX_SCANNED_ENTRIES) return rememberWide(object, mix(h, Tag.Wide))
+  let h = mix(tag, count)
   const errorChildren = error === undefined ? 0 : (errorParts.cause ? 1 : 0) + (errorParts.errors ? 1 : 0)
-  // wide objects: every key and its value, shallowly
-  const childBudget = count > MAX_ENTRIES ? 0 : share(budget, count + errorChildren)
+  if (count <= MAX_ENTRIES) {
+    const childBudget = share(budget, count + errorChildren)
+    let sum = 0
+    for (let index = 0; index < count; index++) {
+      const key = keys[index]
+      sum = (sum + spread(mix(hashKey(key), hashValue((object as any)[key], childBudget, depth)))) | 0
+    }
+    return withError(mix(h, sum), error, childBudget, depth)
+  }
+
+  if (!refining && families.length < MAX_FAMILIES) {
+    const family = startFamily(object, keys)
+    if (family !== -1) return withFamily(object, tag, family, error, depth)
+  }
+  // wide objects: every key, and the values of the sample, shallowly
   let sum = 0
   for (let index = 0; index < count; index++) {
     const key = keys[index]
-    sum = (sum + spread(mix(hashKey(key), hashValue((object as any)[key], childBudget, depth)))) | 0
+    const keyHash = hashKey(key)
+    sum = (sum + spread(mix(keyHash, sampled(keyHash, count) ? shallowHash((object as any)[key]) : Tag.Unsampled))) | 0
   }
-  h = mix(h, sum)
-  if (error !== undefined) {
-    // deep strict equality compares these with ===, or like the other properties (cause, errors)
-    if (errorParts.name) h = mix(h, shallowHash(error.name))
-    if (errorParts.message) h = mix(h, shallowHash(error.message))
-    if (errorParts.cause) h = mix(h, hashValue(error.cause, childBudget, depth))
-    if (errorParts.errors) h = mix(h, hashValue(error.errors, childBudget, depth))
-  }
-  return count > MAX_ENTRIES ? rememberWide(object, h) : h
+  return remember(object, withError(mix(h, sum), error, 0, depth))
 }
 
-/** Map entries in any order. Large Maps contribute every entry, shallowly (objects among them by a constant tag). */
+const withFamily = (object: object, tag: Tag, family: number, error: ComparedError | undefined, depth: number): number => {
+  approximate = true
+  return remember(object, withError(mix(tag, familyHash(object, family)), error, 0, depth), true)
+}
+
+type ComparedError = Error & { cause?: unknown, errors?: unknown }
+
+/** Deep strict equality compares these with ===, or like the other properties (cause, errors). */
+const withError = (h: number, error: ComparedError | undefined, childBudget: number, depth: number): number => {
+  if (error === undefined) return h
+  if (errorParts.name) h = mix(h, shallowHash(error.name))
+  if (errorParts.message) h = mix(h, shallowHash(error.message))
+  if (errorParts.cause) h = mix(h, hashValue(error.cause, childBudget, depth))
+  if (errorParts.errors) h = mix(h, hashValue(error.errors, childBudget, depth))
+  return h
+}
+
+// the iteration of Maps and Sets themselves, which an instance cannot replace (as for Node.js's comparison)
+const mapForEach = Map.prototype.forEach
+const setForEach = Set.prototype.forEach
+
+/**
+ * Map entries in any order. Large Maps contribute every entry, shallowly (objects among them by a constant tag), and
+ * the largest ones every key but only a sample of the values (chosen by the hash of their primitive keys).
+ */
 const hashMap = (map: Map<unknown, unknown>, budget: number, depth: number): number => {
   const size = map.size
   const h = mix(Tag.Map, size)
-  if (size > MAX_SCANNED_ENTRIES) return mix(h, Tag.Wide)
   let sum = 0
   if (size > MAX_ENTRIES) {
-    for (const [key, value] of map) sum = (sum + spread(mix(shallowHash(key), shallowHash(value)))) | 0
-    return rememberWide(map, mix(h, sum))
+    mapForEach.call(map, (value: unknown, key: unknown) => {
+      const keyHash = shallowHash(key)
+      // entries with object keys all have the same key hash: their values are all part of the sample
+      const sample = (typeof key === 'object' && key !== null) || sampled(keyHash, size)
+      sum = (sum + spread(mix(keyHash, sample ? shallowHash(value) : Tag.Unsampled))) | 0
+    })
+    return remember(map, mix(h, sum))
   }
   const childBudget = share(budget, 2 * size)
-  for (const [key, value] of map) sum = (sum + spread(mix(hashValue(key, childBudget, depth), hashValue(value, childBudget, depth)))) | 0
+  mapForEach.call(map, (value: unknown, key: unknown) => {
+    sum = (sum + spread(mix(hashValue(key, childBudget, depth), hashValue(value, childBudget, depth)))) | 0
+  })
   return mix(h, sum)
 }
 
-/** Set members in any order, like Map entries. */
+/** Set members in any order, like Map entries (large Sets: every member, shallowly). */
 const hashSet = (set: Set<unknown>, budget: number, depth: number): number => {
   const size = set.size
-  const h = mix(Tag.Set, size)
-  if (size > MAX_SCANNED_ENTRIES) return mix(h, Tag.Wide)
   const childBudget = size > MAX_ENTRIES ? 0 : share(budget, size)
   let sum = 0
-  for (const value of set) sum = (sum + spread(hashValue(value, childBudget, depth))) | 0
-  return size > MAX_ENTRIES ? rememberWide(set, mix(h, sum)) : mix(h, sum)
+  setForEach.call(set, (value: unknown) => {
+    sum = (sum + spread(hashValue(value, childBudget, depth))) | 0
+  })
+  const h = mix(mix(Tag.Set, size), sum)
+  return size > MAX_ENTRIES ? remember(set, h) : h
+}
+
+/** Runs one hash with a state of its own (a getter could start another hash while one runs). */
+const hashing = (refine: boolean, hash: () => number): number => {
+  const outerRefining = refining
+  const outerApproximate = approximate
+  refining = refine
+  approximate = false
+  try {
+    return hash()
+  } catch {
+    return FALLBACK_HASH
+  } finally {
+    lastApproximate = approximate
+    refining = outerRefining
+    approximate = outerApproximate
+  }
+}
+let lastApproximate = false
+
+const hashList = (args: readonly unknown[]): number => {
+  let h = mix(Tag.Array, args.length)
+  for (let index = 0; index < args.length; index++) h = mix(h, hashValue(args[index], BUDGET, 0))
+  return h
 }
 
 /** The hash of one value (see above). Exported for the tests of the contract. */
-export const structuralHash = (value: unknown): number => withWideHashes(() => {
-  try {
-    return hashValue(value, BUDGET, 0)
-  } catch {
-    return FALLBACK_HASH
-  }
-})
+export const structuralHash = (value: unknown): number => hashing(false, () => hashValue(value, BUDGET, 0))
 
 /** The structural hash of an argument list (see above). Each argument has a budget of its own. */
-export const hashArguments = (args: readonly unknown[]): number => withWideHashes(() => {
-  let h = mix(Tag.Array, args.length)
-  try {
-    for (let index = 0; index < args.length; index++) h = mix(h, hashValue(args[index], BUDGET, 0))
-  } catch {
-    return FALLBACK_HASH
-  }
-  return h
-})
+export const hashArguments = (args: readonly unknown[]): number => hashing(false, () => hashList(args))
+
+/**
+ * Whether a family hash took part in the last structural hash (hashArguments or structuralHash): equal hashes are
+ * then less telling, and candidates are best compared by their refined hashes first.
+ */
+export const lastHashWasApproximate = (): boolean => lastApproximate
+
+/** The hash of an argument list without families (E13): it also counts the keys a family leaves out. */
+export const refinedHashArguments = (args: readonly unknown[]): number => hashing(true, () => hashList(args))
+
+/** The refined hash of one value. Exported for the tests of the contract. */
+export const refinedStructuralHash = (value: unknown): number => hashing(true, () => hashValue(value, BUDGET, 0))
 
 /**
  * E9: a hash of an argument list that does not look into objects: primitives by value, functions by identity, every

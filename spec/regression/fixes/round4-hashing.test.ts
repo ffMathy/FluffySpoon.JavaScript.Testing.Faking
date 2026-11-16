@@ -2,7 +2,7 @@ import test, { ExecutionContext } from 'ava'
 import { inspect, isDeepStrictEqual, types } from 'util'
 
 import { Substitute, Arg } from '../../../src'
-import { FALLBACK_HASH, hashArguments, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+import { FALLBACK_HASH, hashArguments, refinedHashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
 
 // Round 4, E3 (R3-ADV-2, R3-1): the structural hash costs a bounded amount per argument, whatever its size or shape,
@@ -50,11 +50,42 @@ const shuffle = <T>(next: Next, items: T[]): T[] => {
 }
 
 /**
+ * R5V-1 / R5-ADV-1 (E13, round 6): values with as many keys or entries as the limits of the hash, and on both sides of
+ * them: 256 (hashed shallowly above), 1,025 string keys (families) and 65,536 (a sample of the values above). The widest
+ * ones are built once and shared (generated values refer to them, and copies copy them).
+ */
+const sharedWide: unknown[] = []
+const widest = (): unknown[] => {
+  if (sharedWide.length === 0) {
+    for (const size of [65_535, 65_536, 65_537]) {
+      sharedWide.push(Object.fromEntries(Array.from({ length: size }, (_, index) => [`h${index}`, index % 7])))
+      sharedWide.push(new Map(Array.from({ length: size }, (_, index): [unknown, number] => [index % 1000 === 0 ? { index } : `h${index}`, index % 7])))
+    }
+  }
+  return sharedWide
+}
+
+const generateWide = (next: Next, depth: number): unknown => {
+  const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]
+  if (next() < 0.05) return pick(widest())
+  const size = pick([255, 256, 257, 1024, 1025, 1026])
+  // two key sets, values that differ in a few places: independently generated values are often equal
+  const prefix = pick(['k', 'q'])
+  const special = (index: number) => index === 3 ? generate(next, depth - 1) : index === size - 1 ? pick([1, 2]) : index
+  return pick<() => unknown>([
+    () => objectOf(next, Array.from({ length: size }, (_, index): [PropertyKey, unknown] => [`${prefix}${index}`, special(index)])),
+    () => new Map(shuffle(next, Array.from({ length: Math.min(size, 257) }, (_, index): [unknown, unknown] => [index % 50 === 0 ? { index } : `${prefix}${index}`, special(index)]))),
+    () => new Set(shuffle(next, Array.from({ length: Math.min(size, 257) }, (_, index) => special(index))))
+  ])()
+}
+
+/**
  * Values from small domains, so that independently generated values are often deep strictly equal: with keys inserted
  * in other orders, cycles of other shapes, other identities.
  */
 const generate = (next: Next, depth: number): unknown => {
   const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]
+  if (depth > 0 && next() < 0.01) return generateWide(next, depth)
   const leaf = () => pick<() => unknown>([
     () => undefined, () => null, () => next() < 0.5, () => pick([0, -0, 1, NaN, 1.5]),
     () => pick(['', 'a', 'b']),
@@ -153,6 +184,8 @@ const describe = (value: unknown): string =>
 const hashesAgree = (t: ExecutionContext, a: unknown, b: unknown, message: string): boolean => {
   if (!deepStrictEqual(a, b)) return false
   if (structuralHash(a) !== structuralHash(b) || hashArguments([a, 1]) !== hashArguments([b, 1])) t.fail(`equal values hash differently: ${message}: ${describe(a)} and ${describe(b)}`)
+  // E13: the refined hashes (without families), which tell apart candidates with the same hash, agree as well
+  if (refinedStructuralHash(a) !== refinedStructuralHash(b) || refinedHashArguments([a, 1]) !== refinedHashArguments([b, 1])) t.fail(`equal values have other refined hashes: ${message}: ${describe(a)} and ${describe(b)}`)
   return true
 }
 
