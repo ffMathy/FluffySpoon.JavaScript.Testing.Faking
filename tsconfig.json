@@ -7,7 +7,7 @@
         "declaration": true,
         "outDir": "dist",
         "strict": true,
-        "removeComments": true
+        "removeComments": false
     },
     "include": [
         "src/**/*"
