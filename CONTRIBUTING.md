@@ -168,8 +168,18 @@ not against `src/`, and checks two things:
   `commonjs({ esmExternals: true })`, `commonjs({ esmExternals: ['@fluffy-spoon/substitute'] })`, bundling the
   package, Vite's `ssr.noExternal: ['@fluffy-spoon/substitute']`, and the default externals of the Vite version
   in use (Vite 8 bundles with Rolldown and is not affected). It also checks that the caveat itself still holds,
-  so the documentation is updated when the tools change. Bundles that keep the package external are written to
-  `node_modules/.substitute-bundles/` there, where Node.js can resolve the installed package, and removed afterwards.
+  so the documentation is updated when the tools change.
+  Finally, it bundles ES module code into CommonJS output with the package kept external: Rollup with
+  `output.format: 'cjs'`, esbuild with `format: 'cjs'` and `packages: 'external'`, webpack with a `commonjs`
+  external, and a Vite SSR build with `output.format: 'cjs'`. Such a bundle `require()`s the package at run time,
+  and its default import follows Node.js's CommonJS interop: it is the exports object, not the `Substitute` class
+  (with Rollup for every source; with esbuild, webpack and Rolldown, which Vite 8 uses, for `.mjs` sources and
+  sources in a `"type": "module"` package). README "Importing" and MIGRATION "Imports and packaging" recommend the
+  named import there. The check bundles `bundlers/named-entry.mjs`, which uses only the named import, with each of
+  them; bundles `bundlers/entry.mjs` with Rollup's `output.interop: 'auto'`, which makes the default import work;
+  and checks that the caveat itself still holds for `bundlers/entry.mjs` with each of them.
+  Bundles that keep the package external are written to `node_modules/.substitute-bundles/` there, where Node.js can
+  resolve the installed package, and removed afterwards.
 
 Run them with:
 
