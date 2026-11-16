@@ -186,9 +186,10 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   cyclic.self = cyclic
   const longer: any = { name: 'a', self: { name: 'a' } }
   longer.self.self = longer
-  // Node.js up to 22 finds these two equal, Node.js 24 and later do not; the hash must agree in both cases
-  t.is(structuralHash(cyclic), FALLBACK_HASH)
-  t.is(structuralHash(longer), FALLBACK_HASH)
+  // Node.js up to 22 finds these two equal, Node.js 24 and later do not; the hash must agree in both cases.
+  // Round 4 (E3): cycles end at the depth limit instead of giving FALLBACK_HASH, and both unroll to the same tree.
+  t.not(structuralHash(cyclic), FALLBACK_HASH)
+  t.is(structuralHash(cyclic), structuralHash(longer))
   const throwing = { get value(): never { throw new Error('getter') } }
   t.is(structuralHash(throwing), FALLBACK_HASH)
   t.is(hashArguments([1, throwing]), FALLBACK_HASH)
@@ -197,7 +198,8 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   t.is(structuralHash(proxy), FALLBACK_HASH)
   const wide: any[] = []
   for (let index = 0; index < 20; index++) wide.push(wide.length === 0 ? {} : [wide[index - 1], wide[index - 1]])
-  t.is(structuralHash(wide[19]), FALLBACK_HASH, 'more nested objects than the limit (through shared references)')
+  // round 4 (E3): more nested objects than the budget (through shared references) are cut, not given FALLBACK_HASH
+  t.not(structuralHash(wide[19]), FALLBACK_HASH, 'more nested objects than the budget (through shared references)')
 
   // substitutes and functions by identity, never traversed
   const substitute = Substitute.for<any>()

@@ -1,4 +1,4 @@
-import { inspect } from 'util'
+import { inspect, promisify } from 'util'
 import { constants as sharedConstants, substituteMarker } from '../shared'
 
 const CONTEXT = sharedConstants.CONTEXT
@@ -68,7 +68,10 @@ const protocolKeys = new Set<PropertyKey>([
   // asyncIterator and matchAll are looked up by name because older runtimes do not have them
   ...['iterator', 'asyncIterator', 'hasInstance', 'isConcatSpreadable', 'match', 'matchAll', 'replace', 'search',
     'split', 'species', 'toStringTag', 'unscopables'].map(name => wellKnownSymbols[name]),
+  // E7: the registered form, and the running runtime's own key, which is another symbol on Node.js 10.0 to 12.16.1
+  // and 13.0 to 13.11 (util.promisify reads that one there)
   Symbol.for('nodejs.util.promisify.custom'),
+  (promisify as { custom?: symbol }).custom,
   'asymmetricMatch'
 ].filter(key => key !== undefined) as PropertyKey[])
 

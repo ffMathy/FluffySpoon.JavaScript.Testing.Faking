@@ -62,34 +62,50 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
   return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
 }
 
-/**
- * Whether some value inside a plain container satisfies the predicate. Used on the arguments of every call, so it
- * allocates nothing per item and runs no getters of the code under test's objects.
+/*
+ * E3: the search for nested matchers runs on the arguments of every call, so its cost is bounded like the structural
+ * hash's (see ArgumentHash): each argument has a budget of SCAN_BUDGET containers, a container shares the rest of its
+ * budget evenly among its items, and containers without a share, nested more than MAX_SCAN_DEPTH levels deep (so
+ * cycles end), or with more than MAX_SCANNED_ITEMS items or keys are not searched. Matchers there are not recognised,
+ * and the value is compared literally. Items without a share are still checked for being a matcher themselves.
  */
-const someItem = (container: object, predicate: (item: unknown) => boolean): boolean => {
+const SCAN_BUDGET = 1024
+const MAX_SCAN_DEPTH = 32
+const MAX_SCANNED_ITEMS = 1024
+
+const holdsMatcherItem = (item: unknown, budget: number, depth: number): boolean =>
+  isArgumentMatcher(item) || (budget > 0 && depth < MAX_SCAN_DEPTH && isPlainContainer(item) && holdsMatcher(item, budget, depth + 1))
+
+/** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
+const holdsMatcher = (container: object, budget: number, depth: number): boolean => {
   if (Array.isArray(container)) {
-    for (let index = 0; index < container.length; index++) if (predicate(container[index])) return true
+    const length = container.length
+    if (length > MAX_SCANNED_ITEMS) return false
+    const share = Math.floor((budget - 1) / length)
+    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth)) return true
     return false
   }
-  for (const key of Object.keys(container)) if (predicate(dataValue(container, key))) return true
-  for (const symbol of Object.getOwnPropertySymbols(container))
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && predicate(dataValue(container, symbol))) return true
+  const keys = Object.keys(container)
+  const symbols = Object.getOwnPropertySymbols(container)
+  const count = keys.length + symbols.length
+  if (count > MAX_SCANNED_ITEMS) return false
+  const share = Math.floor((budget - 1) / count)
+  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth)) return true
+  for (let index = 0; index < symbols.length; index++) {
+    const symbol = symbols[index]
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth)) return true
+  }
   return false
 }
 
-const holdsMatcher = (container: object, visited: Set<object>): boolean => {
-  visited.add(container)
-  return someItem(container, item => isArgumentMatcher(item) || (isPlainContainer(item) && !visited.has(item) && holdsMatcher(item, visited)))
-}
-
 /**
- * Whether a value has a matcher nested in a plain object or array (D27), at any depth. Every container is visited
- * once, so cycles end. A container that cannot be read (a throwing getter) holds no matcher.
+ * Whether a value has a matcher nested in a plain object or array (D27), within the bounds above. A container that
+ * cannot be read (a throwing getter) holds no matcher.
  */
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, new Set())
+    return holdsMatcher(value, SCAN_BUDGET, 0)
   } catch {
     return false
   }

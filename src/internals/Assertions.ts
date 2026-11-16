@@ -119,10 +119,19 @@ type Schedule = (callback: () => void) => void
 
 /**
  * D34: the scheduler of deferred reports is captured when the library is loaded, so that fake timers installed
- * later (jest.useFakeTimers(), @sinonjs/fake-timers faking nextTick) cannot swallow a report. Fake timers that are
- * installed before the library is loaded can still delay it.
+ * later (jest.useFakeTimers(), @sinonjs/fake-timers faking queueMicrotask and nextTick) cannot swallow a report. Fake
+ * timers that are installed before the library is loaded can still delay it.
+ *
+ * E6: a report is thrown from a microtask (queueMicrotask). Test runners attribute an exception thrown there to the
+ * running test: jest reports it as that test's failure and runs the next tests, where an exception thrown from
+ * process.nextTick or setImmediate, or an unhandled rejection, crashes the jest process. Node.js 10 has no
+ * queueMicrotask; there the report falls back to process.nextTick.
  */
 const captureSchedule = (): Schedule => {
+  if (typeof queueMicrotask === 'function') {
+    const microtask = queueMicrotask
+    return callback => { microtask(callback) }
+  }
   if (typeof process !== 'undefined' && process !== null && typeof process.nextTick === 'function') {
     const nextTick = process.nextTick
     return callback => { nextTick.call(process, callback) }
@@ -160,7 +169,7 @@ export const settle = (deferred: DeferredAssertion | undefined): void => {
  * - The only deferred case (D9): the property-style form fails, the member has been invoked, the count is
  *   finite, and either a method assertion with that count could still pass or the member has only ever
  *   been invoked (never read as a property), so the access is most likely the start of a method assertion
- *   whose message needs the arguments. The failure is scheduled on process.nextTick and cancelled as soon
+ *   whose message needs the arguments. The failure is scheduled on a microtask (E6) and cancelled as soon
  *   as the member is invoked; only a property-style assertion that is never invoked reports it there.
  *   For a member that was only invoked, the report says so and shows the method assertion to write instead.
  * - D33: a property-style `didNotReceive().m` / `received(0).m` on a member that was only invoked holds as a

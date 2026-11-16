@@ -1,4 +1,4 @@
-import { CallSite, Frame, StackHolder, captureStack } from './CallSite'
+import { StackHolder, captureStack, forgetHandOutFrame, stackText } from './CallSite'
 
 export type RecordKind = 'get' | 'set' | 'call'
 
@@ -19,8 +19,8 @@ const nextSequence = (): number => ++sequence
 export class CallRecord {
   public seq: number
   public retracted = false
-  /** The captured stack, wrapped in a CallSite (D30: only when it is needed). */
-  private _site: StackHolder | CallSite
+  /** The captured stack (its call site), formatted as text only when a message shows it (E4). */
+  private _stack: StackHolder
   /**
    * D26: an invocation through `x.call(...)` / `x.apply(...)` is recorded once, with two readings: a call of x's
    * member `call` / `apply` with the raw arguments, and a direct call of x. Each reading is a record of its own
@@ -40,40 +40,27 @@ export class CallRecord {
     public chainPrevious?: CallRecord
   ) {
     this.seq = nextSequence()
-    this._site = captureStack(stackStart)
-  }
-
-  private get site(): CallSite {
-    const site = this._site
-    if (site instanceof CallSite) return site
-    const wrapped = new CallSite(site)
-    this._site = wrapped
-    return wrapped
+    this._stack = captureStack(stackStart)
   }
 
   /** The call site as a stack trace text, for messages. */
   public get stack(): string | undefined {
-    try {
-      return this.site.stack
-    } catch {
-      return undefined
-    }
-  }
-
-  /** The first frame outside the library (D25), or null when there is none. */
-  public get frame(): Frame | null {
-    return this.site.frame
+    return stackText(this._stack)
   }
 
   /**
-   * Turns a property read into an invocation. When the invocation directly follows the read (the usual
-   * `sub.method(...)`), the read already captured the right call site.
+   * Turns a property read into an invocation. E1: the invocation is a call made where it is invoked, which is not
+   * always where the method was read (a method reference handed to the code under test, `new Service(api.getUser)`,
+   * is invoked later, elsewhere), so it takes the call site of the invocation, unless the caller knows that the read
+   * and the invocation are the same expression (`sub.method(...)`).
    */
-  public convertToCall(args: any[], stackStart: Function): void {
-    const directlyInvoked = this.seq === currentSequence()
+  public convertToCall(args: any[], stackStart: Function, sameExpressionAsRead = false): void {
     this.kind = 'call'
     this.args = args
-    if (!directlyInvoked) this._site = captureStack(stackStart)
+    if (!sameExpressionAsRead) {
+      this._stack = captureStack(stackStart)
+      forgetHandOutFrame(this)
+    }
     this.seq = nextSequence()
   }
 }

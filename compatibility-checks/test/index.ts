@@ -1,17 +1,48 @@
 import * as test from 'node:test'
 import * as assert from 'node:assert'
 import { execSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import * as path from 'node:path'
 import { testRunnerEnvironment } from './environment'
 
 type TestRunner = {
   name: string
   /**
    * One of these must appear in the runner's output. The shared scenario fails with a SubstituteException that is
-   * thrown either synchronously (a failed test) or on process.nextTick after the test returned (an uncaught exception),
-   * depending on whether the library can decide the assertion right away, so both reports are accepted.
+   * thrown on a microtask after the test returned (E6), which each runner reports in its own way.
    */
   failureAcknowledgementTexts: string[]
   failureLocationText: string
+  /** E4: the "called at" lines of the message point at the TypeScript source (the runner applies source maps). */
+  mapsCallSites?: boolean
+  /** Further checks of the runner's output. */
+  verify?: (output: string) => void
+}
+
+const nodeMajorVersion = Number(process.versions.node.split('.')[0])
+
+/** The lines of the shared scenario that call the substitute, as the "called at" lines must name them. */
+const scenarioCallLines = readFileSync(path.join(__dirname, '../test-runners/_common/index.ts'), 'utf8')
+  .split('\n')
+  .flatMap((line, index) => line.trim() === 'lib.subSection()' ? [index + 1] : [])
+
+/**
+ * R3-ADV-5 (E6): jest must report the failure as the failure of the test, and run and report the other tests of the
+ * file. When a deferred report was thrown from process.nextTick, jest crashed instead: Node.js printed the exception as
+ * fatal and no summary followed (in band), or the file failed after the worker retries; that must fail this check.
+ * jest 30 finds the running test through AsyncLocalStorage, whose store Node.js 22 loses for an exception thrown from
+ * a microtask. On Node.js 22 jest 30 therefore reports the failure for the file ("Test suite failed to run"), and the
+ * other tests of the file still run and pass.
+ */
+const verifyJest = (output: string) => {
+  assert.ok(!/^Node\.js v\d/m.test(output), `The jest process crashed: ${output}`)
+  const testFailure = output.includes('● can substitute callable interfaces') && /Tests:\s+1 failed, 2 passed, 3 total/.test(output)
+  const fileFailure = output.includes('● Test suite failed to run') && /Tests:\s+3 passed, 3 total/.test(output)
+  // the "Tests:" summary counts the other two tests of the file, which passed
+  assert.ok(
+    testFailure || (nodeMajorVersion < 24 && fileFailure),
+    `jest did not report the failure of the test "can substitute callable interfaces" next to the 2 passing tests: ${output}`
+  )
 }
 
 test.describe('Verifies test runner compatibility', () => {
@@ -28,13 +59,19 @@ test.describe('Verifies test runner compatibility', () => {
 
   const testRunners: TestRunner[] = [
     { name: 'ava', failureAcknowledgementTexts: ['1 uncaught exception', '1 test failed'], failureLocationText: 'test-runners/ava/index.ts' },
-    { name: 'jest', failureAcknowledgementTexts: ['Tests:       1 failed', "type: 'CallCountMismatch'"], failureLocationText: 'test-runners/jest/index.spec.ts' },
+    {
+      name: 'jest',
+      failureAcknowledgementTexts: ['Tests:'],
+      failureLocationText: 'test-runners/jest/index.spec.ts',
+      mapsCallSites: true,
+      verify: verifyJest
+    },
     { name: 'mocha', failureAcknowledgementTexts: ['1 failing'], failureLocationText: 'can substitute callable interfaces:' },
     // G:CI-2: this check used to pass vacuously or fail, because the nested `node --test` inherited NODE_TEST_CONTEXT.
     { name: 'nodejs', failureAcknowledgementTexts: ['fail 1'], failureLocationText: 'test-runners/nodejs/index.ts' },
-    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts' },
+    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts', mapsCallSites: true },
     // F1: vitest with the package inlined (vitest.inline.config.mts), so that Vite, not Node.js, loads its ES module entry.
-    { name: 'vitest-inline', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest-inline/index.spec.ts' }
+    { name: 'vitest-inline', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest-inline/index.spec.ts', mapsCallSites: true }
   ]
 
   // P28 (ENG2-7): jest's matchers must compare a substitute like any other value. Unlike the runs above, this suite
@@ -66,6 +103,15 @@ test.describe('Verifies test runner compatibility', () => {
           result.includes('SubstituteException') && result.includes('Call count mismatch'),
           `Could not find the expected exception message in the output: ${result}`
         )
+        // R3-ADV-5: a test runner that crashes does not report the failure of a test
+        assert.ok(!/^Node\.js v\d/m.test(result), `The test runner process crashed: ${result}`)
+        if (testRunner.mapsCallSites) {
+          // R3-ADV-3 (E4): source maps apply to the "called at" lines (they once showed the compiled position)
+          assert.equal(scenarioCallLines.length, 3)
+          for (const line of scenarioCallLines)
+            assert.ok(result.includes(`_common/index.ts:${line}:`), `No "called at" line names test-runners/_common/index.ts:${line}: ${result}`)
+        }
+        testRunner.verify?.(result)
       })
     })
   })
