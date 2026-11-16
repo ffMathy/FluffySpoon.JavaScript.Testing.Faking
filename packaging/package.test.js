@@ -7,7 +7,8 @@ const fs = require('fs')
 const path = require('path')
 
 const {
-  root, readText, readJson, pack, createConsumer, runNode, childEnvironment, makeTemporaryDirectory, removeTemporaryDirectories
+  root, readText, readJson, copyRepository, snapshotDirectory, pack, createConsumer, runNode, childEnvironment,
+  makeTemporaryDirectory, removeTemporaryDirectories
 } = require('./helpers')
 
 const packageJson = readJson('package.json')
@@ -24,17 +25,20 @@ const run = (command, args, cwd) => new Promise(resolve => {
 
 const state = {}
 
-test.before('pack the repository like npm publish does', t => {
+test.before('pack a copy of the repository like npm publish does', t => {
   t.timeout(minutes(5))
+  // PK4-4: everything below happens in a temporary copy of the working tree, so `npm test` never writes into the
+  // working tree's dist/ (an interrupted run once left no dist/ at all).
+  state.distBefore = snapshotDirectory(path.join(root, 'dist'))
+  const copy = copyRepository(makeTemporaryDirectory('repository'))
   // Start from a stale dist/ like the one `npm test` used to leave behind: spec output and no dist/index.js.
   // Packing must rebuild the library from scratch.
-  const dist = path.join(root, 'dist')
-  fs.rmSync(dist, { recursive: true, force: true })
-  fs.mkdirSync(path.join(dist, 'spec'), { recursive: true })
-  fs.writeFileSync(path.join(dist, 'spec', 'Stale.spec.js'), '')
+  fs.mkdirSync(path.join(copy, 'dist', 'spec'), { recursive: true })
+  fs.writeFileSync(path.join(copy, 'dist', 'spec', 'Stale.spec.js'), '')
 
   const destination = makeTemporaryDirectory('pack')
-  state.packed = pack(destination)
+  state.packed = pack(destination, copy)
+  state.distAfter = snapshotDirectory(path.join(root, 'dist'))
   state.consumer = createConsumer(state.packed.tarball)
   for (const file of fs.readdirSync(path.join(__dirname, 'smoke'))) {
     fs.copyFileSync(path.join(__dirname, 'smoke', file), path.join(state.consumer, file))
@@ -63,6 +67,16 @@ test('G:PK-3 npm test compiles the specs into dist-spec/, so it never leaves dis
   t.false(/\bnpm run build\b(?!:)/.test(packageJson.scripts.test), 'npm test does not run the library build with other options')
 })
 
+test('PK4-4 the packaging checks pack a temporary copy of the repository and never write into the working tree\'s dist/', t => {
+  // Packing (which rebuilds dist/ through prepack) and the stale dist/ it starts from happened in the copy.
+  t.deepEqual(state.distAfter, state.distBefore, 'dist/ of the working tree is exactly as it was before packing')
+  t.false(state.packed.tarball.startsWith(root + path.sep), 'the tarball is written outside the working tree')
+  // CONTRIBUTING.md says so, and that is now true.
+  const contributing = readText('CONTRIBUTING.md').replace(/\s+/g, ' ')
+  t.true(contributing.includes('never writes into `dist/`'), 'CONTRIBUTING.md says that npm test never writes into dist/')
+  t.regex(contributing, /temporary copy of the repository/, 'CONTRIBUTING.md says that the packaging checks pack a temporary copy')
+})
+
 test('DOCS:ESM the default import is the Substitute class under native ESM', t => {
   const output = runNode(state.consumer, ['import.mjs'])
   t.regex(output, /import smoke test passed/)
@@ -83,15 +97,21 @@ const commonJsViews = [
   { name: 'the __esModule interop of Rollup\'s commonjs plugin, Vite SSR and vitest inlining (exports.default and the named exports)', defaultExport: 'real.default', namedExports: true }
 ]
 
+/**
+ * Writes a directory where dist/index.mjs imports an index.js that has the given shape. `defaultExport` is the
+ * source of index.js's default export; `namedExports` is false (none), true (the real ones) or 'undefined' (every
+ * named export present, but undefined).
+ */
 const simulateCommonJsView = (directory, cjsEntry, names, { defaultExport, namedExports }) => {
   fs.mkdirSync(directory)
   fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ type: 'module' }))
   fs.copyFileSync(path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.mjs'), path.join(directory, 'index.mjs'))
+  const namedExportValue = name => namedExports === 'undefined' ? 'undefined' : `real.${name}`
   fs.writeFileSync(path.join(directory, 'index.js'), [
     "import { createRequire } from 'module'",
     `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
     `export default ${defaultExport}`,
-    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = real.${name}`) : []),
+    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = ${namedExportValue(name)}`) : []),
     ''
   ].join('\n'))
   fs.writeFileSync(path.join(directory, 'check.mjs'), [
@@ -118,11 +138,48 @@ test('F1 the ES module entry gives the real exports whichever CommonJS interop t
   })
 
   // A view that has neither shape fails loudly at import time instead of exporting undefined values.
-  const directory = path.join(state.consumer, 'interop-unusable')
-  simulateCommonJsView(directory, cjsEntry, names, { defaultExport: '{}', namedExports: false })
+  const unusableViews = [
+    { name: 'an empty default import and no named exports', defaultExport: '{}', namedExports: false },
+    { name: 'the Substitute class as the default import and undefined named exports', defaultExport: 'real.default', namedExports: 'undefined' }
+  ]
+  unusableViews.forEach((view, index) => {
+    const directory = path.join(state.consumer, `interop-unusable-${index}`)
+    simulateCommonJsView(directory, cjsEntry, names, view)
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+    t.not(result.status, 0, view.name)
+    t.regex(result.stderr, /could not read the exports of its CommonJS build/, view.name)
+  })
+})
+
+test('PK4-2 the ES module entry uses the named exports when the default import is an object without them (vitest server.deps.inline with deps.interopDefault: false)', t => {
+  const cjsEntry = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js')
+  const names = Object.keys(require(cjsEntry))
+  // What vitest 3 and 5 hand dist/index.mjs with server.deps.inline and deps.interopDefault: false: the default import
+  // is an object with only some of the exports (SubstituteException and default), and the namespace has every named
+  // export plus that object as its default, not the Substitute class.
+  const directory = path.join(state.consumer, 'interop-vitest-inline-no-interop-default')
+  simulateCommonJsView(directory, cjsEntry, names, {
+    defaultExport: '{ SubstituteException: real.SubstituteException, default: real.default }',
+    namedExports: true
+  })
   const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
-  t.not(result.status, 0)
-  t.regex(result.stderr, /could not read the exports of its CommonJS build/)
+  t.is(result.status, 0, result.stdout + result.stderr)
+  t.regex(result.stdout, /^ok$/m)
+
+  // The wrapper's default export is the class that dist/index.js exports as its default, found at build time,
+  // not whatever default the view it reads from has.
+  const wrapper = fs.readFileSync(path.join(path.dirname(cjsEntry), 'index.mjs'), 'utf8')
+  t.regex(wrapper, /^export default cjs\.Substitute;$/m)
+  t.notRegex(wrapper, /\b(?:cjs|value)\.default\b/, 'the wrapper never reads the default export of the view it uses')
+})
+
+test('PK4-2 the compatibility checks run vitest with the package inlined and deps.interopDefault: false', t => {
+  const compatibility = path.join(root, 'compatibility-checks')
+  const config = fs.readFileSync(path.join(compatibility, 'vitest.inline-no-interop-default.config.mts'), 'utf8')
+  t.regex(config, /inline:\s*\['@fluffy-spoon\/substitute'\]/)
+  t.regex(config, /interopDefault:\s*false/)
+  const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
+  t.regex(bundlers, /'vitest\.inline-no-interop-default\.config\.mts'/, 'test/bundlers.ts runs vitest with that config')
 })
 
 test('F1 the compatibility checks bundle the packed package and run vitest with the package inlined', t => {
@@ -155,6 +212,27 @@ test('P2 the compatibility checks bundle CommonJS code that require()s the packa
   t.regex(p2, /nodeResolve\(\{ preferBuiltins: true \}\), commonjs\(\)\]/, 'Rollup with the package bundled')
   t.regex(p2, /documented caveat/, 'the caveat itself (default options, package external) is checked too')
   t.regex(bundlers, /const packageName = '@fluffy-spoon\/substitute'/)
+})
+
+test('PK4-1 the compatibility checks bundle ES module code into CommonJS output with the package external and use the named import', t => {
+  const compatibility = path.join(root, 'compatibility-checks')
+  // The fixture uses only the named import, which README "Importing" recommends for this case.
+  const fixture = fs.readFileSync(path.join(compatibility, 'bundlers', 'named-entry.mjs'), 'utf8')
+  t.regex(fixture, /^import \{ Substitute, Arg\b[^}]*\} from '@fluffy-spoon\/substitute'$/m, 'named-entry.mjs uses the named import')
+  t.notRegex(fixture, /^import\s+(?!\{)[\w$]+/m, 'named-entry.mjs has no default import')
+  const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
+  const pk41 = bundlers.slice(bundlers.indexOf('const commonJsOutputBundlers'))
+  t.true(pk41.length < bundlers.length, 'test/bundlers.ts has the PK4-1 checks')
+  // Each bundler emits CommonJS and keeps the package external; README and MIGRATION name these settings.
+  t.regex(pk41, /rollupCommonJsBundle\(input, /, "Rollup with output.format 'cjs'")
+  t.regex(bundlers, /format: 'cjs', \.\.\.\(interop === undefined/, "rollupCommonJsBundle writes output.format 'cjs'")
+  t.regex(pk41, /format: 'cjs', packages: 'external'/, "esbuild with format 'cjs' and packages: 'external'")
+  t.regex(pk41, /\[packageName\]: `commonjs \$\{packageName\}`/, 'webpack with a commonjs external')
+  t.regex(pk41, /viteSsrBundle\(input, outDir, undefined, \{ format: 'cjs'/, "a Vite SSR build with output.format 'cjs'")
+  t.regex(pk41, /requiresPackageAtRunTime\(bundle\)/, 'each bundle require()s the package at run time')
+  t.regex(pk41, /buildAndRun\(bundler, namedEntry\)/, 'the named import is checked with each of them')
+  t.regex(pk41, /rollupCommonJsBundle\(input, path\.join\([^)]*\), 'auto'\)/, "Rollup's output.interop: 'auto' workaround for the default import is checked")
+  t.regex(pk41, /documented caveat/, 'the caveat itself (the default import is the exports object) is checked too')
 })
 
 test('P28 the compatibility checks use substitutes inside jest matchers', t => {

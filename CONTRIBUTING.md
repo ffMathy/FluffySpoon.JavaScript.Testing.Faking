@@ -48,9 +48,13 @@ This compiles `src/` into `dist/` with `tsc` (CommonJS plus `.d.ts` typings) and
   build instead of being a second copy, so CommonJS and ESM consumers share one module instance. Tools disagree
   about what a default import of a CommonJS module that sets `__esModule` is: Node.js, webpack and esbuild give
   `module.exports`, while Rollup's commonjs plugin, Vite SSR and vitest with inlined dependencies give
-  `exports.default`. The wrapper therefore imports both the default and the namespace of `dist/index.js`, uses
-  whichever one holds the complete exports, and throws at import time if neither does. A packaging test simulates
-  each of these interop shapes, and the compatibility checks bundle the package with the real tools.
+  `exports.default`, and vitest with inlined dependencies and `deps.interopDefault: false` gives an object
+  without the named exports (with a namespace whose `default` is that object). The wrapper therefore imports
+  both the default and the namespace of `dist/index.js` and uses whichever one holds every named export with the
+  type it has at build time; it throws at import time if neither does. Its own default export is the named export
+  `Substitute` (the default export of `dist/index.js`, found at build time), whatever the `default` of the view it
+  reads from is. A packaging test simulates each of these interop shapes, and the compatibility checks bundle the
+  package with the real tools.
 - `dist/index.d.mts` holds the matching typings for TypeScript's `node16`, `nodenext` and `bundler` resolution.
 
 The `exports` map in `package.json` sends `import` to the ES module entry and everything else (`require`, older
@@ -78,17 +82,21 @@ npm test
 ```
 
 `npm test` runs `npm run build:spec`, which compiles the specs together with the sources they import into
-`dist-spec/`, and then ava. It never writes into `dist/`, so running the tests cannot leave a broken `dist/`
-behind for publishing.
+`dist-spec/`, and then ava. It never writes into `dist/`, so running the tests (or interrupting them) cannot
+leave a broken or missing `dist/` behind for publishing or for `npm link`.
 
 ava runs two groups of tests:
 
 - `spec/**/*.spec.ts` and `spec/**/*.test.ts`: the runtime behaviour of the library.
-- `packaging/**/*.test.js`: packaging and release checks. They pack the repository exactly like `npm publish`
-  does (which rebuilds `dist/` through the `prepack` script), extract the tarball into a fresh consumer project
-  and check it there: the tarball contents, `require` and native `import` (including the default import),
-  deep imports, TypeScript resolution in `node10`, `node16`, `nodenext` and `bundler` mode, and the consistency
-  of `package.json`, `package-lock.json` and the workflows.
+- `packaging/**/*.test.js`: packaging and release checks. They work on a temporary copy of the repository: the
+  working tree as it is on disk (uncommitted changes included), without `dist/`, `dist-spec/`, `.git`, other
+  dot-directories and `node_modules/` (the copy links to the repository's `node_modules/`). They put a stale
+  `dist/` into the copy and pack it exactly like `npm publish` does, which rebuilds `dist/` there through the
+  `prepack` script. They extract the tarball into a fresh consumer project and check it there: the tarball
+  contents, `require` and native `import` (including the default import), deep imports, the ES module entry under
+  each way that tools turn its CommonJS build into an ES module, TypeScript resolution in `node10`, `node16`,
+  `nodenext` and `bundler` mode, and the consistency of `package.json`, `package-lock.json` and the workflows.
+  The temporary directories are removed afterwards.
 
 To run a single file or test, use ava's options after building the specs, for example:
 
@@ -150,7 +158,8 @@ not against `src/`, and checks two things:
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
-  `test-runners/vitest-inline/exports.test.ts`, which checks the same.
+  `test-runners/vitest-inline/exports.test.ts`, which checks the same, once with `vitest.inline.config.mts` and
+  once with `vitest.inline-no-interop-default.config.mts`, which also sets `deps.interopDefault: false`.
   It also bundles `bundlers/require-entry.mjs`, which imports CommonJS code that `require()`s the package
   (`bundlers/require-helper.cjs`). With `@rollup/plugin-commonjs` on default options and the package kept external,
   that `require()` gets the `Substitute` class instead of the exports object (Vite 7 and older SSR builds do the
@@ -159,8 +168,18 @@ not against `src/`, and checks two things:
   `commonjs({ esmExternals: true })`, `commonjs({ esmExternals: ['@fluffy-spoon/substitute'] })`, bundling the
   package, Vite's `ssr.noExternal: ['@fluffy-spoon/substitute']`, and the default externals of the Vite version
   in use (Vite 8 bundles with Rolldown and is not affected). It also checks that the caveat itself still holds,
-  so the documentation is updated when the tools change. Bundles that keep the package external are written to
-  `node_modules/.substitute-bundles/` there, where Node.js can resolve the installed package, and removed afterwards.
+  so the documentation is updated when the tools change.
+  Finally, it bundles ES module code into CommonJS output with the package kept external: Rollup with
+  `output.format: 'cjs'`, esbuild with `format: 'cjs'` and `packages: 'external'`, webpack with a `commonjs`
+  external, and a Vite SSR build with `output.format: 'cjs'`. Such a bundle `require()`s the package at run time,
+  and its default import follows Node.js's CommonJS interop: it is the exports object, not the `Substitute` class
+  (with Rollup for every source; with esbuild, webpack and Rolldown, which Vite 8 uses, for `.mjs` sources and
+  sources in a `"type": "module"` package). README "Importing" and MIGRATION "Imports and packaging" recommend the
+  named import there. The check bundles `bundlers/named-entry.mjs`, which uses only the named import, with each of
+  them; bundles `bundlers/entry.mjs` with Rollup's `output.interop: 'auto'`, which makes the default import work;
+  and checks that the caveat itself still holds for `bundlers/entry.mjs` with each of them.
+  Bundles that keep the package external are written to `node_modules/.substitute-bundles/` there, where Node.js can
+  resolve the installed package, and removed afterwards.
 
 Run them with:
 
