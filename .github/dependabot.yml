@@ -12,3 +12,10 @@ updates:
       interval: daily
       time: "04:00"
     open-pull-requests-limit: 10
+
+  # The test runners used by compatibility-checks/ (dev tooling only).
+  - package-ecosystem: npm
+    directory: "/compatibility-checks"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

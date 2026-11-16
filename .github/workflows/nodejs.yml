@@ -1,27 +1,118 @@
 name: Node CI
-on: [push]
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  # The publish workflow runs exactly these checks before it publishes.
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  # The oldest Node.js version the package supports. It must equal engines.node in package.json
+  # (packaging/package.test.js checks that), and the minimum-node job below smoke-tests the packed package on it.
+  MINIMUM_NODE_VERSION: '10.0.0'
+  # The oldest Node.js version with native ES module support, for the ESM entry point (dist/index.mjs).
+  MINIMUM_ESM_NODE_VERSION: '12.17.0'
 
 jobs:
-  build:
+  test:
+    name: Test on Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node-version: [18, 20, 21]
-
+        # Every Node.js LTS line that is still supported: https://nodejs.org/en/about/previous-releases
+        node-version: [22, 24, 26]
     steps:
-    - uses: actions/checkout@v4
-      with:
-        show-progress: false
-    - name: Use Node.js ${{ matrix.node-version }}
-      uses: actions/setup-node@v4
-      with:
-        node-version: ${{ matrix.node-version }}
-        cache: 'npm'
-    - name: Install dependencies
-      run: npm ci
-    - name: Transpile typescript
-      run: npm run build --if-present
-    - name: Run tests
-      run: npm test
-      env:
-        CI: true
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Run the specs and the packaging checks
+        run: npm test
+      - name: Run the type tests
+        run: npm run test:types --if-present
+
+  compatibility:
+    name: Test runner compatibility on Node ${{ matrix.node-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            compatibility-checks/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Install the compatibility check dependencies
+        run: npm ci
+        working-directory: compatibility-checks
+      # The pretest script packs the repository like npm publish does and installs that tarball,
+      # so ava, jest, mocha, node:test and vitest run against the package as it would be published.
+      - name: Run the compatibility checks against the packed package
+        run: npm test
+        working-directory: compatibility-checks
+
+  minimum-node:
+    name: Packed package on the oldest supported Node versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Use the development Node.js version
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Pack the package like npm publish does
+        run: |
+          consumer="$RUNNER_TEMP/consumer"
+          mkdir -p "$consumer/node_modules/@fluffy-spoon/substitute"
+          npm pack --pack-destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP"/fluffy-spoon-substitute-*.tgz -C "$consumer/node_modules/@fluffy-spoon/substitute" --strip-components=1
+          cp packaging/smoke/* "$consumer/"
+      - name: Use Node.js ${{ env.MINIMUM_NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.MINIMUM_NODE_VERSION }}
+      # G:PK-2: engines.node must be a version the package really runs on.
+      - name: CommonJS smoke test on Node ${{ env.MINIMUM_NODE_VERSION }}
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node --version
+          node require.js
+          node deep-imports.js
+      - name: Use Node.js ${{ env.MINIMUM_ESM_NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.MINIMUM_ESM_NODE_VERSION }}
+      - name: CommonJS and ES module smoke test on Node ${{ env.MINIMUM_ESM_NODE_VERSION }}
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node --version
+          node require.js
+          node import.mjs
