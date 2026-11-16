@@ -16,8 +16,8 @@ export const ambiguousPropertyTypeAssertion = () => {
   lib.subSection.returns({ subMethod: () => 'subSection as property' } as AmbiguousSection)
 
   // Three calls, then a property-style assertion with a finite count that a method assertion could still
-  // satisfy. The member is never invoked afterwards, so the failure can only be reported on process.nextTick,
-  // after the test function has returned. Every test runner must still attribute it to the test.
+  // satisfy. The member is never invoked afterwards, so the failure can only be reported on a microtask (E6),
+  // after the test function has returned. Every test runner must still report it as a failure.
   lib.subSection()
   lib.subSection()
   lib.subSection()
