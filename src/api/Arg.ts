@@ -35,7 +35,17 @@ const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options
     throw new TypeError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`)
   return new Argument(`Arg.is{${describePredicate(predicate)}}`, predicate, options)
 }
-type Is = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>) => ReturnArg<ExtractFirstArg<T>>
+type Is = {
+  <T>(predicate: PredicateFunction<ExtractFirstArg<T>>): ReturnArg<ExtractFirstArg<T>>
+  // Infers the type from an annotated predicate when the matcher is created on its own, which TypeScript 3.6 and 3.7
+  // cannot do through `ExtractFirstArg` above (TD-6).
+  <T>(predicate: (arg: T) => boolean): ReturnArg<T>
+}
+
+// 'function' and 'object' are mostly used for callback and object parameters, so they must be assignable to them (TD-5):
+// 'function' is typed as any function or constructor (its `matches` still accepts any `Function`), 'object' as `any`
+// (no type is assignable to every object type).
+type AnyFunction = Argument<Function> & ((...args: any[]) => any) & (new (...args: any[]) => any)
 
 type MapAnyReturn<T> = T extends 'any' ?
 ReturnArg<any> : T extends 'string' ?
@@ -44,8 +54,8 @@ ReturnArg<number> : T extends 'boolean' ?
 ReturnArg<boolean> : T extends 'symbol' ?
 ReturnArg<symbol> : T extends 'undefined' ?
 ReturnArg<undefined> : T extends 'object' ?
-ReturnArg<object> : T extends 'function' ?
-ReturnArg<Function> : T extends 'array' ?
+ReturnArg<any> : T extends 'function' ?
+AnyFunction : T extends 'array' ?
 ReturnArg<any[]> : any
 
 type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any'
