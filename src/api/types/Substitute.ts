@@ -84,9 +84,12 @@ type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemb
 
 /**
  * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
- * member type (`sub.received().isEnabled = true`).
+ * member type (`sub.received().isEnabled = true`). A substitute of a function type is callable here as well
+ * (`listener.received(1)('saved')`, T37).
  */
-export type TerminatingObject<T> = { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> }[IndexKind<T>]
+export type TerminatingObject<T> =
+  { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> }[IndexKind<T>] &
+  FunctionSubstitute<NonNullable<T>, 'assertion'>
 
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
@@ -101,6 +104,7 @@ type ConfigurationMembers<TMembers, T> = {
 /**
  * The object returned by `sub[configure]()`. Member reads and calls on it are always setups, so they only expose the
  * setup API. The string forms (`.returns`, `.throws`, ...) are always offered here: the configured value is never
- * returned from this view, so there is nothing for them to conflict with.
+ * returned from this view, so there is nothing for them to conflict with. A substitute of a function type is callable
+ * here as well (`listener[configure]()('saved').returns('ack')`, T37).
  */
-export type ConfigureView<T> = ConfigurationMembers<Members<T>, T>
+export type ConfigureView<T> = ConfigurationMembers<Members<T>, T> & FunctionSubstitute<NonNullable<T>, 'configure'>
