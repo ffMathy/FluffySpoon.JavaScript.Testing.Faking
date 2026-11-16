@@ -308,6 +308,43 @@ test('CI:matrix CI tests every supported Node LTS line and runs the type tests',
   t.regex(ciWorkflow, /pull_request/)
 })
 
+/** The body of a job in a workflow file: everything from `  <job>:` up to the next job. */
+const workflowJob = (workflow, job) => {
+  const match = new RegExp(`\\n  ${job}:\\n([\\s\\S]*?)(?=\\n  [\\w-]+:\\n|$)`).exec(workflow)
+  return match ? match[1] : undefined
+}
+
+test('F4 CI (and so the release gate) type-checks the built typings with the oldest supported TypeScript', t => {
+  t.regex(packageJson.scripts['test:types:min-ts'], /^npm run build && node spec-types\/min-ts\/check\.js$/)
+  t.regex(readText('spec-types/min-ts/check.js'), /MINIMUM_TYPESCRIPT_VERSION = '3\.6'/)
+  const job = workflowJob(ciWorkflow, 'types-min-ts')
+  t.truthy(job, 'nodejs.yml has a types-min-ts job')
+  t.regex(job, /run:\s*npm ci\b/)
+  t.regex(job, /run:\s*npm run test:types:min-ts\s*$/m)
+  t.notRegex(job, /\bif:/, 'the job always runs')
+  // The publish workflow runs the whole CI workflow, this job included, before it publishes.
+  t.regex(publishWorkflow, /uses:\s*\.\/\.github\/workflows\/nodejs\.yml/)
+  t.regex(workflowJob(publishWorkflow, 'publish-npm'), /needs:\s*ci\b/)
+})
+
+test('TD-12 CONTRIBUTING.md documents every CI check, including test:docs and test:types:min-ts', t => {
+  const contributing = readText('CONTRIBUTING.md')
+  for (const command of ['npm run test:docs', 'npm run test:types:min-ts', 'npm run test:types']) {
+    t.true(contributing.includes(command), `CONTRIBUTING.md shows how to run ${command}`)
+  }
+  for (const directory of ['spec-types/', 'spec-docs/']) {
+    t.regex(contributing, new RegExp(`\\| \`${directory}\` \\|`), `the project layout lists ${directory}`)
+  }
+  t.true(contributing.includes('spec-docs/README.md'), 'CONTRIBUTING.md points to the docs check documentation')
+  const ci = contributing.slice(contributing.indexOf('## Continuous integration'), contributing.indexOf('## Releasing'))
+  for (const [, job] of ciWorkflow.matchAll(/\n  ([\w-]+):\n\s+name:/g)) {
+    t.true(ci.includes(`**${job}**`), `the Continuous integration section describes the ${job} job`)
+  }
+  for (const [, command] of workflowJob(ciWorkflow, 'test').matchAll(/run:\s*(npm [^\n]+)/g)) {
+    t.true(ci.includes(command.replace(' --if-present', '')), `the Continuous integration section mentions ${command}`)
+  }
+})
+
 test('DOCS:CONTRIBUTING CONTRIBUTING.md (linked from the README) exists and documents the release process', t => {
   const contributing = readText('CONTRIBUTING.md')
   for (const topic of ['npm test', 'test:types', 'compatibility-checks', 'release']) {

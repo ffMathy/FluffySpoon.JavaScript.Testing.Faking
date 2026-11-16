@@ -53,6 +53,26 @@ jobs:
       - name: Check the code examples in the documentation
         run: npm run test:docs
 
+  # F4: README, MIGRATION and CHANGELOG promise TypeScript 3.6 or newer. Type-checks the built typings with exactly that
+  # version (spec-types/min-ts/check.js installs it on the fly with npx), so a .d.ts change that needs newer
+  # TypeScript fails CI and is never published.
+  types-min-ts:
+    name: Typings on the oldest supported TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Use the development Node.js version
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and type-check the typings with the oldest supported TypeScript
+        run: npm run test:types:min-ts
+
   compatibility:
     name: Test runner compatibility on Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
