@@ -1,4 +1,4 @@
-import Substitute from '../../../src'
+import Substitute from '@fluffy-spoon/substitute'
 
 interface Library {
   subSection: AmbiguousSection
