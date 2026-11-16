@@ -26,6 +26,8 @@ calculator.received(2).isEnabled = true
 calculator[received]().add(1, 2)
 calculator[configure]().add(1, 2).returns(3)
 calculator[mimick]({} as Calculator)
+// without strictNullChecks every parameter accepts undefined, so Arg.any('undefined') fits everywhere (T38)
+calculator.add(Arg.any('undefined'), 2).returns(3)
 const asCalculator: Calculator = calculator
 
 // overloads, including one without parameters

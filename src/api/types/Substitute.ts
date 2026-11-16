@@ -1,5 +1,6 @@
 import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
-import { FunctionSubstitute } from './FunctionSubstitute'
+import { CallKind, FunctionSubstitute } from './FunctionSubstitute'
+import { IndexKind, ValueKind } from './Utilities'
 
 /**
  * The setup API of a member read on a substitute (`sub.isEnabled.returns(true)`). The value itself is not part of it:
@@ -9,13 +10,20 @@ import { FunctionSubstitute } from './FunctionSubstitute'
 export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
 
 /**
- * The object type whose members the views below map.
+ * The object type whose keys the views below map.
  * A type with a string index signature is mapped directly: a homomorphic mapping over it keeps the named members next to
  * the index signature (T:TY-8), whereas `keyof T` is just `string | number`. Any other type is first turned into a plain
  * object type with the same members, so that primitives (`Substitute.for<string>()`) and arrays are mapped member by
- * member too (a homomorphic mapping would return a primitive unchanged and only map the elements of an array).
+ * member too (a homomorphic mapping would return a primitive unchanged and only map the elements of an array), and so
+ * that a union (`Cat | Dog`) is mapped as one object type with the members its variants have in common.
+ * In generic code it is the type parameter itself: there `T['total']` accepts the values of the constraint's member type
+ * (`sub.total.returns(1)` with `T extends Calculator`, T33), and `Pick<T, keyof T>['total']` does not. The choice is an
+ * indexed access whose key is `any` for the plain object type: an object type indexed with `any` gives its string index
+ * signature, and in generic code, where `MembersKind` cannot be decided, TypeScript leaves out its `any` branch and
+ * takes `T`. (`MembersKind` is not distributive, so a union is not split.)
  */
-type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
+type Members<T> = { indexed: T, [plain: string]: Pick<T, keyof T> }[MembersKind<T>]
+type MembersKind<T> = string extends keyof T ? 'indexed' : any
 
 // The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
@@ -23,10 +31,8 @@ type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 // Members whose type is only `null` and/or `undefined` (`error?: undefined`, `ownerDocument: null`) get no setup API:
 // there is nothing to configure, and an object type intersected with `null` would reduce the whole substitute to
 // `never` (TD-1, T25). They are `unknown` here, so that `SubstituteOf<T>` gives them their plain type from `T`.
-// For a property whose type is an unresolved type parameter (`current: T` in generic code), TypeScript cannot decide
-// this check and only keeps what both branches have, i.e. nothing: such a property has no setup API in generic code.
-// It is configured through `sub[configure]().current`. (Calls are not affected: their results never meet `T`'s own
-// property types, so they keep the setup API in both branches; see `SubstitutionResult`.)
+// In generic code that check cannot be decided, and the member gets the setup API (`ValueKind`): a property whose type
+// is the type parameter itself (`current: T`) can be configured there as well (T26, T33).
 //
 // Special members (T:TY-16, D20). At runtime a substitute never exposes `then`, so that it is not a thenable
 // (`await sub` resolves to the substitute itself); the typings make `then` `never`. `toJSON` is answered by the
@@ -37,21 +43,60 @@ type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 
 type SubstituteMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'substitute'> & PropertySubstitute<TValue>
 
-type SubstituteMembers<T> = {
-  [P in keyof T]-?:
+// For a concrete `any` kind (a member that is only null/undefined) this is `SubstituteMember<TValue> | unknown`, which
+// is `unknown`.
+type SubstituteMemberOf<TKind, TValue> = TKind extends 'value' ? SubstituteMember<TValue> : unknown
+
+type SubstituteMembers<TMembers> = {
+  [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? unknown :
-    [NonNullable<T[P]>] extends [never] ? unknown :
-    SubstituteMember<T[P]>
+    SubstituteMemberOf<ValueKind<TMembers[P]>, TMembers[P]>
 }
 
 /** The members of a substitute (without the assertion and configuration methods), each with its setup API. */
 export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>>
 
+// Unions whose variants declare a member as only null/undefined (T36, R3TD-4):
+//   { data: string[]; error: null } | { data: null; error: Error }
+//   { ok: true; value: string; error?: undefined } | { ok: false; value?: undefined; error: Error }
+// The members above are mapped from the members the variants have in common, so `data` has the setup API of
+// `string[] | null`. `SubstituteOf<T>` intersects them with `T`, i.e. with each variant, and in the variant where
+// `data` is `null` the setup API meets `null`. That gives `never`, and TypeScript drops a variant that has a `never`
+// member which is `null` or a literal in one of the intersected types. When every variant has such a member, the whole
+// substitute became `never`.
+// The patch below gives such a member the type `never` itself in that variant. TypeScript keeps a variant in which one
+// of the intersected types declares the member as `never`, so every variant is kept. The member then reads as the
+// setup API intersected with the other variants' types (`result.data` is `string[]` with `.returns(...)`), and each
+// variant of the substitute is still assignable to that variant of `T`.
+
+// The members that are only null/undefined in `TVariant` but not in every variant of `T`.
+type VariantNullKeys<TVariant, T> = {
+  [P in keyof TVariant]-?:
+    [NonNullable<TVariant[P]>] extends [never] ? (P extends keyof T ? ([NonNullable<T[P]>] extends [never] ? never : P) : never) :
+    never
+}[keyof TVariant]
+
+// `unknown` for a type that is not a union (and in generic code, where the check cannot be decided).
+type VariantPatch<TVariant, T> = [T] extends [TVariant] ? unknown : { [P in VariantNullKeys<TVariant, T>]: never }
+
+/** For a union `T`, a union of one patch per variant (see above); `unknown` for any other type. */
+export type UnionVariantPatch<T> = UnionVariantPatchOf<T & {}, T>
+type UnionVariantPatchOf<TVariant, T> = TVariant extends unknown ? VariantPatch<TVariant, T> : never
+
 // In the assertion view, a member that is not callable keeps its declared type, including `undefined` for an optional
 // property (`sub.received().note = undefined`, TD-7). A callable member offers the assertion signatures (calls return
 // nothing) on the member type without `null | undefined`.
-type AssertionMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
+// The choice is an indexed access rather than a conditional type: in generic code TypeScript checks a value assigned
+// to it against the member type of the constraint (`sub.received().total = 1` with `T extends Calculator`, T33), which
+// it never does for a conditional type.
+type AssertionMember<TValue> = {
+  call: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
+  plain: TValue
+}[AssertionKind<ValueKind<TValue>, TValue>]
+
+// For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
+type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
 
 type AssertionMemberOf<T, P extends keyof T> =
   P extends 'then' ? never :
@@ -68,23 +113,27 @@ type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemb
 
 /**
  * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
- * member type (`sub.received().isEnabled = true`).
+ * member type (`sub.received().isEnabled = true`). A substitute of a function type is callable here as well
+ * (`listener.received(1)('saved')`, T37).
  */
-export type TerminatingObject<T> = string extends keyof T ? IndexedAssertionMembers<T> : AssertionMembers<T>
+export type TerminatingObject<T> =
+  { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> }[IndexKind<T>] &
+  FunctionSubstitute<NonNullable<T>, 'assertion'>
 
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
 
-type ConfigurationMembers<T> = {
-  [P in keyof T]-?:
+type ConfigurationMembers<TMembers> = {
+  [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? never :
-    ConfigurationMember<T[P]>
+    ConfigurationMember<TMembers[P]>
 }
 
 /**
  * The object returned by `sub[configure]()`. Member reads and calls on it are always setups, so they only expose the
  * setup API. The string forms (`.returns`, `.throws`, ...) are always offered here: the configured value is never
- * returned from this view, so there is nothing for them to conflict with.
+ * returned from this view, so there is nothing for them to conflict with. A substitute of a function type is callable
+ * here as well (`listener[configure]()('saved').returns('ack')`, T37).
  */
-export type ConfigureView<T> = ConfigurationMembers<Members<T>>
+export type ConfigureView<T> = ConfigurationMembers<Members<T>> & FunctionSubstitute<NonNullable<T>, 'configure'>

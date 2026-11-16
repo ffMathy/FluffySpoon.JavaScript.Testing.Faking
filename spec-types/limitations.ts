@@ -1,6 +1,6 @@
 // Documented limitations of the typings (TypeScript cannot express these). Each `@ts-expect-error` line shows the
 // limitation, the line after it a way around it.
-import { Substitute, Arg, configure } from '../src'
+import { Substitute, SubstituteOf, Arg, configure } from '../src'
 
 // T:TY-6 Assigning a property directly on a substitute: the property's type carries the setup API (`.returns`, ...),
 // and TypeScript uses the same type for reads and writes of a mapped property.
@@ -38,5 +38,22 @@ const events = Substitute.for<Events>()
 // @ts-expect-error resolves to the interface's own declaration
 events.on('data', Arg.any()).returns(events)
 events[configure]().on('data', Arg.any()).returns(events)
+
+// Assigning a function to a callable member in the assertion view: the member's type there also carries the
+// `Arg.all()` call signatures, which a plain function does not have. Check the set through the type itself.
+interface Button { onClick?: (event: string) => void }
+const button = Substitute.for<Button>()
+const handler = (event: string) => { }
+// @ts-expect-error the assertion view's callable member type is not a plain function type
+button.received().onClick = handler
+;(button.received() as Button).onClick = handler
+
+// Generic code: checking a set of a property whose type is the type parameter itself (`current: T`). Depending on the
+// TypeScript version and the constraint, the assertion view does not accept a `T` there; check the set through the
+// type itself (R3TD-1 / T33 covers members with concrete types).
+interface Holder<T> { current: T }
+export function checkCurrent<T>(holder: SubstituteOf<Holder<T>>, value: T) {
+  ;(holder.received() as Holder<T>).current = value
+}
 
 export { found }
