@@ -1,16 +1,47 @@
 'use strict'
-// Deep imports of compiled files under dist/ are not public API, but the "exports" map keeps them working
-// (Node versions with subpath pattern trailer support, i.e. 14.19+ and 16.9+, and versions without "exports" support,
-// i.e. older than 12.17; on 12.17 to 12.22, all of 13.x, 14.0 to 14.18 and 16.0 to 16.8 they fail).
-// Run from a directory whose node_modules contains the extracted package tarball:
+// Deep imports of compiled files under dist/ are not public API, but the "exports" map keeps them working where
+// Node.js can: on versions older than 12.17 (which ignore "exports"), on 14.19 or newer on 14.x and on 16.9 or newer,
+// with or without `.js`. They fail on 12.17 to 12.19, all of 13.x and 14.0 to 14.12; on 12.20 to 12.22, 14.13 to
+// 14.18 and 16.0 to 16.8 only the form without `.js` works. deep-import-support.js holds that table, and this script
+// checks it against the Node.js version it runs on: the forms the table says work must work, the others must fail.
+// Run from a directory whose node_modules contains the extracted package tarball (with deep-import-support.js next
+// to this file):
 //   node deep-imports.js
+// Kept to syntax and APIs that the oldest supported Node version understands (see engines in package.json).
 var assert = require('assert')
 
 var Arg = require('@fluffy-spoon/substitute').Arg
+var support = require('./deep-import-support').deepImportSupport(process.version)
 
-assert.strictEqual(require('@fluffy-spoon/substitute/dist/api/Arg').Arg, Arg, 'deep import without extension')
-assert.strictEqual(require('@fluffy-spoon/substitute/dist/api/Arg.js').Arg, Arg, 'deep import with extension')
-assert.strictEqual(require('@fluffy-spoon/substitute/dist/index').Arg, Arg, 'deep import of the index')
+var load = function (specifier) {
+  try {
+    return { exports: require(specifier) }
+  } catch (error) {
+    return { error: error }
+  }
+}
+
+var check = function (specifier, works, label) {
+  var result = load(specifier)
+  if (works) {
+    assert.ok(!result.error, label + ' works on Node ' + process.version + ': ' + (result.error && result.error.message))
+    assert.strictEqual(result.exports.Arg, Arg, label + ' gives the same module as the package root')
+  } else {
+    assert.ok(result.error, label + ' fails on Node ' + process.version +
+      ' (if it works now, update deep-import-support.js, CONTRIBUTING.md and MIGRATION.md)')
+    assert.ok(/NOT_EXPORTED$|^MODULE_NOT_FOUND$/.test(result.error.code), label + ': ' + result.error.code + ' ' + result.error.message)
+  }
+  return works ? 'works' : 'fails'
+}
+
 assert.strictEqual(require('@fluffy-spoon/substitute/package.json').name, '@fluffy-spoon/substitute', 'package.json')
 
-console.log('deep import smoke test passed on Node ' + process.version)
+if (support === undefined) {
+  console.log('deep import smoke test passed on Node ' + process.version + ' (deep imports not checked on this version)')
+} else {
+  var withoutExtension = check('@fluffy-spoon/substitute/dist/api/Arg', support.withoutExtension, 'deep import without extension')
+  check('@fluffy-spoon/substitute/dist/index', support.withoutExtension, 'deep import of the index without extension')
+  var withExtension = check('@fluffy-spoon/substitute/dist/api/Arg.js', support.withExtension, 'deep import with extension')
+  console.log('deep import smoke test passed on Node ' + process.version +
+    ' (without .js: ' + withoutExtension + ', with .js: ' + withExtension + ')')
+}

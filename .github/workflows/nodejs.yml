@@ -129,6 +129,8 @@ jobs:
         with:
           node-version: ${{ env.MINIMUM_NODE_VERSION }}
       # G:PK-2: engines.node must be a version the package really runs on.
+      # R3TD-5: deep-imports.js checks, on every version below, that the deep imports work or fail as
+      # packaging/smoke/deep-import-support.js (and CONTRIBUTING.md and MIGRATION.md) say.
       - name: CommonJS smoke test on Node ${{ env.MINIMUM_NODE_VERSION }}
         working-directory: ${{ runner.temp }}/consumer
         run: |
@@ -145,6 +147,7 @@ jobs:
           node --version
           node require.js
           node import.mjs
+          node deep-imports.js
       - name: Use Node.js ${{ env.EXPORTS_FALLBACK_NODE_VERSION }}
         uses: actions/setup-node@v5
         with:
@@ -154,6 +157,7 @@ jobs:
         run: |
           node --version
           node require.js
+          node deep-imports.js
       - name: Use Node.js ${{ env.MINIMUM_ESM_NODE_13_VERSION }}
         uses: actions/setup-node@v5
         with:
@@ -164,3 +168,4 @@ jobs:
           node --version
           node require.js
           node import.mjs
+          node deep-imports.js

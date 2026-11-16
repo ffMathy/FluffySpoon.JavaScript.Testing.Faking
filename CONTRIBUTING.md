@@ -63,10 +63,13 @@ The package supports Node.js 10 and newer with `require`. The ES module entry ne
 or 13.7 or newer (13.2 to 13.6 have ES modules but not the `import` condition, so `import` gets the CommonJS entry
 and named imports fail there).
 
-Deep imports of compiled files (`@fluffy-spoon/substitute/dist/...`, with or without `.js`) stay available through
-the `./dist/*` subpaths, but they are not public API. They need subpath patterns with trailers (Node.js 14.19 or
-newer, or 16.9 or newer) or a Node.js version that ignores `exports` (older than 12.17); on 12.17 to 12.22, all
-of 13.x, 14.0 to 14.18 and 16.0 to 16.8 they fail.
+Deep imports of compiled files (`@fluffy-spoon/substitute/dist/...`) stay available through the `./dist/*`
+subpaths, but they are not public API. Both forms, with and without `.js`, work on Node.js versions that ignore
+`exports` (older than 12.17) and on versions with subpath patterns and pattern trailers (14.19 or newer on 14.x,
+16.9 or newer). Deep imports fail on 12.17 to 12.19, all of 13.x and 14.0 to 14.12; on 12.20 to 12.22, 14.13 to
+14.18 and 16.0 to 16.8 (subpath patterns without trailers), only the form without `.js` works. MIGRATION.md says the
+same. `packaging/smoke/deep-import-support.js` holds this table, and `packaging/smoke/deep-imports.js` checks it
+on the Node.js version it runs on.
 
 ## Test
 
@@ -189,8 +192,9 @@ To try a single runner by hand after `npm run install:local`, use `npm run valid
   version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`), on the oldest version with native ES
   modules (`MINIMUM_ESM_NODE_VERSION`, 12.17.0), on 13.0.0 (`EXPORTS_FALLBACK_NODE_VERSION`, which only loads the
   package through the `exports["."]` fallback) and on 13.7.0 (`MINIMUM_ESM_NODE_13_VERSION`, the oldest 13.x with
-  the `import` condition). If a change needs a newer Node.js, raise `engines.node` and `MINIMUM_NODE_VERSION`
-  together; a packaging test checks that they match.
+  the `import` condition). On each of them, `deep-imports.js` also checks that deep imports work or fail as
+  described under [Build](#build). If a change needs a newer Node.js, raise `engines.node` and
+  `MINIMUM_NODE_VERSION` together; a packaging test checks that they match.
 
 `.github/workflows/codeql-analysis.yml` runs CodeQL on pushes and pull requests to `master` and weekly.
 

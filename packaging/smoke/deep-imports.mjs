@@ -1,4 +1,5 @@
-// ES module counterpart of deep-imports.js.
+// ES module counterpart of deep-imports.js. Deep imports with an extension, like the two below, need pattern
+// trailers in "exports": Node.js 14.19 or newer on 14.x, or 16.9 or newer (see deep-import-support.js).
 //   node deep-imports.mjs
 import assert from 'assert'
 import { Arg } from '@fluffy-spoon/substitute'
