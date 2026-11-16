@@ -95,6 +95,15 @@ field.cloneNode().returns(document.createElement('input'))
 field.setCustomValidity('x').returns()
 field.received().addEventListener('change', Arg.any())
 
+// A rest parameter typed as a union of tuples puts both tuples in every overload position of the expansion. The
+// signatures of identical positions must stay identical types, so that their intersection collapses; with one
+// distinct type per position, type-checking this took minutes (and ran out of memory on TypeScript 5.4).
+interface Varargs { log(...args: [string] | [string, number]): boolean }
+const varargs = Substitute.for<Varargs>()
+const asVarargs: Varargs = varargs
+varargs.received().log('a')
+varargs.received().log('a', 1)
+
 // Generic code with a union constraint: members whose signature is the same in every variant are configured through
 // the constraint (T33). (Members whose signatures differ are a documented limitation, see limitations.ts.)
 export function stub<T extends Cat | Dog>(sub: SubstituteOf<T>) {
@@ -103,4 +112,4 @@ export function stub<T extends Cat | Dog>(sub: SubstituteOf<T>) {
   sub.received().speak()
 }
 
-export { said, asPet, asShape }
+export { said, asPet, asShape, asVarargs }
