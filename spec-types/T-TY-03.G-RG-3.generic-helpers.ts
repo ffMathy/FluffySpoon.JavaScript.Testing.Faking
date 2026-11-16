@@ -1,7 +1,8 @@
 // T:TY-3 / G:RG-3 received / didNotReceive / clearReceivedCalls / mimick / configure on SubstituteOf<T> for a generic T.
-// The symbol API is always available. The string forms `sub.received()` / `sub.didNotReceive()` are offered only when
-// TypeScript can tell that T has no conflicting member (D11): for a constrained type parameter it checks the constraint,
-// for an unconstrained one it cannot, so generic helpers use the symbol forms.
+// The symbol API is always available. The string forms `sub.received()` / `sub.didNotReceive()` are offered unless
+// TypeScript can tell that T has a conflicting member (D11): for a constrained type parameter it checks the constraint.
+// For an unconstrained one the conflict cannot be decided, so the string forms are offered, as in 2.0.0-beta.4 (T26,
+// see TD-2.V2-2.T26.generic-code.ts).
 import { Substitute, SubstituteOf, received, didNotReceive, clearReceivedCalls, mimick, configure } from '../src'
 
 export function expectNoCalls<T>(sub: SubstituteOf<T>) {
@@ -52,10 +53,16 @@ export function viaConstraint<T extends Calculator>(sub: SubstituteOf<T>) {
   sub[received](2).add(1, 2)
 }
 
-// An unconstrained T could have a member named `received` (or `returns`, ...), so the string forms are not offered.
-export function stringFormsNeedAKnownType<T>(sub: SubstituteOf<T>) {
-  // @ts-expect-error use sub[received]() in generic code
+// For an unconstrained T the conflict cannot be decided, so the string forms are offered (T26).
+export function stringFormsInGenericCode<T>(sub: SubstituteOf<T>) {
   sub.received()
-  // @ts-expect-error use sub[didNotReceive]() in generic code
   sub.didNotReceive()
+}
+
+// A constraint with a conflicting member decides it: only the symbol forms.
+interface Account { returns(item: string): number }
+export function viaConflictingConstraint<T extends Account>(sub: SubstituteOf<T>) {
+  sub[received]().returns('book')
+  // @ts-expect-error ambiguous: the constraint has a member named `returns`
+  sub.received()
 }

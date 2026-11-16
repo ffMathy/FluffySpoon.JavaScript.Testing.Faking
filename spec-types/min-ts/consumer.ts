@@ -92,6 +92,57 @@ function once<T>(sub: SubstituteOf<T>) {
 }
 once(calculator).add(1, 2)
 
+// TD-2 / T26: setups and string assertions in generic code
+interface Repo<T> { get(id: string): T; find(id: string): T | undefined; count: number }
+function stubRepo<T>(repo: SubstituteOf<Repo<T>>, value: T) {
+  repo.count.returns(1)
+  repo.get(Arg.any()).returns(value)
+  repo.find('a').returns(undefined)
+  repo[configure]().get('b').returns(value)
+  repo.received().get('a')
+  repo.didNotReceive().find('b')
+}
+stubRepo(Substitute.for<Repo<string>>(), 'value')
+function expectNoCalls<T>(sub: SubstituteOf<T>) {
+  return sub.didNotReceive()
+}
+expectNoCalls(calculator).add(1, 2)
+
+// TD-1 / T25: members typed only null / undefined
+interface Ok { data: string; error?: undefined; nothing: null }
+const ok = Substitute.for<Ok>()
+ok.data.returns('x')
+const nothing: null = ok.nothing
+const asOk: Ok = ok
+
+// TD-3 / T27: Arg.all() after leading arguments
+interface Logger {
+  log(message: string, ...details: string[]): void
+  find(id: string, options?: { deep: boolean }): string
+}
+const logger = Substitute.for<Logger>()
+calculator.add(1, Arg.all()).returns(3)
+calculator.received().add(1, Arg.all())
+logger.received().log('saved', Arg.all())
+logger.find('1', Arg.all()).returns('x')
+
+// TD-5 / T28: Arg.any('function') / Arg.any('object') on typed parameters
+interface Bus { subscribe(handler: (value: number) => void): () => void; save(item: { id: string }): void }
+const bus = Substitute.for<Bus>()
+bus.subscribe(Arg.any('function')).returns(() => undefined)
+bus.received().save(Arg.any('object'))
+
+// TD-6 / T29: a matcher created on its own from an annotated predicate
+const negative = Arg.is((x: number) => x < 0)
+calculator.divide(negative, negative).returns(1)
+const notZero = Arg.is.not((x: number) => x === 0)
+calculator.divide(1, notZero).returns(2)
+
+// TD-7 / T30: clearing an optional property, checked in the assertion view
+interface Form { note?: string }
+const form = Substitute.for<Form>()
+form.received().note = undefined
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
@@ -100,4 +151,4 @@ try {
   }
 }
 
-export { asCalculator }
+export { asCalculator, nothing, asOk }
