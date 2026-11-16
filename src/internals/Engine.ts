@@ -259,6 +259,12 @@ const faceApply = (face: Face, thisArg: unknown, args: any[], stackStart: Functi
   const self = { thisArg, explicit: false }
   if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, undefined, self)
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self)
+  // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
+  if (isStringAssertionKey(face.key)) {
+    const assertion = resolveStringAssertion(face, continuedChain(face.adjacentHandOut(), frameAt(stackStart)), stackStart)
+    assertDirectCall(assertion.state, args, assertion.count, stackStart)
+    return undefined
+  }
   return invoke(face.state, SELF, args, stackStart, undefined, face.adjacentHandOut(), self)
 }
 
@@ -680,10 +686,21 @@ const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-      assertCall(state, SELF, args, count, apply)
+      assertDirectCall(state, args, count, apply)
       return undefined
     }
   })
+}
+
+/**
+ * An assertion that a substitute was invoked directly: `fn[received]()(1)`. A member handle (`sub.method`) is never
+ * invoked on its own: invoking it is a call of the member, recorded on the parent, so that is what is checked
+ * (`sub.method[received]()(1)` is `sub[received]().method(1)`, D26).
+ */
+const assertDirectCall = (state: SubstituteState, args: any[], count: ExpectedCount, stackStart: Function): void => {
+  const owner = state.owner
+  if (owner !== undefined && owner.kind === 'get') assertCall(owner.parent, owner.key, args, count, stackStart)
+  else assertCall(state, SELF, args, count, stackStart)
 }
 
 /** `sub.received(n).member`: a property assertion now, or a method assertion if it is invoked. */
@@ -871,6 +888,10 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      if (stringAssertion) {
+        assertDirectCall(state, args, assertionCount(apply), apply)
+        return undefined
+      }
       return nestedSetupTarget(state, key, specification, undefined, apply)(...args)
     }
   })
