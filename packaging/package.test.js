@@ -74,6 +74,72 @@ test('DOCS:ESM CommonJS require, deep imports and package.json still work with t
   t.regex(runNode(state.consumer, ['deep-imports.mjs']), /ESM deep import smoke test passed/)
 })
 
+// F1: tools that bundle or transform the package turn dist/index.js (CommonJS, with __esModule and exports.default)
+// into an ES module in different ways. Each shape below is what one family of tools makes of it for the
+// `import ... from './index.js'` in dist/index.mjs. compatibility-checks/test/bundlers.ts checks the real tools.
+const commonJsViews = [
+  { name: 'Node.js 12.17 to 14.12 (module.exports, no named exports)', defaultExport: 'real', namedExports: false },
+  { name: 'Node.js 14.13+, webpack, esbuild and Rolldown (module.exports and the named exports)', defaultExport: 'real', namedExports: true },
+  { name: 'the __esModule interop of Rollup\'s commonjs plugin, Vite SSR and vitest inlining (exports.default and the named exports)', defaultExport: 'real.default', namedExports: true }
+]
+
+const simulateCommonJsView = (directory, cjsEntry, names, { defaultExport, namedExports }) => {
+  fs.mkdirSync(directory)
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ type: 'module' }))
+  fs.copyFileSync(path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.mjs'), path.join(directory, 'index.mjs'))
+  fs.writeFileSync(path.join(directory, 'index.js'), [
+    "import { createRequire } from 'module'",
+    `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
+    `export default ${defaultExport}`,
+    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = real.${name}`) : []),
+    ''
+  ].join('\n'))
+  fs.writeFileSync(path.join(directory, 'check.mjs'), [
+    "import assert from 'assert'",
+    "import { createRequire } from 'module'",
+    "import Substitute, * as namespace from './index.mjs'",
+    `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
+    "assert.strictEqual(Substitute, real.default, 'the default import is the Substitute class')",
+    "assert.deepStrictEqual(Object.keys(namespace).sort(), Object.keys(real).sort(), 'the same export names')",
+    "for (const name of Object.keys(real)) assert.strictEqual(namespace[name], real[name], name)",
+    "console.log('ok')",
+    ''
+  ].join('\n'))
+}
+
+test('F1 the ES module entry gives the real exports whichever CommonJS interop the importer applies', t => {
+  const cjsEntry = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js')
+  const names = Object.keys(require(cjsEntry))
+  commonJsViews.forEach((view, index) => {
+    const directory = path.join(state.consumer, `interop-${index}`)
+    simulateCommonJsView(directory, cjsEntry, names, view)
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+    t.is(result.status, 0, `${view.name}: ${result.stdout}${result.stderr}`)
+  })
+
+  // A view that has neither shape fails loudly at import time instead of exporting undefined values.
+  const directory = path.join(state.consumer, 'interop-unusable')
+  simulateCommonJsView(directory, cjsEntry, names, { defaultExport: '{}', namedExports: false })
+  const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+  t.not(result.status, 0)
+  t.regex(result.stderr, /could not read the exports of its CommonJS build/)
+})
+
+test('F1 the compatibility checks bundle the packed package and run vitest with the package inlined', t => {
+  const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
+  t.regex(compatibility.scripts.test, /\btest\/bundlers\.ts\b/, 'npm test in compatibility-checks runs test/bundlers.ts')
+  for (const dependency of ['rollup', '@rollup/plugin-commonjs', '@rollup/plugin-node-resolve', 'webpack', 'esbuild', 'vite', 'vitest']) {
+    t.truthy(compatibility.devDependencies[dependency], `compatibility-checks depends on ${dependency}`)
+  }
+  const bundlers = fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'bundlers.ts'), 'utf8')
+  t.regex(bundlers, /commonjs\(\)/, 'a bundle is built with @rollup/plugin-commonjs')
+  t.regex(bundlers, /vitest\.inline\.config\.mts/, 'vitest runs with the inline config')
+  const inlineConfig = fs.readFileSync(path.join(root, 'compatibility-checks', 'vitest.inline.config.mts'), 'utf8')
+  t.regex(inlineConfig, /inline:\s*\['@fluffy-spoon\/substitute'\]/)
+  t.regex(compatibility.scripts['validate:vitest-inline'], /--config vitest\.inline\.config\.mts/)
+  t.regex(fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8'), /name: 'vitest-inline'/)
+})
+
 const typeScriptConsumer = [
   "import Substitute, { Arg, Substitute as Named } from '@fluffy-spoon/substitute'",
   "import { Arg as DeepArg } from '@fluffy-spoon/substitute/dist/api/Arg'",

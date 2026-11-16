@@ -29,7 +29,7 @@ npm ci
 | `src/` | The library source (TypeScript). `src/index.ts` is the public entry point. |
 | `spec/` | The runtime specs, run with [ava](https://github.com/avajs/ava). |
 | `packaging/` | Packaging checks (run as part of `npm test`), the ES module wrapper generator and the smoke tests. |
-| `compatibility-checks/` | A separate npm project that checks the packed package with ava, jest, mocha, node:test and vitest. |
+| `compatibility-checks/` | A separate npm project that checks the packed package with ava, jest, mocha, node:test and vitest, and bundles it with Rollup, webpack, esbuild and Vite. |
 | `dist/` | Build output that gets published (generated, not committed). |
 | `dist-spec/` | Compiled specs used by `npm test` (generated, not committed). |
 
@@ -43,7 +43,12 @@ This compiles `src/` into `dist/` with `tsc` (CommonJS plus `.d.ts` typings) and
 `packaging/build-esm.js`, which generates the native ES module entry point next to it:
 
 - `dist/index.mjs` re-exports every export of `dist/index.js`, plus the default export. It wraps the CommonJS
-  build instead of being a second copy, so CommonJS and ESM consumers share one module instance.
+  build instead of being a second copy, so CommonJS and ESM consumers share one module instance. Tools disagree
+  about what a default import of a CommonJS module that sets `__esModule` is: Node.js, webpack and esbuild give
+  `module.exports`, while Rollup's commonjs plugin, Vite SSR and vitest with inlined dependencies give
+  `exports.default`. The wrapper therefore imports both the default and the namespace of `dist/index.js`, uses
+  whichever one holds the complete exports, and throws at import time if neither does. A packaging test simulates
+  each of these interop shapes, and the compatibility checks bundle the package with the real tools.
 - `dist/index.d.mts` holds the matching typings for TypeScript's `node16`, `nodenext` and `bundler` resolution.
 
 The `exports` map in `package.json` sends `import` to the ES module entry and everything else (`require`, older
@@ -87,9 +92,18 @@ Type-level tests check the public typings with the TypeScript compiler. CI runs 
 
 ### Compatibility checks
 
-`compatibility-checks/` is a separate npm project with its own dependencies. It verifies that every supported
-test runner (ava, jest, mocha, node:test and vitest) reports a failing Substitute assertion, including one that
-is thrown after the test function has returned. It runs against the packed package, not against `src/`:
+`compatibility-checks/` is a separate npm project with its own dependencies. It runs against the packed package,
+not against `src/`, and checks two things:
+
+- `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
+  inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
+  after the test function has returned.
+- `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
+  (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
+  The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
+  `test-runners/vitest-inline/exports.test.ts`, which checks the same.
+
+Run them with:
 
 ```sh
 cd compatibility-checks
@@ -103,7 +117,7 @@ nor `package-lock.json` of the compatibility checks changes. From the repository
 does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
-`mocha`, `nodejs` or `vitest`). Each of them is expected to fail with exactly one failing test.
+`mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
 
 ## Continuous integration
 
