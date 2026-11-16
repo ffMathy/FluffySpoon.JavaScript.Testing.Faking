@@ -11,10 +11,21 @@ const nextSequence = (): number => ++sequence
 
 type StackHolder = { stack?: string }
 
+// Only the call site (the first frame) is ever shown, so only one frame is collected: collecting the
+// whole stack for every call would dominate the cost of a call, especially with a raised stackTraceLimit.
 const captureStack = (stackStart: Function): StackHolder => {
   const holder: StackHolder = {}
-  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(holder, stackStart)
-  else holder.stack = new Error().stack
+  if (typeof Error.captureStackTrace !== 'function') {
+    holder.stack = new Error().stack
+    return holder
+  }
+  const stackTraceLimit = Error.stackTraceLimit
+  if (!(stackTraceLimit >= 0 && stackTraceLimit <= 1)) Error.stackTraceLimit = 1
+  try {
+    Error.captureStackTrace(holder, stackStart)
+  } finally {
+    Error.stackTraceLimit = stackTraceLimit
+  }
   return holder
 }
 

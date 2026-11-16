@@ -32,7 +32,18 @@ type Face =
 const TAKE_PENDING_READ = Symbol('take pending read')
 type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 
-const newTarget = (): any => function () { }
+/**
+ * The target of every proxy. util.inspect inspects the target of a proxy (it does not trigger traps),
+ * so the target carries the printer as its inspect.custom hook.
+ */
+const newTarget = (print: Printer): any => {
+  const target = function () { }
+  Object.defineProperty(target, inspect.custom, {
+    value: (_depth: number, options?: InspectOptions) => print(options),
+    configurable: true
+  })
+  return target
+}
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -105,7 +116,7 @@ const entryProxy = (entry: AutoEntry): any => {
 const faceState = (face: Face): SubstituteState => face.kind === 'root' ? face.state : face.entry.state
 const faceChainHead = (face: Face): CallRecord | undefined => face.kind === 'root' ? undefined : face.entry.chainHead()
 
-const createFaceProxy = (face: Face): any => new Proxy(newTarget(), {
+const createFaceProxy = (face: Face): any => new Proxy(newTarget(options => printFace(face, colorsOf(options))), {
   get: function get(_target: unknown, property: PropertyKey) {
     return faceGet(face, property, get)
   },
@@ -363,7 +374,7 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     return value
   }
   const print: Printer = () => `property<${memberLabel(key)}>: `
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
@@ -392,7 +403,7 @@ const describeCount = (count: ExpectedCount) => count === undefined ? 'received(
 
 const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any => {
   const print: Printer = () => `${state.path}.${describeCount(count)}`
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       return assertionMember(state, property, count, get)
@@ -429,7 +440,7 @@ const assertionMember = (state: SubstituteState, key: PropertyKey, count: Expect
     )
   }
   const print: Printer = () => `${state.path}.${describeCount(count)}.${memberLabel(key)}`
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isFunctionHelperKey(property)) return functionHelper(property, assertInvocation)
@@ -453,7 +464,7 @@ const configureSetError = (start: Function) => SubstituteException.generic(
 
 const createConfigureProxy = (state: SubstituteState): any => {
   const print: Printer = () => `${state.path}[configure]()`
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       return configureMember(state, property)
@@ -471,7 +482,7 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
   const context = contextMethodOf(key)
   if (context !== undefined) return contextFunction(context, () => state, undefined)
   const print: Printer = () => `${state.memberPath(key)} (configure)`
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
@@ -503,7 +514,7 @@ const nestedEntry = (state: SubstituteState, key: PropertyKey, specification: Re
 /** A call in a setup: `.returns(...)` configures it, anything else configures the auto-substitute it returns. */
 const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments): any => {
   const print: Printer = options => withPrintGuard(() => `method<${memberLabel(key)}>: ${formatArguments(specification.value, colorsOf(options))} (configure)`)
-  return new Proxy(newTarget(), {
+  return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
