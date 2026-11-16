@@ -35,11 +35,12 @@ type StringSubstituteMethods<T> = {
 // mimicks, `sub.received` / `sub.didNotReceive` are not offered and the symbol forms `sub[received]()` /
 // `sub[didNotReceive]()` must be used (D11). This rules out the ambiguous `sub.received().returns(...)`, which the
 // runtime treats as a setup of a member called `received`.
-// Distributive over `T`, so that for a type parameter with a constraint (`T extends Calculator`) TypeScript resolves the
-// check against the constraint. For an unconstrained type parameter the check cannot be resolved, so only the symbol
-// forms are offered.
-type StringSubstituteMethodsUnlessConflicting<T> = T extends unknown ?
-  (HasAnyMember<T, LibraryMemberName> extends true ? {} : StringSubstituteMethods<T>) :
+// The check is distributive over `TCheck` (`T & {}`), so that for a type parameter TypeScript resolves it through the
+// parameter's constraint (`T extends Calculator` is checked against Calculator). An unconstrained type parameter gets
+// the constraint `{}` from the `& {}`: nothing conflicts, so generic helpers keep the string forms, as in 2.0.0-beta.4
+// (V2-2, TD-2, T26). The conflict rule applies where it can be decided: for concrete types and constraints.
+type StringSubstituteMethodsUnlessConflicting<TCheck, T> = TCheck extends unknown ?
+  (HasAnyMember<TCheck, LibraryMemberName> extends true ? {} : StringSubstituteMethods<T>) :
   never
 
-export type ObjectSubstituteMethods<T> = SymbolSubstituteMethods<T> & StringSubstituteMethodsUnlessConflicting<T>
+export type ObjectSubstituteMethods<T> = SymbolSubstituteMethods<T> & StringSubstituteMethodsUnlessConflicting<T & {}, T>
