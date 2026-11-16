@@ -70,9 +70,29 @@ type PositionalSignature<TOverload, TView extends SubstituteView> = TOverload ex
   (...args: TOverload['arguments']) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
   unknown
 
-type AllArgumentsSignature<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
-  (allArguments: AllArguments<TOverload['arguments']>) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
+// The `Arg.all()` signatures of an overload:
+// - a single `Arg.all()` argument: `add(Arg.all())`;
+// - `Arg.all()` after leading arguments (D14, TD-3): `add(1, Arg.all())`, `log('x', Arg.all())`. For every position `n`
+//   from 1 to 6 at which the overload has a parameter (required, optional or rest), a signature takes the first `n`
+//   parameters of the overload followed by `Arg.all()`. They are written out position by position because
+//   TypeScript 3.6 has no variadic tuple types, so their parameters are named `arg0`, `arg1`, ...
+//   The overload has a parameter at position `n` when one of its possible argument counts (`A['length']`: a number
+//   literal, a union of them with optional parameters, or `number` with a rest parameter) is greater than `n`. The
+//   nesting stops at the first position the overload does not have. (`A extends [any?]` would be shorter, but
+//   TypeScript 4.0 and 4.1 consider `[string, number?]` assignable to `[any?]`.)
+// (The return types are written inside each signature, where TypeScript only computes them when the signature is used.)
+type AllArgumentsSignatures<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
+  ((allArguments: AllArguments<TOverload['arguments']>) => CallResult<TView, TOverload['arguments'], TOverload['returnType']>) &
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView> :
   unknown
+
+type TrailingAllArgumentsSignatures<A extends any[], R, V extends SubstituteView> = [Exclude<A['length'], 0 | 1>] extends [never] ? unknown :
+  ((arg0: A[0], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5 | 6>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], arg5: A[5], allArguments: AllArguments<A>) => CallResult<V, A, R>))))))
 
 // All positional signatures come before the `Arg.all()` signatures, so a call with a single matcher
 // (`Arg.any()`, `Arg.is(...)`) resolves against the real parameter lists first (T:TY-10).
@@ -81,14 +101,15 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView> 
   PositionalSignature<TOverloads[2], TView> & PositionalSignature<TOverloads[3], TView> &
   PositionalSignature<TOverloads[4], TView> & PositionalSignature<TOverloads[5], TView> &
   PositionalSignature<TOverloads[6], TView> & PositionalSignature<TOverloads[7], TView> &
-  AllArgumentsSignature<TOverloads[0], TView> & AllArgumentsSignature<TOverloads[1], TView> &
-  AllArgumentsSignature<TOverloads[2], TView> & AllArgumentsSignature<TOverloads[3], TView> &
-  AllArgumentsSignature<TOverloads[4], TView> & AllArgumentsSignature<TOverloads[5], TView> &
-  AllArgumentsSignature<TOverloads[6], TView> & AllArgumentsSignature<TOverloads[7], TView>
+  AllArgumentsSignatures<TOverloads[0], TView> & AllArgumentsSignatures<TOverloads[1], TView> &
+  AllArgumentsSignatures<TOverloads[2], TView> & AllArgumentsSignatures<TOverloads[3], TView> &
+  AllArgumentsSignatures<TOverloads[4], TView> & AllArgumentsSignatures<TOverloads[5], TView> &
+  AllArgumentsSignatures<TOverloads[6], TView> & AllArgumentsSignatures<TOverloads[7], TView>
 
 /**
- * The call signatures a member of type `TFunction` has on a substitute, one pair per overload: the overload's own
- * parameter list, and a single `Arg.all()` argument. `unknown` when `TFunction` is not callable.
+ * The call signatures a member of type `TFunction` has on a substitute: per overload, the overload's own parameter list,
+ * a single `Arg.all()` argument, and the leading parameters followed by `Arg.all()`. `unknown` when `TFunction` is not
+ * callable.
  */
 export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substitute'> =
   IsNever<TFunction> extends true ? unknown :
