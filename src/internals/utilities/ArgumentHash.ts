@@ -170,7 +170,9 @@ const errorParts = ((): { name: boolean, message: boolean, cause: boolean, error
     return error
   }
   const withCause = (...cause: unknown[]) => new (Error as any)('x', ...cause.map(value => ({ cause: value }))) as Error
-  const Aggregate = (globalThis as any).AggregateError as (new (errors: unknown[], message: string) => Error) | undefined
+  // Node.js 10 has neither globalThis nor AggregateError
+  const globalObject: any = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : undefined
+  const Aggregate = globalObject?.AggregateError as (new (errors: unknown[], message: string) => Error) | undefined
   const withoutErrors = () => {
     const error = new Aggregate!([1], 'x')
     delete (error as any).errors
