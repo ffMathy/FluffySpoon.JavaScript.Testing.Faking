@@ -50,9 +50,9 @@ type IndexKindOf<T> = T extends unknown ? (string extends keyof T ? 'indexed' : 
 /**
  * `any` for a concrete type, `'generic'` for a type parameter (and other types whose keys depend on one). The keys of
  * a concrete type are property keys, so the check is decided. `keyof T` of a type parameter is generic, so TypeScript
- * leaves the check undecided, on every version: the checked type is deliberately not wrapped in a tuple, which
- * TypeScript 3.6 to 4.x would decide eagerly. An interface instantiated with a type parameter (`Box<T>`) has concrete
- * keys and counts as concrete.
+ * leaves the check undecided, on every version: the checked type is deliberately not wrapped in a tuple, as
+ * TypeScript 3.9 and older decide `[T] extends [...]` eagerly. An interface instantiated with a type parameter
+ * (`Box<T>`) has concrete keys and counts as concrete.
  */
 export type GenericKind<T> = keyof T extends PropertyKey ? any : 'generic'
 
