@@ -46,6 +46,20 @@ const onlyReadHint = (state: SubstituteState, key: PropertyKey, reads: number): 
     `Call sub[clearReceivedCalls]() after the arrange step to reset the reads.`
 }
 
+/** `sub`, `sub.logger`, `sub.getCalc()`, ...: the substitute as it would be written in a test. */
+const asExpression = (state: SubstituteState): string => state.path.replace(/^@Substitute/, 'sub')
+
+const memberAccess = (key: PropertyKey): string =>
+  typeof key === 'string' && /^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${typeof key === 'symbol' ? keyToString(key) : inspect(key)}]`
+
+/**
+ * The amended D9 case: a property-style assertion on a member that has only ever been invoked, never read as a
+ * property, and the assertion was not invoked either. A method assertion was most likely intended.
+ */
+const onlyInvokedExplanation = (state: SubstituteState, key: PropertyKey, calls: number, count: number): string =>
+  `${keyToString(key)} was never read as a property; it was called ${times(calls)} as a method. ` +
+  `To assert calls, invoke it: ${asExpression(state)}.received(${count})${memberAccess(key)}(...)`
+
 /** Method assertion: counts invocations whose arguments match. Property reads never count. */
 export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[], count: ExpectedCount, stackStart?: Function): void => {
   const specification = RecordedArguments.forSpecification(args)
@@ -128,6 +142,7 @@ export const settle = (deferred: DeferredAssertion | undefined): void => {
  *   been invoked (never read as a property), so the access is most likely the start of a method assertion
  *   whose message needs the arguments. The failure is scheduled on process.nextTick and cancelled as soon
  *   as the member is invoked; only a property-style assertion that is never invoked reports it there.
+ *   For a member that was only invoked, the report says so and shows the method assertion to write instead.
  */
 export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, count: ExpectedCount, stackStart?: Function): DeferredAssertion | undefined => {
   const records = state.recordsFor(key).filter(record => record.kind !== 'set')
@@ -149,6 +164,7 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
     key,
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
+    explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
     listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' })),
     hints: reads === 0 ? undefined
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]

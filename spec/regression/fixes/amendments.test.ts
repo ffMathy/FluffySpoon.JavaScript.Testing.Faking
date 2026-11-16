@@ -1,4 +1,5 @@
 import test from 'ava'
+import * as fakeTimers from '@sinonjs/fake-timers'
 import { EventEmitter } from 'events'
 import { types } from 'util'
 
@@ -249,4 +250,53 @@ test('hint: didNotReceive() on a member that was only read points to clearReceiv
   t.true(called.includes('Expected to receive 0 method calls matching onClick(42), but received 1.'))
   t.false(called.includes('never called'))
   t.notThrows(() => handler.didNotReceive().onClick(43))
+})
+
+/** The message of a failure that is only reported on process.nextTick (D9); asserts that nothing is thrown before. */
+const deferredMessageOf = (t: any, assertion: () => unknown): string => {
+  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  try {
+    t.notThrows(assertion, 'nothing is thrown synchronously')
+    const error = t.throws(() => clock.tick(1), { instanceOf: SubstituteException }) as SubstituteException
+    return plain(error.message)
+  } finally {
+    clock.uninstall()
+  }
+}
+
+test('D9 (amended) the deferred report on a member that was only invoked says it was called as a method', t => {
+  const calculator = Substitute.for<any>()
+  calculator.m(1)
+  const message = deferredMessageOf(t, () => calculator.received(2).m)
+  t.is(message.split('\n')[1],
+    'Expected to receive 2 property reads matching m, but received none. ' +
+    'm was never read as a property; it was called 1 time as a method. To assert calls, invoke it: sub.received(2).m(...)')
+  t.true(message.includes('\n› ✘ @Substitute.m(1)\n'))
+  // it does not report property reads that never happened
+  t.false(/received \d+ property read/.test(message))
+  t.false(message.includes('reads and'))
+
+  // more calls than expected, nested substitutes, members that are not identifiers
+  const app = Substitute.for<any>()
+  app.logger.info('a')
+  app.logger.info('b')
+  app.logger.info('c')
+  t.true(deferredMessageOf(t, () => app.logger.received(2).info)
+    .includes('info was never read as a property; it was called 3 times as a method. To assert calls, invoke it: sub.logger.received(2).info(...)'))
+  app.getRepository('users')['find-all']()
+  t.true(deferredMessageOf(t, () => app.getRepository('users').received(4)['find-all'])
+    .includes("To assert calls, invoke it: sub.getRepository('users').received(4)['find-all'](...)"))
+
+  // invoking the member right away cancels the report and gives the method assertion's message
+  const error = t.throws(() => calculator.received(2).m(1), { instanceOf: SubstituteException })
+  t.regex(plain(error.message), /Expected to receive 2 method calls matching m\(1\), but received 1\./)
+
+  // a member that was also read keeps the property wording, without the explanation
+  const component = Substitute.for<any>()
+  void component.onChange
+  void component.onChange
+  component.onChange()
+  const ambiguous = deferredMessageOf(t, () => component.received(1).onChange)
+  t.true(ambiguous.includes('Expected to receive 1 property read matching onChange, but received 2.\n'))
+  t.false(ambiguous.includes('never read as a property'))
 })
