@@ -29,6 +29,19 @@ export const formatValue = (value: unknown, colors: boolean, options?: InspectOp
 export const formatArguments = (args: readonly unknown[] | undefined, colors: boolean, options?: InspectOptions): string =>
   args === undefined ? '' : `(${args.map(arg => formatValue(arg, colors, options)).join(', ')})`
 
+/**
+ * D26: for the direct-call reading of an invocation through call/apply, how it was written (` via .call(t, 1)`).
+ * Typed structurally, so that this module does not depend on CallRecord.
+ */
+export const describeOtherReading = (
+  record: { directReading?: boolean, twin?: { key: PropertyKey, args?: readonly unknown[] } },
+  colors: boolean
+): string => {
+  const twin = record.twin
+  if (record.directReading !== true || twin === undefined) return ''
+  return ` via .${String(twin.key)}${formatArguments(twin.args, colors)}`
+}
+
 /** The first "at ..." line of a stack trace, if there is one (there is none with Error.stackTraceLimit = 0). */
 export const firstStackFrame = (stack: string | undefined): string | undefined => {
   if (typeof stack !== 'string') return undefined

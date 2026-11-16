@@ -1,7 +1,7 @@
 import { inspect } from 'util'
 
 import { EXCEPTION, SELF, SubstituteExceptionType, keyToString } from './Constants'
-import { colorsEnabled, firstStackFrame, formatArguments, formatValue, plural, TextBuilder, TextPart, withPrintGuard } from './utilities'
+import { colorsEnabled, describeOtherReading, firstStackFrame, formatArguments, formatValue, plural, TextBuilder, TextPart, withPrintGuard } from './utilities'
 import type { CallRecord } from './CallRecord'
 import type { RecordedArguments } from './RecordedArguments'
 
@@ -63,7 +63,7 @@ const describeExpectedCall = (mismatch: CallCountMismatch, colors: boolean): str
 const describeRecord = (record: CallRecord, colors: boolean): string => {
   switch (record.kind) {
     case 'get': return ''
-    case 'call': return formatArguments(record.args, colors)
+    case 'call': return formatArguments(record.args, colors) + describeOtherReading(record, colors)
     case 'set': return ` = ${formatValue(record.args?.[0], colors)}`
   }
 }

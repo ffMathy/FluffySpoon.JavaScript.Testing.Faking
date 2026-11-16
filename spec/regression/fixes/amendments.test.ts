@@ -1,5 +1,5 @@
 import test from 'ava'
-import * as fakeTimers from '@sinonjs/fake-timers'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 import { EventEmitter } from 'events'
 import { inspect, types } from 'util'
 
@@ -215,16 +215,20 @@ test('hint: a failed method assertion says when the method was read without bein
   t.true(messageOf(() => app.logger.received(2).flush()).includes(hint('@Substitute.logger.flush', '1 time')))
   t.true(messageOf(() => app.logger.received(1).flush(1)).includes(hint('@Substitute.logger.flush', '1 time')))
 
-  // no hint when there were no reads, when there were too many calls, or for a member that is only a property
+  // no hint when there were no reads, or when there were too many calls
   const calculator = Substitute.for<any>()
   calculator.add(1)
   t.false(messageOf(() => calculator.received(2).add(1)).includes('without being called'))
   t.false(messageOf(() => app.logger.didNotReceive().flush()).includes('without being called'))
+  // D36 (round 3): a member that was only read, with a count above the reads, may be a method (the failure is
+  // decided at the read), so it gets the hint too; with fewer expected reads it is a property failure without it
   const settings = Substitute.for<any>()
   void settings.flag
   const property = messageOf(() => settings.received(2).flag)
-  t.false(property.includes('without being called'))
+  t.true(property.includes(hint('@Substitute.flag', '1 time')))
   t.false(property.includes('never called'))
+  void settings.flag
+  t.false(messageOf(() => settings.received(1).flag).includes('without being called'))
 })
 
 test('hint: didNotReceive() on a member that was only read points to clearReceivedCalls (A:RT-3 residual)', t => {
@@ -254,7 +258,7 @@ test('hint: didNotReceive() on a member that was only read points to clearReceiv
 
 /** The message of a failure that is only reported on process.nextTick (D9); asserts that nothing is thrown before. */
 const deferredMessageOf = (t: any, assertion: () => unknown): string => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     t.notThrows(assertion, 'nothing is thrown synchronously')
     const error = t.throws(() => clock.tick(1), { instanceOf: SubstituteException }) as SubstituteException
@@ -351,14 +355,15 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
   t.true(types.isProxy(values.f(() => 1)))
   t.true(types.isProxy(values.f(1, undefined)))
 
-  // literal arguments are compared as they are when the call is made (D15), also after a mutation
+  // amended D15 (round 3): mutating an argument object after the setup is not supported, except that the same
+  // object still matches; a fresh object equal to the mutated one no longer does, nor one equal to the original
   const repository = Substitute.for<any>()
   const user = { name: 'a', tags: ['x'] }
   repository.save(user).returns('saved')
   user.name = 'b'
   user.tags.push('y')
   t.is(repository.save(user), 'saved')
-  t.is(repository.save({ name: 'b', tags: ['x', 'y'] }), 'saved')
+  t.true(types.isProxy(repository.save({ name: 'b', tags: ['x', 'y'] })))
   t.true(types.isProxy(repository.save({ name: 'a', tags: ['x'] })))
   // ... and the most recent of several matching literal substitutions wins
   const copy = { name: 'b', tags: ['x', 'y'] }

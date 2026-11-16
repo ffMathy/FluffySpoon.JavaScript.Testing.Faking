@@ -1,3 +1,5 @@
+import { CallSite, Frame, StackHolder, captureStack } from './CallSite'
+
 export type RecordKind = 'get' | 'set' | 'call'
 
 /**
@@ -9,26 +11,6 @@ let sequence = 0
 export const currentSequence = (): number => sequence
 const nextSequence = (): number => ++sequence
 
-type StackHolder = { stack?: string }
-
-// Only the call site (the first frame) is ever shown, so only one frame is collected: collecting the
-// whole stack for every call would dominate the cost of a call, especially with a raised stackTraceLimit.
-const captureStack = (stackStart: Function): StackHolder => {
-  const holder: StackHolder = {}
-  if (typeof Error.captureStackTrace !== 'function') {
-    holder.stack = new Error().stack
-    return holder
-  }
-  const stackTraceLimit = Error.stackTraceLimit
-  if (!(stackTraceLimit >= 0 && stackTraceLimit <= 1)) Error.stackTraceLimit = 1
-  try {
-    Error.captureStackTrace(holder, stackStart)
-  } finally {
-    Error.stackTraceLimit = stackTraceLimit
-  }
-  return holder
-}
-
 /**
  * One received interaction with a substitute: a property read, a property assignment or an invocation.
  * A property read whose result is then invoked is converted into the invocation (reading a method in
@@ -37,7 +19,17 @@ const captureStack = (stackStart: Function): StackHolder => {
 export class CallRecord {
   public seq: number
   public retracted = false
-  private _stackHolder: StackHolder
+  /** The captured stack, wrapped in a CallSite (D30: only when it is needed). */
+  private _site: StackHolder | CallSite
+  /**
+   * D26: an invocation through `x.call(...)` / `x.apply(...)` is recorded once, with two readings: a call of x's
+   * member `call` / `apply` with the raw arguments, and a direct call of x. Each reading is a record of its own
+   * substitute and member, so that assertions match either one, and each one points to the other. Retracting one
+   * retracts both. (Left undeclared on ordinary records, which then do not carry the fields.)
+   */
+  public twin?: CallRecord
+  /** True on the direct-call reading of such an invocation. */
+  public directReading?: boolean
 
   constructor(
     public kind: RecordKind,
@@ -45,18 +37,32 @@ export class CallRecord {
     public args: any[] | undefined,
     stackStart: Function,
     /** The record of the previous step when this one continues an expression chain (`a.b().c`). */
-    public readonly chainPrevious?: CallRecord
+    public chainPrevious?: CallRecord
   ) {
     this.seq = nextSequence()
-    this._stackHolder = captureStack(stackStart)
+    this._site = captureStack(stackStart)
   }
 
+  private get site(): CallSite {
+    const site = this._site
+    if (site instanceof CallSite) return site
+    const wrapped = new CallSite(site)
+    this._site = wrapped
+    return wrapped
+  }
+
+  /** The call site as a stack trace text, for messages. */
   public get stack(): string | undefined {
     try {
-      return this._stackHolder.stack
+      return this.site.stack
     } catch {
       return undefined
     }
+  }
+
+  /** The first frame outside the library (D25), or null when there is none. */
+  public get frame(): Frame | null {
+    return this.site.frame
   }
 
   /**
@@ -67,7 +73,7 @@ export class CallRecord {
     const directlyInvoked = this.seq === currentSequence()
     this.kind = 'call'
     this.args = args
-    if (!directlyInvoked) this._stackHolder = captureStack(stackStart)
+    if (!directlyInvoked) this._site = captureStack(stackStart)
     this.seq = nextSequence()
   }
 }
@@ -77,9 +83,20 @@ export class CallRecord {
  * expression turned out to be a setup or an assertion rather than a real use.
  */
 export const retract = (record: CallRecord | undefined): void => {
-  let current = record
-  while (current !== undefined && !current.retracted) {
-    current.retracted = true
-    current = current.chainPrevious
+  const pending: CallRecord[] = record === undefined ? [] : [record]
+  while (pending.length > 0) {
+    let current: CallRecord | undefined = pending.pop()
+    while (current !== undefined && !current.retracted) {
+      current.retracted = true
+      if (current.twin !== undefined && !current.twin.retracted) pending.push(current.twin)
+      current = current.chainPrevious
+    }
   }
+}
+
+/** D26: makes two records the member reading and the direct-call reading of one invocation. */
+export const pairReadings = (memberReading: CallRecord, directReading: CallRecord): void => {
+  memberReading.twin = directReading
+  directReading.twin = memberReading
+  directReading.directReading = true
 }

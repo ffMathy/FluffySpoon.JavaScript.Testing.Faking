@@ -115,11 +115,31 @@ export type DeferredAssertion = {
   settled: boolean
 }
 
-const schedule = (callback: () => void) => {
-  // Looked up on every call so that fake timers (e.g. @sinonjs/fake-timers) can intercept it.
-  if (typeof process !== 'undefined' && typeof process.nextTick === 'function') process.nextTick(callback)
-  else setTimeout(callback, 0)
+type Schedule = (callback: () => void) => void
+
+/**
+ * D34: the scheduler of deferred reports is captured when the library is loaded, so that fake timers installed
+ * later (jest.useFakeTimers(), @sinonjs/fake-timers faking nextTick) cannot swallow a report. Fake timers that are
+ * installed before the library is loaded can still delay it.
+ */
+const captureSchedule = (): Schedule => {
+  if (typeof process !== 'undefined' && process !== null && typeof process.nextTick === 'function') {
+    const nextTick = process.nextTick
+    return callback => { nextTick.call(process, callback) }
+  }
+  if (typeof setImmediate === 'function') {
+    const immediate = setImmediate
+    return callback => { immediate(callback) }
+  }
+  const timeout = setTimeout
+  return callback => { timeout(callback, 0) }
 }
+
+/**
+ * Where deferred reports are scheduled. Not part of the public API: the library's own tests replace `schedule`
+ * to run the reports on demand.
+ */
+export const deferredReports: { schedule: Schedule } = { schedule: captureSchedule() }
 
 /** Stops a deferred property assertion from being thrown (the access turned out to be a method assertion). */
 export const settle = (deferred: DeferredAssertion | undefined): void => {
@@ -143,6 +163,9 @@ export const settle = (deferred: DeferredAssertion | undefined): void => {
  *   whose message needs the arguments. The failure is scheduled on process.nextTick and cancelled as soon
  *   as the member is invoked; only a property-style assertion that is never invoked reports it there.
  *   For a member that was only invoked, the report says so and shows the method assertion to write instead.
+ * - D33: a property-style `didNotReceive().m` / `received(0).m` on a member that was only invoked holds as a
+ *   property assertion, but is most likely a method assertion whose parentheses were forgotten. It gets the same
+ *   cancellable deferred report.
  */
 export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, count: ExpectedCount, stackStart?: Function): DeferredAssertion | undefined => {
   const records = state.recordsFor(key).filter(record => record.kind !== 'set')
@@ -152,30 +175,50 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
     if (record.kind === 'get') reads++
     else calls++
   }
-  if (countMatches(count, reads)) return undefined
+  if (countMatches(count, reads)) {
+    if (count === 0 && reads === 0 && calls > 0) return defer(stackStart, () => SubstituteException.forCallCountMismatch({
+      substitutePath: state.path,
+      key,
+      expected: { count, kind: 'unknown' },
+      receivedText: `${calls} ${plural('method call', calls)}`,
+      explanation: `${keyToString(key)} was called ${times(calls)} as a method; ` +
+        `to assert calls, invoke it: ${asExpression(state)}.didNotReceive()${memberAccess(key)}(...)`,
+      listed: records.map((record: CallRecord) => ({ record, matches: false }))
+    }))
+    return undefined
+  }
   if (count === undefined && calls > 0) return undefined
 
   const deferrable = calls > 0 && count !== undefined && (count <= calls || reads === 0)
+  // D36: a member that was only read, with a count above the reads, fails as a property assertion and as a method
+  // assertion (no calls at all), and it is not known yet which one this is.
+  const onlyReadTooFew = calls === 0 && reads > 0 && count !== undefined && count > reads
   // A deferred failure is only thrown when the member was not invoked, so it is a property assertion.
   // An immediate failure fails for both readings; the kind is only named when the records show it.
-  const kind: ExpectedKind = deferrable || (calls === 0 && reads > 0) ? 'property' : 'unknown'
+  const kind: ExpectedKind = deferrable || (calls === 0 && reads > 0 && !onlyReadTooFew) ? 'property' : 'unknown'
   const createError = (start?: Function) => SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     key,
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
     explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
-    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' })),
+    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && !onlyReadTooFew })),
     hints: reads === 0 ? undefined
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]
-        // invoked as well, so most likely a method, with fewer calls than expected
-        : calls > 0 && count !== undefined && calls < count ? [readWithoutCallHint(state, key, reads)]
+        // read but never invoked, or invoked as well: most likely a method, with fewer calls than expected
+        : onlyReadTooFew || (calls > 0 && count !== undefined && calls < count) ? [readWithoutCallHint(state, key, reads)]
           : undefined
   }, start)
 
   if (!deferrable) throw createError(stackStart)
+  return defer(stackStart, createError)
+}
 
-  // The message is only built if the failure is really reported (usually the member is invoked right away).
+/**
+ * Schedules a failure that is only reported if the assertion is not invoked (see assertPropertyRead).
+ * The message is only built if the failure is really reported (usually the member is invoked right away).
+ */
+const defer = (stackStart: Function | undefined, createError: () => SubstituteException): DeferredAssertion => {
   const site: { stack?: string } = {}
   if (typeof Error.captureStackTrace === 'function' && stackStart !== undefined) Error.captureStackTrace(site, stackStart)
   const deferred: DeferredAssertion = {
@@ -187,7 +230,7 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
       return error
     }
   }
-  schedule(() => {
+  deferredReports.schedule(() => {
     if (deferred.settled) return
     deferred.settled = true
     throw deferred.error()
@@ -195,10 +238,10 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   return deferred
 }
 
+/** What was received, for a failure that does not know yet whether it is about reads or calls. */
 const describeReceived = (reads: number, calls: number): string => {
   if (reads === 0 && calls === 0) return 'none'
-  if (calls === 0) return reads.toString()
-  const readsText = `${reads} ${reads === 1 ? 'property read' : 'property reads'}`
-  const callsText = `${calls} ${calls === 1 ? 'method call' : 'method calls'}`
-  return `${readsText} and ${callsText}`
+  const readsText = `${reads} ${plural('property read', reads)}`
+  if (calls === 0) return `${readsText} and no method calls`
+  return `${readsText} and ${calls} ${plural('method call', calls)}`
 }

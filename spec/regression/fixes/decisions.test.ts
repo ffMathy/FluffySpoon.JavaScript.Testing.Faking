@@ -1,5 +1,5 @@
 import test, { ExecutionContext, ThrowsExpectation } from 'ava'
-import * as fakeTimers from '@sinonjs/fake-timers'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 import { inspect, types } from 'util'
 
 import { Substitute, Arg, received, didNotReceive, clearReceivedCalls, mimick, configure, returns } from '../../../src'
@@ -8,7 +8,7 @@ import { SubstituteException } from '../../../src/internals/SubstituteException'
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
 const throwsUncaughtException = (callback: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation) => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     callback()
     t.throws(() => clock.tick(1), expectation)
@@ -18,7 +18,7 @@ const throwsUncaughtException = (callback: () => unknown, t: ExecutionContext, e
 }
 
 const doesNotThrowLater = (callback: () => unknown, t: ExecutionContext) => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     callback()
     t.notThrows(() => clock.tick(1))
@@ -292,7 +292,8 @@ test('D18 assertion messages', t => {
   t.regex(plain(setError.message), /Expected to receive 2 property assignments matching isEnabled = true, but received 1\./)
   t.regex(plain(setError.message), /› ✔ @Substitute\.isEnabled = true/)
   const readError = t.throws(() => substitute.received(2).mode, { instanceOf: SubstituteException })
-  t.regex(plain(readError.message), /Expected to receive 2 property reads matching mode, but received 1\./)
+  // D36 (round 3): mode was only read, with a count above the reads, so the failure is kind-neutral
+  t.regex(plain(readError.message), /Expected to receive 2 property reads or method calls matching mode, but received 1 property read and no method calls\./)
   t.false(plain(readError.message).includes('property calls'))
 
   substitute(1, 2)
