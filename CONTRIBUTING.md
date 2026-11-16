@@ -82,17 +82,21 @@ npm test
 ```
 
 `npm test` runs `npm run build:spec`, which compiles the specs together with the sources they import into
-`dist-spec/`, and then ava. It never writes into `dist/`, so running the tests cannot leave a broken `dist/`
-behind for publishing.
+`dist-spec/`, and then ava. It never writes into `dist/`, so running the tests (or interrupting them) cannot
+leave a broken or missing `dist/` behind for publishing or for `npm link`.
 
 ava runs two groups of tests:
 
 - `spec/**/*.spec.ts` and `spec/**/*.test.ts`: the runtime behaviour of the library.
-- `packaging/**/*.test.js`: packaging and release checks. They pack the repository exactly like `npm publish`
-  does (which rebuilds `dist/` through the `prepack` script), extract the tarball into a fresh consumer project
-  and check it there: the tarball contents, `require` and native `import` (including the default import),
-  deep imports, TypeScript resolution in `node10`, `node16`, `nodenext` and `bundler` mode, and the consistency
-  of `package.json`, `package-lock.json` and the workflows.
+- `packaging/**/*.test.js`: packaging and release checks. They work on a temporary copy of the repository: the
+  working tree as it is on disk (uncommitted changes included), without `dist/`, `dist-spec/`, `.git`, other
+  dot-directories and `node_modules/` (the copy links to the repository's `node_modules/`). They put a stale
+  `dist/` into the copy and pack it exactly like `npm publish` does, which rebuilds `dist/` there through the
+  `prepack` script. They extract the tarball into a fresh consumer project and check it there: the tarball
+  contents, `require` and native `import` (including the default import), deep imports, the ES module entry under
+  each way that tools turn its CommonJS build into an ES module, TypeScript resolution in `node10`, `node16`,
+  `nodenext` and `bundler` mode, and the consistency of `package.json`, `package-lock.json` and the workflows.
+  The temporary directories are removed afterwards.
 
 To run a single file or test, use ava's options after building the specs, for example:
 

@@ -7,7 +7,8 @@ const fs = require('fs')
 const path = require('path')
 
 const {
-  root, readText, readJson, pack, createConsumer, runNode, childEnvironment, makeTemporaryDirectory, removeTemporaryDirectories
+  root, readText, readJson, copyRepository, snapshotDirectory, pack, createConsumer, runNode, childEnvironment,
+  makeTemporaryDirectory, removeTemporaryDirectories
 } = require('./helpers')
 
 const packageJson = readJson('package.json')
@@ -24,17 +25,20 @@ const run = (command, args, cwd) => new Promise(resolve => {
 
 const state = {}
 
-test.before('pack the repository like npm publish does', t => {
+test.before('pack a copy of the repository like npm publish does', t => {
   t.timeout(minutes(5))
+  // PK4-4: everything below happens in a temporary copy of the working tree, so `npm test` never writes into the
+  // working tree's dist/ (an interrupted run once left no dist/ at all).
+  state.distBefore = snapshotDirectory(path.join(root, 'dist'))
+  const copy = copyRepository(makeTemporaryDirectory('repository'))
   // Start from a stale dist/ like the one `npm test` used to leave behind: spec output and no dist/index.js.
   // Packing must rebuild the library from scratch.
-  const dist = path.join(root, 'dist')
-  fs.rmSync(dist, { recursive: true, force: true })
-  fs.mkdirSync(path.join(dist, 'spec'), { recursive: true })
-  fs.writeFileSync(path.join(dist, 'spec', 'Stale.spec.js'), '')
+  fs.mkdirSync(path.join(copy, 'dist', 'spec'), { recursive: true })
+  fs.writeFileSync(path.join(copy, 'dist', 'spec', 'Stale.spec.js'), '')
 
   const destination = makeTemporaryDirectory('pack')
-  state.packed = pack(destination)
+  state.packed = pack(destination, copy)
+  state.distAfter = snapshotDirectory(path.join(root, 'dist'))
   state.consumer = createConsumer(state.packed.tarball)
   for (const file of fs.readdirSync(path.join(__dirname, 'smoke'))) {
     fs.copyFileSync(path.join(__dirname, 'smoke', file), path.join(state.consumer, file))
@@ -61,6 +65,16 @@ test('G:PK-3 npm test compiles the specs into dist-spec/, so it never leaves dis
   t.regex(packageJson.scripts['build:spec'], /--outDir dist-spec\b/)
   t.regex(packageJson.scripts.test, /^npm run build:spec && ava\b/)
   t.false(/\bnpm run build\b(?!:)/.test(packageJson.scripts.test), 'npm test does not run the library build with other options')
+})
+
+test('PK4-4 the packaging checks pack a temporary copy of the repository and never write into the working tree\'s dist/', t => {
+  // Packing (which rebuilds dist/ through prepack) and the stale dist/ it starts from happened in the copy.
+  t.deepEqual(state.distAfter, state.distBefore, 'dist/ of the working tree is exactly as it was before packing')
+  t.false(state.packed.tarball.startsWith(root + path.sep), 'the tarball is written outside the working tree')
+  // CONTRIBUTING.md says so, and that is now true.
+  const contributing = readText('CONTRIBUTING.md').replace(/\s+/g, ' ')
+  t.true(contributing.includes('never writes into `dist/`'), 'CONTRIBUTING.md says that npm test never writes into dist/')
+  t.regex(contributing, /temporary copy of the repository/, 'CONTRIBUTING.md says that the packaging checks pack a temporary copy')
 })
 
 test('DOCS:ESM the default import is the Substitute class under native ESM', t => {
