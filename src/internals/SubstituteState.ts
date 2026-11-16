@@ -3,14 +3,69 @@ import { inspect } from 'util'
 import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { fingerprintArguments, identityFingerprintArguments, stableFingerprintArguments } from './utilities'
+import { hashArguments, identityHashArguments } from './utilities'
 
 let substitutionOrder = 0
+
+/**
+ * The hashes of the actual arguments of one call (see ArgumentHash), computed when first needed and shared by the
+ * lookups the call makes (the literal substitutions, then the auto-substitute cache).
+ */
+export class ArgumentHashes {
+  private _structural?: number
+  private _identity?: number | null
+
+  constructor(public readonly args: readonly unknown[]) { }
+
+  public get structural(): number {
+    if (this._structural === undefined) this._structural = hashArguments(this.args)
+    return this._structural
+  }
+
+  public get identity(): number | undefined {
+    if (this._identity === undefined) this._identity = identityHashArguments(this.args) ?? null
+    return this._identity ?? undefined
+  }
+}
+
+/** A map from hashes to the items with that hash, which stores a single item without an array. */
+type Buckets<T> = Map<number, T | T[]>
+
+const bucketAdd = <T>(buckets: Buckets<T>, hash: number, item: T): void => {
+  const bucket = buckets.get(hash)
+  if (bucket === undefined) buckets.set(hash, item)
+  else if (Array.isArray(bucket)) bucket.push(item)
+  else buckets.set(hash, [bucket, item])
+}
+
+const bucketItems = <T>(buckets: Buckets<T>, hash: number): readonly T[] | undefined => {
+  const bucket = buckets.get(hash)
+  return bucket === undefined ? undefined : Array.isArray(bucket) ? bucket : [bucket]
+}
+
+const bucketRemove = <T>(buckets: Buckets<T>, hash: number, item: T): void => {
+  const bucket = buckets.get(hash)
+  if (bucket === item) buckets.delete(hash)
+  else if (Array.isArray(bucket)) {
+    const index = bucket.indexOf(item)
+    if (index !== -1) bucket.splice(index, 1)
+    if (bucket.length === 0) buckets.delete(hash)
+  }
+}
+
+function* allBucketItems<T>(buckets: Buckets<T>): IterableIterator<T> {
+  for (const bucket of buckets.values()) {
+    if (Array.isArray(bucket)) yield* bucket
+    else yield bucket
+  }
+}
 
 /** A configured behaviour: `sub.add(1, Arg.any()).returns(3, 4)`, `sub.prop.throws(err)`, ... */
 export class Substitution {
   private _next = 0
   public readonly order = ++substitutionOrder
+  /** For a literal substitution whose arguments contain objects: their identity hash (see CallSubstitutions). */
+  public identity?: number
 
   constructor(
     public readonly kind: 'get' | 'call',
@@ -80,10 +135,10 @@ export class AutoEntry {
 }
 
 type CallEntryIndex = {
-  byFingerprint: Map<string, AutoEntry[]>
-  /** The entry last handed out for exactly these primitives and objects (see identityFingerprintArguments). */
-  byIdentity: Map<string, AutoEntry>
-  unfingerprinted: AutoEntry[]
+  /** Every entry, by the structural hash of its arguments when it was created. */
+  byHash: Buckets<AutoEntry>
+  /** The entries handed out for arguments with objects, by their identity hash. */
+  byIdentity?: Buckets<AutoEntry>
 }
 
 /** The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`. */
@@ -99,17 +154,17 @@ const mostRecentMatch = (list: readonly Substitution[], actualArguments: readonl
 /**
  * The call substitutions configured for one member.
  *
- * All-literal substitutions (the most specific class, D4) are indexed by the stable fingerprint of their
- * arguments, which deep strictly equal argument lists share and which does not change when an object in the
- * arguments is mutated after the setup (literal arguments are compared as they are when the call is made, D15).
- * A call therefore only compares against the literal substitutions with the same primitives in the same places:
- * a single one for distinct primitive arguments, however many there are. Substitutions with Arg matchers are kept
- * in a list.
+ * All-literal substitutions (the most specific class, D4) are indexed by the structural hash of their arguments at
+ * setup time (D35), which deep strictly equal argument lists share, so a call only compares (with live deep equality)
+ * against the literal substitutions with the same hash: usually none or one, however many there are and whatever the
+ * shape of the arguments. Those with objects among their arguments are also indexed by identity, so passing the same
+ * objects again still matches after they were mutated (mutating an argument after the setup is otherwise not
+ * supported, amended D15). Substitutions with Arg matchers are kept in a list.
  */
 class CallSubstitutions {
-  private readonly _literal = new Map<string, Substitution[]>()
-  /** All-literal substitutions whose arguments could not be fingerprinted. */
-  private readonly _unindexed: Substitution[] = []
+  /** In configuration order within each bucket. */
+  private readonly _literal: Buckets<Substitution> = new Map()
+  private readonly _byIdentity: Buckets<Substitution> = new Map()
   private readonly _withMatchers: Substitution[] = []
   private _size = 0
 
@@ -117,42 +172,50 @@ class CallSubstitutions {
     return this._size
   }
 
-  private listFor(args: RecordedArguments, create: boolean): Substitution[] | undefined {
-    if (args.argumentsClass !== 'plain') return this._withMatchers
-    const fingerprint = stableFingerprintArguments(args.value!)
-    if (fingerprint === undefined) return this._unindexed
-    let list = this._literal.get(fingerprint)
-    if (list === undefined && create) {
-      list = []
-      this._literal.set(fingerprint, list)
-    }
-    return list
-  }
-
   /** Adds a substitution. One with the same specification is replaced (most recent wins). */
   public add(substitution: Substitution): void {
-    const list = this.listFor(substitution.args!, true)!
-    const index = list.findIndex(existing => existing.args!.equals(substitution.args!))
-    if (index !== -1) list.splice(index, 1)
-    else this._size++
-    list.push(substitution)
+    const args = substitution.args!
+    if (args.argumentsClass !== 'plain') {
+      const index = this._withMatchers.findIndex(existing => existing.args!.equals(args))
+      if (index !== -1) this._withMatchers.splice(index, 1)
+      else this._size++
+      this._withMatchers.push(substitution)
+      return
+    }
+    const hash = hashArguments(args.value!)
+    const replaced = bucketItems(this._literal, hash)?.find(existing => existing.args!.equals(args))
+    if (replaced !== undefined) {
+      bucketRemove(this._literal, hash, replaced)
+      if (replaced.identity !== undefined) bucketRemove(this._byIdentity, replaced.identity, replaced)
+    } else this._size++
+    bucketAdd(this._literal, hash, substitution)
+    const identity = identityHashArguments(args.value!)
+    if (identity !== undefined) {
+      substitution.identity = identity
+      bucketAdd(this._byIdentity, identity, substitution)
+    }
   }
 
   /** The substitution configured with exactly this specification. */
   public withSpecification(args: RecordedArguments): Substitution | undefined {
-    return this.listFor(args, false)?.find(substitution => substitution.args!.equals(args))
+    const candidates = args.argumentsClass !== 'plain' ? this._withMatchers : bucketItems(this._literal, hashArguments(args.value!))
+    return candidates?.find(substitution => substitution.args!.equals(args))
   }
 
   /** The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one. */
-  public match(actualArguments: readonly unknown[]): Substitution | undefined {
+  public match(hashes: ArgumentHashes): Substitution | undefined {
+    const actualArguments = hashes.args
     let best: Substitution | undefined
-    const fingerprint = stableFingerprintArguments(actualArguments)
-    if (fingerprint !== undefined) {
-      const list = this._literal.get(fingerprint)
-      if (list !== undefined) best = mostRecentMatch(list, actualArguments, best)
-    } else for (const list of this._literal.values()) best = mostRecentMatch(list, actualArguments, best)
-    best = mostRecentMatch(this._unindexed, actualArguments, best)
-    if (best !== undefined) return best
+    if (this._literal.size > 0) {
+      const literal = bucketItems(this._literal, hashes.structural)
+      if (literal !== undefined) best = mostRecentMatch(literal, actualArguments, best)
+      if (this._byIdentity.size > 0) {
+        const identity = hashes.identity
+        const sameObjects = identity === undefined ? undefined : bucketItems(this._byIdentity, identity)
+        if (sameObjects !== undefined) best = mostRecentMatch(sameObjects, actualArguments, best)
+      }
+      if (best !== undefined) return best
+    }
 
     const withMatchers = this._withMatchers
     for (let index = withMatchers.length - 1; index >= 0; index--) {
@@ -164,8 +227,7 @@ class CallSubstitutions {
   }
 
   public *all(): IterableIterator<Substitution> {
-    for (const list of this._literal.values()) yield* list
-    yield* this._unindexed
+    yield* allBucketItems(this._literal)
     yield* this._withMatchers
   }
 }
@@ -296,7 +358,7 @@ export class SubstituteState {
    * The substitution that answers a call: the most specific class wins (all-literal, then predicates,
    * then Arg.all()), and within a class the most recently configured one wins.
    */
-  public findCallSubstitution(key: PropertyKey, actualArguments: readonly unknown[]): Substitution | undefined {
+  public findCallSubstitution(key: PropertyKey, actualArguments: ArgumentHashes): Substitution | undefined {
     return this._callSubstitutions.get(key)?.match(actualArguments)
   }
 
@@ -317,46 +379,41 @@ export class SubstituteState {
   }
 
   /**
-   * The auto-substitute for a call with these actual (literal) arguments. The same objects get the same
-   * auto-substitute even when they were mutated in between (their structural fingerprint has gone stale then),
-   * so that after `api.get(request).body.returns(1)` and `request.x = 1`, `api.get(request).body` is still 1 (D2).
+   * The auto-substitute for a call with these actual (literal) arguments (D2), found in O(1) expected time by the
+   * structural hash of the arguments (D35). The same objects get the same auto-substitute even when they were
+   * mutated in between (the structural hash has gone stale then), so that after `api.get(request).body.returns(1)`
+   * and `request.x = 1`, `api.get(request).body` is still 1: entries for arguments with objects are also found by
+   * the identity of those objects, first.
    */
-  public callEntry(key: PropertyKey, actualArguments: any[]): AutoEntry {
+  public callEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry {
+    const actualArguments = actual.args
     let index = this._callEntries.get(key)
     if (index === undefined) {
-      index = { byFingerprint: new Map(), byIdentity: new Map(), unfingerprinted: [] }
+      index = { byHash: new Map() }
       this._callEntries.set(key, index)
     }
-    const identity = identityFingerprintArguments(actualArguments)
-    if (identity !== undefined) {
-      const known = index.byIdentity.get(identity)
-      if (known !== undefined && known.args!.matches(actualArguments)) return known
+    const identity = actual.identity
+    if (identity !== undefined && index.byIdentity !== undefined) {
+      const known = bucketItems(index.byIdentity, identity)?.find(entry => entry.args!.matches(actualArguments))
+      if (known !== undefined) return known
     }
-    const entry = this.structuralCallEntry(index, key, actualArguments)
-    if (identity !== undefined) index.byIdentity.set(identity, entry)
-    return entry
-  }
 
-  private structuralCallEntry(index: CallEntryIndex, key: PropertyKey, actualArguments: any[]): AutoEntry {
-    const fingerprint = fingerprintArguments(actualArguments)
-    let bucket: AutoEntry[] | undefined
-    if (fingerprint === undefined) bucket = index.unfingerprinted
-    else {
-      bucket = index.byFingerprint.get(fingerprint)
-      if (bucket === undefined) {
-        bucket = []
-        index.byFingerprint.set(fingerprint, bucket)
-      }
+    const hash = actual.structural
+    let entry = bucketItems(index.byHash, hash)?.find(candidate => candidate.args!.matches(actualArguments))
+    if (entry === undefined) {
+      entry = new AutoEntry('call', this, key, RecordedArguments.from(actualArguments as any[]))
+      bucketAdd(index.byHash, hash, entry)
     }
-    for (const entry of bucket) if (entry.args!.matches(actualArguments)) return entry
-    const entry = new AutoEntry('call', this, key, RecordedArguments.from(actualArguments))
-    bucket.push(entry)
+    if (identity !== undefined) {
+      if (index.byIdentity === undefined) index.byIdentity = new Map()
+      bucketAdd(index.byIdentity, identity, entry)
+    }
     return entry
   }
 
   /** The auto-substitute for a call specification used in a nested setup (`a(Arg.any()).b.returns(1)`). */
   public specificationEntry(key: PropertyKey, specification: RecordedArguments): AutoEntry {
-    if (specification.argumentsClass === 'plain') return this.callEntry(key, specification.value!)
+    if (specification.argumentsClass === 'plain') return this.callEntry(key, new ArgumentHashes(specification.value!))
     let list = this._specificationEntries.get(key)
     if (list === undefined) {
       list = []
@@ -372,10 +429,7 @@ export class SubstituteState {
 
   public *entries(): IterableIterator<AutoEntry> {
     yield* this._propertyEntries.values()
-    for (const index of this._callEntries.values()) {
-      for (const bucket of index.byFingerprint.values()) yield* bucket
-      yield* index.unfingerprinted
-    }
+    for (const index of this._callEntries.values()) yield* allBucketItems(index.byHash)
     for (const list of this._specificationEntries.values()) yield* list
   }
 

@@ -1,7 +1,7 @@
 import { inspect, InspectOptions } from 'util'
 
 import { isSubstituteProxy, substituteMarker } from '../shared'
-import { AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { CallRecord, currentSequence, retract } from './CallRecord'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException } from './SubstituteException'
@@ -306,7 +306,8 @@ const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStar
 }
 
 const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord): any => {
-  const substitution = state.findCallSubstitution(key, args)
+  const hashes = new ArgumentHashes(args)
+  const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
     return execute(substitution, args)
@@ -323,7 +324,7 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
     }
   }
 
-  const entry = state.callEntry(key, args)
+  const entry = state.callEntry(key, hashes)
   entry.handOut(record)
   return entryProxy(entry)
 }
