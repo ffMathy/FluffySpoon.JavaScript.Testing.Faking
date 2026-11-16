@@ -51,8 +51,9 @@ const shuffle = <T>(next: Next, items: T[]): T[] => {
 
 /**
  * R5V-1 / R5-ADV-1 (E13, round 6): values with as many keys or entries as the limits of the hash, and on both sides of
- * them: 256 (hashed shallowly above), 1,025 string keys (families) and 65,536 (a sample of the values above). The widest
- * ones are built once and shared (generated values refer to them, and copies copy them).
+ * them: 256 (wide containers above, each entry with a budget of its own), 1,025 string keys (families) and 65,536 (a
+ * sample of the values above). The widest ones are built once and shared (generated values refer to them, and copies
+ * copy them).
  */
 const sharedWide: unknown[] = []
 const widest = (): unknown[] => {
