@@ -111,19 +111,46 @@ test('R3-ADV-6 (E2) adjacency alone decides only when neither operation has a fr
   t.deepEqual(result, { driver: '@Substitute {\n}', app: '@Substitute {\n}', result: 99 })
 })
 
-/** Compiles a TypeScript file with a source map into a new directory, and returns the path of the JavaScript file. */
-const compileWithSourceMap = (source: string): string => {
+/**
+ * Compiles a TypeScript file with a source map into a new temporary directory, runs `use` with the path of the
+ * JavaScript file, and removes the directory again (PK5-1: no test leaves files in the temporary directory).
+ */
+const withSourceMapProject = <T>(source: string, use: (script: string) => T): T => {
   const typescript = require('typescript')
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'substitute-source-map-'))
-  const { outputText, sourceMapText } = typescript.transpileModule(source, {
-    fileName: 'checkout.ts',
-    compilerOptions: { module: typescript.ModuleKind.CommonJS, target: typescript.ScriptTarget.ES2019, sourceMap: true }
-  })
-  fs.writeFileSync(path.join(directory, 'checkout.ts'), source)
-  fs.writeFileSync(path.join(directory, 'checkout.js'), outputText)
-  fs.writeFileSync(path.join(directory, 'checkout.js.map'), sourceMapText)
-  return path.join(directory, 'checkout.js')
+  try {
+    const { outputText, sourceMapText } = typescript.transpileModule(source, {
+      fileName: 'checkout.ts',
+      compilerOptions: { module: typescript.ModuleKind.CommonJS, target: typescript.ScriptTarget.ES2019, sourceMap: true }
+    })
+    fs.writeFileSync(path.join(directory, 'checkout.ts'), source)
+    fs.writeFileSync(path.join(directory, 'checkout.js'), outputText)
+    fs.writeFileSync(path.join(directory, 'checkout.js.map'), sourceMapText)
+    return use(path.join(directory, 'checkout.js'))
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true })
+  }
 }
+
+test('PK5-1 (E17) the source-map check leaves nothing in the temporary directory', t => {
+  const leftovers = () => fs.readdirSync(os.tmpdir()).filter(name => name.startsWith('substitute-source-map-'))
+  const before = new Set(leftovers())
+  let directory = ''
+  const output = withSourceMapProject("console.log('compiled')", script => {
+    directory = path.dirname(script)
+    t.true(fs.existsSync(path.join(directory, 'checkout.js.map')))
+    return spawnSync(process.execPath, ['--enable-source-maps', script], { encoding: 'utf8' }).stdout
+  })
+  t.is(output, 'compiled\n')
+  t.false(fs.existsSync(directory), `${directory} was removed`)
+  t.deepEqual(leftovers().filter(name => !before.has(name)), [])
+  // also when the check fails
+  t.throws(() => withSourceMapProject('', script => {
+    directory = path.dirname(script)
+    throw new Error('the check failed')
+  }), { message: 'the check failed' })
+  t.false(fs.existsSync(directory), `${directory} was removed`)
+})
 
 test('R3-ADV-3 (E4) "called at" lines keep source maps, also where Error.prepareStackTrace is not set (as in jest)', t => {
   const source = [
@@ -148,20 +175,21 @@ test('R3-ADV-3 (E4) "called at" lines keep source maps, also where Error.prepare
   ].join('\n')
   const lines = source.split('\n')
   const lineOf = (text: string) => lines.indexOf(text) + 1
-  const script = compileWithSourceMap(source)
-  for (const withoutPrepareStackTrace of [false, true]) {
-    const result = spawnSync(process.execPath, ['--enable-source-maps', script], {
-      encoding: 'utf8',
-      env: { ...process.env, NO_COLOR: '1', ...(withoutPrepareStackTrace ? { WITHOUT_PREPARE_STACK_TRACE: '1' } : {}) }
-    })
-    t.is(result.status, 0, result.stderr)
-    const [increment, child] = JSON.parse(result.stdout) as string[]
-    const calledAt = (message: string) => message.split('\n').filter(line => line.includes('called at'))
-    t.deepEqual(calledAt(increment).map(line => /checkout\.(ts|js):(\d+)/.exec(line)?.slice(1).join(':')), [`ts:${lineOf("metrics.increment('x')")}`],
-      `the call site maps to the TypeScript line (${withoutPrepareStackTrace ? 'without' : 'with'} Error.prepareStackTrace)`)
-    // a nested read whose structured call site was read for the chain (D25) keeps its text as well
-    t.deepEqual(calledAt(child).map(line => /checkout\.(ts|js):(\d+)/.exec(line)?.slice(1).join(':')), [`ts:${lineOf("metrics.child.increment('y')")}`])
-  }
+  withSourceMapProject(source, script => {
+    for (const withoutPrepareStackTrace of [false, true]) {
+      const result = spawnSync(process.execPath, ['--enable-source-maps', script], {
+        encoding: 'utf8',
+        env: { ...process.env, NO_COLOR: '1', ...(withoutPrepareStackTrace ? { WITHOUT_PREPARE_STACK_TRACE: '1' } : {}) }
+      })
+      t.is(result.status, 0, result.stderr)
+      const [increment, child] = JSON.parse(result.stdout) as string[]
+      const calledAt = (message: string) => message.split('\n').filter(line => line.includes('called at'))
+      t.deepEqual(calledAt(increment).map(line => /checkout\.(ts|js):(\d+)/.exec(line)?.slice(1).join(':')), [`ts:${lineOf("metrics.increment('x')")}`],
+        `the call site maps to the TypeScript line (${withoutPrepareStackTrace ? 'without' : 'with'} Error.prepareStackTrace)`)
+      // a nested read whose structured call site was read for the chain (D25) keeps its text as well
+      t.deepEqual(calledAt(child).map(line => /checkout\.(ts|js):(\d+)/.exec(line)?.slice(1).join(':')), [`ts:${lineOf("metrics.child.increment('y')")}`])
+    }
+  })
 })
 
 test('R3-ADV-4 (E5) reading call sites never changes Error.prepareStackTrace for the process', t => {
