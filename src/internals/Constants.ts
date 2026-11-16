@@ -55,7 +55,26 @@ export const isSpecialProperty = (property: PropertyKey): property is SpecialPro
   property === INTERNAL ||
   property === substituteMarker
 
-export const keyToString = (key: PropertyKey): string => typeof key === 'symbol' ? key.toString() : String(key)
+/**
+ * D28: keys that built-in algorithms, Node and test runners read to probe what kind of value they are looking at
+ * (is it iterable, a RegExp, a promisify-able function, a jest asymmetric matcher, ...). An unconfigured read of
+ * one of them answers undefined and is not recorded, the same way `then` is handled, so that a substitute behaves
+ * like a plain function or object to those algorithms. Configuring the key (through sub[configure]()) or mimicking
+ * an instance that has it makes the read answer as usual.
+ */
+const wellKnownSymbols = Symbol as unknown as Record<string, symbol | undefined>
+const protocolKeys = new Set<PropertyKey>([
+  // every well-known symbol except Symbol.toPrimitive, which is a special property (see isSpecialProperty);
+  // asyncIterator and matchAll are looked up by name because older runtimes do not have them
+  ...['iterator', 'asyncIterator', 'hasInstance', 'isConcatSpreadable', 'match', 'matchAll', 'replace', 'search',
+    'split', 'species', 'toStringTag', 'unscopables'].map(name => wellKnownSymbols[name]),
+  Symbol.for('nodejs.util.promisify.custom'),
+  'asymmetricMatch'
+].filter(key => key !== undefined) as PropertyKey[])
+
+export const isProtocolKey = (property: PropertyKey): boolean => protocolKeys.has(property)
+
+export const keyToString =(key: PropertyKey): string => typeof key === 'symbol' ? key.toString() : String(key)
 
 export const EXCEPTION = {
   callCountMismatch: 'CallCountMismatch',

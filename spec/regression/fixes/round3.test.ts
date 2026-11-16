@@ -1,8 +1,9 @@
 import test, { ExecutionContext } from 'ava'
 import { spawnSync } from 'child_process'
 import * as path from 'path'
+import { inspect, promisify } from 'util'
 
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, configure, mimick } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -41,6 +42,67 @@ const reportsNothingLater = (t: ExecutionContext, run: () => unknown) => {
     clock.uninstall()
   }
 }
+
+test('ENG2-6 (D28) unconfigured well-known protocol symbols read as undefined and are not recorded', async t => {
+  const callback = Substitute.for<any>()
+  t.is([].concat(callback).length, 1)
+  t.true([() => 1].concat(callback).includes(callback))
+  const toArray = (value: any) => typeof value[Symbol.iterator] === 'function' ? [...value] : [value]
+  t.is(toArray(callback).length, 1)
+  t.is(Object.prototype.toString.call(callback), '[object Function]')
+  await t.throwsAsync(Promise.all(callback), { instanceOf: TypeError })
+
+  const deps = Substitute.for<any>()
+  t.notThrows(() => 'https://x/a'.startsWith(deps.baseUrl))
+  t.false(new Error() instanceof deps.HttpError)
+  for (const key of [Symbol.iterator, Symbol.asyncIterator, Symbol.hasInstance, Symbol.isConcatSpreadable, Symbol.match,
+    Symbol.matchAll, Symbol.replace, Symbol.search, Symbol.split, Symbol.species, Symbol.toStringTag, Symbol.unscopables,
+    promisify.custom])
+    t.is(deps[key], undefined, String(key))
+  t.is(deps.nested.member[Symbol.iterator], undefined)
+  t.is(deps.call(1)[Symbol.asyncIterator], undefined)
+
+  const fs = Substitute.for<any>()
+  fs.readFile(Arg.any(), Arg.any()).mimicks((file: string, done: Function) => done(null, `contents of ${file}`))
+  t.is(await promisify(fs.readFile)('/etc/app.json'), 'contents of /etc/app.json')
+  fs.received(1).readFile('/etc/app.json', Arg.any('function'))
+
+  // none of the probes is recorded
+  t.is(inspect(callback), '@Substitute {\n}')
+  t.notThrows(() => deps.didNotReceive()[Symbol.iterator])
+  t.notThrows(() => deps.received(1).HttpError)
+
+  // explicit configuration and mimicking still answer
+  const numbers = Substitute.for<any>()
+  numbers[configure]()[Symbol.iterator]().returns([1, 2][Symbol.iterator]())
+  t.deepEqual([...numbers], [1, 2])
+  numbers.received(1)[Symbol.iterator]()
+  const tagged = Substitute.for<any>()
+  tagged[configure]()[Symbol.toStringTag].returns('Tagged')
+  t.is(Object.prototype.toString.call(tagged), '[object Tagged]')
+  const list = Substitute.for<any>()
+  list[mimick](['a', 'b'])
+  t.deepEqual([...list], ['a', 'b'])
+  const readFile = Substitute.for<any>()
+  readFile[mimick]({ [promisify.custom]: async () => 'custom' })
+  t.is(typeof readFile[promisify.custom], 'function')
+})
+
+test('ENG2-7 (D28) a substitute is not a jest asymmetric matcher unless asymmetricMatch is configured', t => {
+  // the check @jest/expect-utils uses to recognise asymmetric matchers
+  const isAsymmetric = (value: any) => !!value && typeof value.asymmetricMatch === 'function'
+  const logger = Substitute.for<any>()
+  t.false(isAsymmetric(logger))
+  t.false(isAsymmetric(logger.child))
+  t.false(isAsymmetric(logger.create('x')))
+  t.is(inspect(logger), '@Substitute {\n  received:\n    child\n    create(\'x\')\n}')
+
+  const matcher = Substitute.for<any>()
+  matcher[configure]().asymmetricMatch(Arg.any()).returns(true)
+  t.true(isAsymmetric(matcher))
+  t.true(matcher.asymmetricMatch(42))
+  matcher.received(1).asymmetricMatch(42)
+})
 
 test('ENG2-13 (D33) a property-style didNotReceive().m on a member that was only invoked is reported later', t => {
   const logger = Substitute.for<any>()

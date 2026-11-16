@@ -8,7 +8,7 @@ import { SubstituteException } from './SubstituteException'
 import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
-  contextMethodOf, isFunctionHelperKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
+  contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
@@ -236,8 +236,17 @@ const execute = (substitution: Substitution, args?: any[]): any => {
   }
 }
 
+/** D28: whether a protocol key is configured or mimicked, so that reading it answers as usual. */
+const answersProtocolKey = (state: SubstituteState, key: PropertyKey): boolean =>
+  state.propertySubstitution(key) !== undefined ||
+  state.hasCallSubstitutions(key) ||
+  state.hasConfiguredPropertyEntry(key) ||
+  (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
+
 /** A real property read by the code under test. */
 const realGet = (state: SubstituteState, key: PropertyKey, chainPrevious: CallRecord | undefined, stackStart: Function): any => {
+  if (isProtocolKey(key) && !answersProtocolKey(state, key)) return undefined
+
   const substitution = state.propertySubstitution(key)
   if (substitution !== undefined) {
     const record = state.addRecord('get', key, undefined, stackStart, chainPrevious)
