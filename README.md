@@ -651,6 +651,8 @@ order.total().returns(42)
 console.log(shop.find('1').total()) // prints 42
 ```
 
+At runtime, `.returns`, `.throws`, `.resolves`, `.rejects` and `.mimicks` on a member or call that is *not* configured always mean the setup methods. So if the code under test uses a member with one of these names on a value it gets from a substitute, configure that value first, as `shop.find('1')` above.
+
 `clearReceivedCalls`, `mimick` and `configure` exist only as symbols, so members with those names never conflict.
 
 ## In JavaScript
