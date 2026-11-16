@@ -6,6 +6,9 @@
 //   node spec-types/min-ts/check.js 3.9 4.0 4.4   # after `npm run build`: check other versions
 //
 // The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on.
+//
+// Afterwards it runs spec-types/TD-10.T32.jsdoc.js, which checks (with the project's own TypeScript) that the public
+// API in the same built typings carries documentation comments.
 'use strict'
 const { spawnSync } = require('child_process')
 const fs = require('fs')
@@ -74,5 +77,14 @@ try {
 } finally {
   if (fs.rmSync) fs.rmSync(workDirectory, { recursive: true, force: true })
   else fs.rmdirSync(workDirectory, { recursive: true })
+}
+
+const documentation = spawnSync(process.execPath, [path.join(__dirname, '..', 'TD-10.T32.jsdoc.js')], { cwd: root, encoding: 'utf8' })
+const documented = documentation.status === 0
+failed = failed || !documented
+console.log(`${documented ? 'ok  ' : 'FAIL'} documentation comments of the public API (spec-types/TD-10.T32.jsdoc.js)`)
+if (!documented) {
+  const report = `${documentation.stdout || ''}${documentation.stderr || ''}`.split('\n').filter(line => !line.startsWith('ok'))
+  console.log(report.join('\n').trim().replace(/^/gm, '     '))
 }
 process.exit(failed ? 1 : 0)

@@ -32,7 +32,8 @@ type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 // (`await sub` resolves to the substitute itself); the typings make `then` `never`. `toJSON` is answered by the
 // substitute itself (it serializes the substitute): it keeps its declared type on the substitute (through `& T`) but
 // has no setup API, and it cannot be configured or asserted.
-// Symbol.toPrimitive and util.inspect.custom are special-cased at runtime as well but are not reflected here.
+// The other keys the runtime special-cases (Symbol.toPrimitive, util.inspect.custom, the well-known symbols, ...) are
+// not reflected here.
 
 type SubstituteMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'substitute'> & PropertySubstitute<TValue>
 
@@ -44,7 +45,7 @@ type SubstituteMembers<T> = {
     SubstituteMember<T[P]>
 }
 
-/** The members of a substitute (without the assertion and configuration methods). */
+/** The members of a substitute (without the assertion and configuration methods), each with its setup API. */
 export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>>
 
 // In the assertion view, a member that is not callable keeps its declared type, including `undefined` for an optional

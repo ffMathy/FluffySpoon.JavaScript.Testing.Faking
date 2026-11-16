@@ -1,10 +1,18 @@
 import { constants } from '../../shared'
 import { HasMember, LibraryMemberName, Primitive } from './Utilities'
 
+/**
+ * Symbol form of `.returns(...)`: `sub.add(1, 2)[returns](3)`. Always available, also where the value has its own member
+ * called `returns`.
+ */
 export const returns: typeof constants.CONTEXT.returns.symbol = constants.CONTEXT.returns.symbol
+/** Symbol form of `.throws(...)`: `sub.divide(1, 0)[throws](new Error())`. */
 export const throws: typeof constants.CONTEXT.throws.symbol = constants.CONTEXT.throws.symbol
+/** Symbol form of `.resolves(...)`, offered on members that return a promise: `sub.load()[resolves](value)`. */
 export const resolves: typeof constants.CONTEXT.resolves.symbol = constants.CONTEXT.resolves.symbol
+/** Symbol form of `.rejects(...)`, offered on members that return a promise: `sub.load()[rejects](new Error())`. */
 export const rejects: typeof constants.CONTEXT.rejects.symbol = constants.CONTEXT.rejects.symbol
+/** Symbol form of `.mimicks(...)`: `sub.add(Arg.all())[mimicks]((a, b) => a + b)`. */
 export const mimicks: typeof constants.CONTEXT.mimicks.symbol = constants.CONTEXT.mimicks.symbol
 
 type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType
@@ -22,22 +30,56 @@ type IsPromise<TReturnType> = [NonNullable<TReturnType>] extends [never] ? false
   [NonNullable<TReturnType>] extends [Promise<any>] ? true : false
 
 type SymbolSetupMethods<TReturnType, TImplementation> = {
+  /**
+   * Configures the value(s) to return. With several values, the calls return them in order and then keep returning
+   * the last one.
+   */
   [returns]: ReturnsFunction<TReturnType>
+  /** Configures the error(s) to throw, in order; the last one keeps being thrown. */
   [throws]: ThrowsFunction
+  /**
+   * Configures implementation(s) to run instead. They receive the call's arguments and their result is returned; with
+   * several implementations, the calls use them in order and then keep using the last one.
+   */
   [mimicks]: MimicksFunction<TImplementation>
 } & (IsPromise<TReturnType> extends true ? {
+  /** Configures the value(s) the returned promise resolves to, in order; the last one is repeated. */
   [resolves]: ResolvesFunction<PromiseValue<TReturnType>>
+  /** Configures the reason(s) the returned promise rejects with, in order; the last one is repeated. */
   [rejects]: RejectsFunction
 } : {})
 
-type StringSetupMethods<TReturnType, TImplementation> = {
+type StringReturns<TReturnType> = {
+  /**
+   * Configures the value(s) to return. With several values, the calls return them in order and then keep returning
+   * the last one. `[returns]` is the symbol form.
+   */
   returns: ReturnsFunction<TReturnType>
+}
+type StringThrows = {
+  /** Configures the error(s) to throw, in order; the last one keeps being thrown. `[throws]` is the symbol form. */
   throws: ThrowsFunction
+}
+type StringMimicks<TImplementation> = {
+  /**
+   * Configures implementation(s) to run instead. They receive the call's arguments and their result is returned; with
+   * several implementations, the calls use them in order and then keep using the last one. `[mimicks]` is the symbol
+   * form.
+   */
   mimicks: MimicksFunction<TImplementation>
-} & (IsPromise<TReturnType> extends true ? {
-  resolves: ResolvesFunction<PromiseValue<TReturnType>>
+}
+type StringResolves<TResolved> = {
+  /** Configures the value(s) the returned promise resolves to, in order; the last one is repeated. `[resolves]` is the symbol form. */
+  resolves: ResolvesFunction<TResolved>
+}
+type StringRejects = {
+  /** Configures the reason(s) the returned promise rejects with, in order; the last one is repeated. `[rejects]` is the symbol form. */
   rejects: RejectsFunction
-} : {})
+}
+
+type StringSetupMethods<TReturnType, TImplementation> =
+  StringReturns<TReturnType> & StringThrows & StringMimicks<TImplementation> &
+  (IsPromise<TReturnType> extends true ? StringResolves<PromiseValue<TReturnType>> & StringRejects : {})
 
 // The string form of a setup method is offered only when the value it is accessed on has no member with that name.
 // Otherwise `value.returns` would be the value's own member (the symbol form `value[returns]` always works).
@@ -46,18 +88,18 @@ type StringSetupMethods<TReturnType, TImplementation> = {
 // constraint `{}`, which has no conflicting member: in generic code all string forms are offered (TD-2, T26). The method
 // type itself is computed from the whole value type, so a union return type does not split the method (T:TY-1).
 type StringForm<TCheck, TName extends LibraryMemberName, TMethod> = TCheck extends unknown ?
-  (HasMember<TCheck, TName> extends true ? {} : { [P in TName]: TMethod }) :
+  (HasMember<TCheck, TName> extends true ? {} : TMethod) :
   never
 
 type CheckedStringSetupMethods<TReturnType, TImplementation> =
   // Primitives (and unions of literals, however large) have no conflicting member: skip the per-member check (TD-8).
   [NonNullable<TReturnType>] extends [Primitive] ? StringSetupMethods<TReturnType, TImplementation> :
-  StringForm<NonNullable<TReturnType> & {}, 'returns', ReturnsFunction<TReturnType>> &
-  StringForm<NonNullable<TReturnType> & {}, 'throws', ThrowsFunction> &
-  StringForm<NonNullable<TReturnType> & {}, 'mimicks', MimicksFunction<TImplementation>> &
+  StringForm<NonNullable<TReturnType> & {}, 'returns', StringReturns<TReturnType>> &
+  StringForm<NonNullable<TReturnType> & {}, 'throws', StringThrows> &
+  StringForm<NonNullable<TReturnType> & {}, 'mimicks', StringMimicks<TImplementation>> &
   (IsPromise<TReturnType> extends true ? (
-    StringForm<NonNullable<TReturnType> & {}, 'resolves', ResolvesFunction<PromiseValue<TReturnType>>> &
-    StringForm<NonNullable<TReturnType> & {}, 'rejects', RejectsFunction>
+    StringForm<NonNullable<TReturnType> & {}, 'resolves', StringResolves<PromiseValue<TReturnType>>> &
+    StringForm<NonNullable<TReturnType> & {}, 'rejects', StringRejects>
   ) : {})
 
 /**
@@ -76,11 +118,11 @@ export type UncheckedSetupMethods<TReturnType, TImplementation> =
 /**
  * The type of a call on a substitute: the returned value intersected with the setup API.
  * `null` and `undefined` cannot carry the setup API, so they are dropped from the value part (T:TY-9), while the
- * setup methods still accept them. When nothing is left (`null`, `undefined` or `never`), only the setup API remains.
- * For `never` (a member that always throws) `returns` accepts no value (T:TY-12), so only `throws` and `mimicks` can be
- * used.
- * There is deliberately no separate branch for `never`: for a type parameter (generic code) the check cannot be
- * decided, and TypeScript then only offers the members that all branches have (TD-2, T26).
+ * setup methods still accept them. When nothing is left (`null`, `undefined`, `void`-like or `never`), only the setup
+ * API remains. For `never` (a member that always throws) `returns` accepts no value (T:TY-12), so only `throws` and
+ * `mimicks` can be used.
+ * There is deliberately no separate branch for `never`: for a return type that is a type parameter (generic code) the
+ * check cannot be decided, and TypeScript then only offers the members that all branches have (TD-2, T26).
  */
 export type SubstitutionResult<TReturnType, TImplementation> =
   [NonNullable<TReturnType>] extends [never] ? UncheckedSetupMethods<TReturnType, TImplementation> :
