@@ -2,8 +2,9 @@ import test from 'ava'
 import { spawnSync } from 'child_process'
 import * as path from 'path'
 
-// Round 6: the runtime findings of the round-5 verification about call sites (R5V-3), decided in the fix spec as E15.
-// It changes process-wide state (Error.stackTraceLimit), so it runs in child processes.
+// Round 6: the runtime findings of the round-5 verification about call sites (R5V-3, R5-ADV-2), decided in the fix
+// spec as E15 and E16. Both change process-wide state (Error.stackTraceLimit, a debugger), so they run in child
+// processes.
 
 const library = path.resolve(__dirname, '../../../src/index.js')
 
@@ -70,4 +71,48 @@ test('R5V-3 (E15) a read-only, getter-only, frozen or missing Error.stackTraceLi
     }, name)
     t.is(result.message, 'Call count mismatch in @Substitute.logger.info:', name)
   }
+})
+
+/**
+ * The script with a debugger that pauses on every exception, caught or not, attached: prints how often, and where, it
+ * paused while the script ran.
+ */
+const withDebugger = (setup: string, script: string) => `
+  const inspector = require('inspector')
+  const session = new inspector.Session()
+  session.connect()
+  const pauses = []
+  session.on('Debugger.paused', ({ params }) => {
+    const top = params.callFrames[0]
+    pauses.push(top.functionName + ' ' + top.url.replace(/.*[\\\\/]/, '') + ':' + (top.location.lineNumber + 1))
+    session.post('Debugger.resume')
+  })
+  ${setup}
+  session.post('Debugger.enable')
+  session.post('Debugger.setPauseOnExceptions', { state: 'all' })
+  ${script}
+  session.post('Debugger.setPauseOnExceptions', { state: 'none' })
+  ${failure}
+  console.log(JSON.stringify({ ...outcome, pauses, formatter: typeof Error.prepareStackTrace === 'function' }))
+`
+
+test('R5-ADV-2 (E16) an ordinary test throws no exception inside the library when Error.prepareStackTrace holds a formatter', t => {
+  const setups: Record<string, string> = {
+    // Node.js 20.20 and later
+    "Node.js's own formatter": '',
+    // source-map-support installs a data property
+    'an installed formatter': `Error.prepareStackTrace = (error, frames) => String(error) + frames.map(frame => '\\n    at ' + frame).join('')`
+  }
+  for (const [name, setup] of Object.entries(setups)) {
+    const result = runScript(withDebugger(setup, ordinaryTest))
+    if (!result.formatter) {
+      // Node.js before 20.20 without an installed formatter: the frames are still read by a formatting that throws
+      t.log(`${name}: no formatter in ${process.version}, ${result.pauses.length} pauses`)
+      continue
+    }
+    // 45facfb: 40 pauses, two for every step of a chain (CallSite.js, peekFirstFrame and readFirstFrame)
+    t.deepEqual(result.pauses, [], name)
+    t.deepEqual({ user: result.user, calledAt: result.calledAt }, { user: { id: 1 }, calledAt: true }, name)
+  }
+  t.pass()
 })

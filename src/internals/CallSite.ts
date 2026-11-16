@@ -95,10 +95,27 @@ export const captureStack = (stackStart: Function): StackHolder => {
   return holder
 }
 
+/**
+ * E16: the stack trace of a holder whose call sites were read while Error.prepareStackTrace held a formatter (Node.js's
+ * own from 20.20 on, or an installed one such as source-map-support's): what the temporary formatter returned in its
+ * place, so that V8 keeps nothing else. Its text is made when it is first needed, by the formatter in place then (the
+ * one in place when the call sites were read if there is none any more), from the same call sites, as V8 would.
+ */
+class DeferredStack {
+  constructor(readonly callSites: readonly unknown[], readonly formatter: Function) { }
+}
+
 /** The stack trace of a holder as text, formatted the usual way (undefined if it is not text). */
 export const stackText = (holder: StackHolder): string | undefined => {
   try {
-    const stack = holder.stack
+    let stack = holder.stack
+    if (stack instanceof DeferredStack) {
+      const current = errorConstructor[PREPARE_STACK_TRACE]
+      const formatter = typeof current === 'function' ? current : stack.formatter
+      // as V8 calls it: Node.js calls Error.prepareStackTrace(error, callSites) as a method of Error
+      stack = Reflect.apply(formatter, Error, [holder, stack.callSites])
+      holder.stack = stack
+    }
     return typeof stack === 'string' ? stack : undefined
   } catch {
     return undefined
@@ -127,29 +144,54 @@ const PREPARE_STACK_TRACE = 'prepareStackTrace'
 /** Thrown by peekFirstFrame, so that V8 does not keep a formatted stack. */
 const PEEKED = Object.freeze({ peeked: true })
 let readFrame: Frame | null = null
+let read = false
+/** The formatter in place while keepFirstFrame reads the call sites. */
+let formatter: Function | undefined
 
-/** Reads the first frame, and throws, so that the holder keeps its call sites for its text. */
-const peekFirstFrame = (_error: unknown, callSites: unknown): never => {
+const readCallSites = (callSites: unknown): void => {
   readFrame = Array.isArray(callSites) ? frameOf(callSites[0]) : null
+  read = true
+}
+
+/**
+ * Reads the first frame, and throws, so that the holder keeps its call sites for its text: for a holder whose text may
+ * be shown, when Error.prepareStackTrace holds no formatter (Node.js before 20.20 without an installed one). V8 keeps
+ * nothing of a formatting that throws.
+ */
+const peekFirstFrame = (_error: unknown, callSites: unknown): never => {
+  readCallSites(callSites)
   throw PEEKED
+}
+
+/**
+ * E16: reads the first frame without throwing (a debugger set to pause on caught exceptions would stop there), for a
+ * holder whose text may be shown, while Error.prepareStackTrace holds a formatter: V8 keeps what this returns, a
+ * DeferredStack with the call sites, and the text is made from them by that formatter when it is needed (stackText).
+ */
+const keepFirstFrame = (_error: unknown, callSites: unknown): unknown => {
+  readCallSites(callSites)
+  return Array.isArray(callSites) && formatter !== undefined ? new DeferredStack(callSites, formatter) : undefined
 }
 
 /** Reads the first frame, and lets V8 keep the result: for a capture that is never shown (cheaper than a peek). */
 const takeFirstFrame = (_error: unknown, callSites: unknown): null => {
-  readFrame = Array.isArray(callSites) ? frameOf(callSites[0]) : null
+  readCallSites(callSites)
   return null
 }
 
+type Prepare = typeof peekFirstFrame | typeof keepFirstFrame | typeof takeFirstFrame
+
 /**
  * Formats a holder's stack with `prepare` in place of Error.prepareStackTrace, and puts the exact property back (E5).
- * A writable data property (Node.js 21 and later have one, as source-map-support installs one) is assigned and
+ * A writable data property (Node.js 20.20 and later have one, as source-map-support installs one) is assigned and
  * assigned back, which keeps its attributes. Otherwise the property is redefined for the moment, and its descriptor is
  * restored or the property deleted. A property that cannot be redefined without changing it for good (a
  * non-configurable accessor, as the stack-chain package can install, or a non-configurable read-only value) is left
  * alone: then there is no frame, and adjacency decides (E2).
+ * `keep`: the holder's text may be shown later. Then its call sites are kept for it: with a formatter in place, in a
+ * DeferredStack (E16), otherwise by a peek that throws.
  */
-const readFirstFrame = (holder: StackHolder, prepare: typeof peekFirstFrame | typeof takeFirstFrame): Frame | null => {
-  const errorConstructor = Error as unknown as Record<string, unknown>
+const readFirstFrame = (holder: StackHolder, keep: boolean): Frame | null => {
   let original: PropertyDescriptor | undefined
   try {
     original = Object.getOwnPropertyDescriptor(errorConstructor, PREPARE_STACK_TRACE)
@@ -158,6 +200,15 @@ const readFirstFrame = (holder: StackHolder, prepare: typeof peekFirstFrame | ty
   }
   const assign = original !== undefined && original.writable === true
   if (!assign && original !== undefined && original.configurable !== true) return null
+  let prepare: Prepare = takeFirstFrame
+  if (keep) {
+    let current: unknown
+    try {
+      current = original === undefined ? undefined : 'value' in original ? original.value : errorConstructor[PREPARE_STACK_TRACE]
+    } catch { /* a getter that throws: no formatter */ }
+    formatter = typeof current === 'function' ? current : undefined
+    prepare = formatter !== undefined ? keepFirstFrame : peekFirstFrame
+  }
   try {
     if (assign) errorConstructor[PREPARE_STACK_TRACE] = prepare
     else Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, { value: prepare, writable: true, configurable: true, enumerable: false })
@@ -165,21 +216,21 @@ const readFirstFrame = (holder: StackHolder, prepare: typeof peekFirstFrame | ty
     return null
   }
   readFrame = null
-  let read = false
+  read = false
+  let stack: unknown
   try {
-    void holder.stack
-    read = prepare === takeFirstFrame
-  } catch (error) {
-    read = error === PEEKED
-  } finally {
+    stack = holder.stack
+  } catch { /* PEEKED */ } finally {
+    formatter = undefined
     try {
       if (assign) errorConstructor[PREPARE_STACK_TRACE] = original!.value
       else if (original === undefined) delete errorConstructor[PREPARE_STACK_TRACE]
       else Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, original)
     } catch { /* it could be redefined a moment ago */ }
   }
-  // a stack formatted earlier (its text was read) has no call sites left to look at
-  return read ? readFrame : null
+  if (read) return readFrame
+  // read earlier: a deferred stack still has its call sites, a stack formatted as text has none left to look at
+  return stack instanceof DeferredStack ? frameOf(stack.callSites[0] as V8CallSite | undefined) : null
 }
 
 /*
@@ -193,7 +244,7 @@ let lastFrame: Frame | null = null
 /** The first frame outside the library of a capture, or null when there is none. The capture keeps its text. */
 export const frameOfStack = (holder: StackHolder): Frame | null => {
   if (holder !== lastHolder) {
-    lastFrame = readFirstFrame(holder, peekFirstFrame)
+    lastFrame = readFirstFrame(holder, true)
     lastHolder = holder
   }
   return lastFrame
@@ -203,7 +254,7 @@ export const frameOfStack = (holder: StackHolder): Frame | null => {
  * The first frame outside the library of the current operation (the trap function is the stack start), for an
  * operation that records nothing (a setup, an assertion): its capture is read once and never shown.
  */
-export const currentFrame = (stackStart: Function): Frame | null => readFirstFrame(captureStack(stackStart), takeFirstFrame)
+export const currentFrame = (stackStart: Function): Frame | null => readFirstFrame(captureStack(stackStart), false)
 
 /**
  * D25: whether two operations belong to the same expression: their call sites are in the same file and the same
