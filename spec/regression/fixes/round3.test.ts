@@ -1,7 +1,7 @@
 import test, { ExecutionContext } from 'ava'
 import { spawnSync } from 'child_process'
 import * as path from 'path'
-import { inspect, promisify } from 'util'
+import { inspect, promisify, types } from 'util'
 
 import { Substitute, Arg, configure, mimick } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
@@ -42,6 +42,83 @@ const reportsNothingLater = (t: ExecutionContext, run: () => unknown) => {
     clock.uninstall()
   }
 }
+
+test('ENG2-5 (D27) Arg matchers nested in plain objects and arrays match deeply, and make the call a setup', t => {
+  const repository = Substitute.for<any>()
+  repository.save({ id: Arg.any(), name: 'bob' }).returns('saved')
+  t.is(repository.save({ id: 1, name: 'bob' }), 'saved')
+  t.is(repository.save({ name: 'bob', id: 'x' }), 'saved', 'in any key order')
+  t.true(types.isProxy(repository.save({ id: 1, name: 'ann' })))
+  t.true(types.isProxy(repository.save({ id: 1, name: 'bob', extra: true })), 'the same keys are needed')
+  t.true(types.isProxy(repository.save({ name: 'bob' })))
+  t.true(types.isProxy(repository.save(Object.assign(Object.create(null), { id: 1, name: 'bob' }))), 'and the same prototype')
+  // D3: the setup was not recorded, the six real calls were
+  repository.received(6).save(Arg.all())
+  repository.received(2).save({ id: Arg.any(), name: 'bob' })
+  repository.received(1).save({ id: Arg.is((id: unknown) => id === 1), name: 'bob' })
+  repository.didNotReceive().save({ id: Arg.any('string'), name: 'ann' })
+  t.throws(() => repository.received(1).save({ id: Arg.any('boolean') }), { instanceOf: SubstituteException })
+
+  // arrays: the same length, item by item; Arg.all() as the last item matches the remaining items
+  const list = Substitute.for<any>()
+  list.add([Arg.any('number'), 'x']).returns('pair')
+  t.is(list.add([1, 'x']), 'pair')
+  t.true(types.isProxy(list.add([1, 'x', 2])))
+  t.true(types.isProxy(list.add(['1', 'x'])))
+  list.log(['level', Arg.all()]).returns('rest')
+  t.is(list.log(['level']), 'rest')
+  t.is(list.log(['level', 1, { a: 2 }]), 'rest')
+  t.true(types.isProxy(list.log(['other'])))
+  t.throws(() => list.find([Arg.all(), 1]), { instanceOf: SubstituteException, message: /must be the last item/ })
+
+  // deep nesting, null-prototype objects, symbol keys, Arg.all() as an object value
+  const key = Symbol('key')
+  const deep = Substitute.for<any>()
+  deep.post({ body: { items: [{ sku: Arg.is((sku: string) => sku.startsWith('A')) }] }, [key]: Arg.all() }).returns('deep')
+  t.is(deep.post({ body: { items: [{ sku: 'A-1' }] }, [key]: undefined }), 'deep')
+  t.true(types.isProxy(deep.post({ body: { items: [{ sku: 'B-1' }] }, [key]: 1 })))
+  t.true(types.isProxy(deep.post({ body: { items: [{ sku: 'A-1' }] } })))
+  deep.put(Object.assign(Object.create(null), { id: Arg.any() })).returns('bare')
+  t.is(deep.put(Object.assign(Object.create(null), { id: 7 })), 'bare')
+
+  // D4: ranked "with-predicate": a literal setup wins, and it wins over a wildcard
+  const ranked = Substitute.for<any>()
+  ranked.get(Arg.all()).returns('wildcard')
+  ranked.get({ id: Arg.any() }).returns('nested')
+  ranked[configure]().get({ id: 1 }).returns('literal') // get({ id: 1 }) already answers 'nested' (D5)
+  t.is(ranked.get({ id: 1 }), 'literal')
+  t.is(ranked.get({ id: 2 }), 'nested')
+  t.is(ranked.get(3), 'wildcard')
+  // re-configuring the same nested specification replaces it
+  ranked.get({ id: Arg.any() }).returns('nested again')
+  t.is(ranked.get({ id: 2 }), 'nested again')
+  t.is(inspect(ranked).split('nested').length - 1, 1, 'one nested substitution, printed with its matcher')
+  t.true(inspect(ranked).includes("get({ id: Arg.any{any} }) => returns('nested again')"))
+
+  // a throwing predicate is a non-match, and the message says so
+  const throwing = Substitute.for<any>()
+  throwing.run({ value: 1 })
+  const message = messageOf(() => throwing.received(1).run({ value: Arg.is(() => { throw new Error('boom') }) }))
+  t.true(message.includes('an Arg.is predicate threw while matching this call: Error: boom'))
+
+  // matchers inside class instances, Maps and Sets stay literal (the call is a real call)
+  const literal = Substitute.for<any>()
+  class Box { constructor(public value: unknown) { } }
+  literal.put(new Box(Arg.any()))
+  literal.put(new Map([['k', Arg.any()]]))
+  literal.received(2).put(Arg.all())
+
+  // cycles end, in the specification and in the actual arguments
+  const cyclicSpecification: any = { name: Arg.any() }
+  cyclicSpecification.self = cyclicSpecification
+  const cycles = Substitute.for<any>()
+  cycles.visit(cyclicSpecification).returns('cyclic')
+  const cyclicValue: any = { name: 'x' }
+  cyclicValue.self = cyclicValue
+  t.is(cycles.visit(cyclicValue), 'cyclic')
+  cycles.visit({ name: 'x', self: { name: 'y', self: cyclicValue } })
+  t.notThrows(() => cycles.received(2).visit(Arg.all()))
+})
 
 test('ENG2-6 (D28) unconfigured well-known protocol symbols read as undefined and are not recorded', async t => {
   const callback = Substitute.for<any>()
