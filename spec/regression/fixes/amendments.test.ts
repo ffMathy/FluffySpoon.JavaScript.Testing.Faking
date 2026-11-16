@@ -399,3 +399,39 @@ test('D2 an argument object that is mutated after a call keeps its auto-substitu
   query.page = 2
   t.notThrows(() => service.find(query).received(1).log('first'))
 })
+
+test('D10 / D11 received(Arg...) followed by a member access is an assertion and reports the invalid count', t => {
+  const calculator = Substitute.for<any>()
+  calculator.add(1)
+  calculator.value = 1
+
+  // it used to configure a member called `received` silently, so the "assertion" always passed
+  for (const count of [Arg.any(), Arg.is(() => true), Arg.all()]) {
+    t.throws(() => calculator.received(count).add(1), { instanceOf: SubstituteException, message: /non-negative integer/ })
+    t.throws(() => calculator.received(count).add(2), { instanceOf: SubstituteException, message: /non-negative integer/ })
+    t.throws(() => { calculator.received(count).value = 1 }, { instanceOf: SubstituteException, message: /non-negative integer/ })
+    t.throws(() => calculator.received(count).value, { instanceOf: SubstituteException, message: /non-negative integer/ })
+  }
+  t.throws(() => calculator.logger.received(Arg.any()).info('x'), { instanceOf: SubstituteException, message: /non-negative integer/ })
+
+  // didNotReceive() ignores its arguments, as without matchers: these are real assertions
+  t.notThrows(() => calculator.didNotReceive(Arg.any()).add(2))
+  t.throws(() => calculator.didNotReceive(Arg.any()).add(1), { instanceOf: SubstituteException, message: /Call count mismatch/ })
+  t.notThrows(() => { calculator.didNotReceive(Arg.any()).value = 2 })
+  t.throws(() => { calculator.didNotReceive(Arg.any()).value = 1 }, { instanceOf: SubstituteException, message: /Call count mismatch/ })
+
+  // none of this was recorded or configured
+  t.notThrows(() => calculator.didNotReceive().received)
+  t.notThrows(() => calculator.didNotReceive().didNotReceive)
+  t.true(types.isProxy(calculator.received(5)))
+
+  // followed by a substitution method it stays a setup of a member called received (D3, D11)
+  const overlapping = Substitute.for<any>()
+  overlapping.received(Arg.any()).returns('any')
+  overlapping.didNotReceive(Arg.all()).returns('all')
+  t.is(overlapping.received(7), 'any')
+  t.is(overlapping.didNotReceive(), 'all')
+  // ... and so is everything in a configure() view
+  overlapping[configure]().received(Arg.any()).returns('configured')
+  t.is(overlapping.received(8), 'configured')
+})

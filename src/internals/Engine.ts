@@ -284,7 +284,7 @@ const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStar
     const specification = RecordedArguments.forSpecification(args)
     retract(read)
     retract(chainPrevious)
-    return configureCall(state, key, specification)
+    return configureCall(state, key, specification, isStringAssertionKey(key))
   }
 
   let record: CallRecord
@@ -533,9 +533,18 @@ const nestedEntry = (state: SubstituteState, key: PropertyKey, specification: Re
   return entry
 }
 
-/** A call in a setup: `.returns(...)` configures it, anything else configures the auto-substitute it returns. */
-const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments): any => {
+/**
+ * A call in a setup: `.returns(...)` configures it, anything else configures the auto-substitute it returns.
+ *
+ * `stringAssertion` marks a call of the string `received` / `didNotReceive` with Arg matchers among its
+ * arguments, outside a configure() view. Followed by a substitution method it is a setup of a member with that
+ * name like any other; followed by any other member access or an assignment it is the assertion API (D11), so
+ * `sub.received(Arg.any()).add(1)` reports the invalid count (D10) instead of configuring something silently.
+ */
+const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, stringAssertion = false): any => {
   const print: Printer = options => withPrintGuard(() => `method<${memberLabel(key)}>: ${formatArguments(specification.value, colorsOf(options))} (configure)`)
+  const assertionCount = (start: Function): ExpectedCount =>
+    key === 'didNotReceive' ? 0 : validateExpectedCount(specification.value?.[0], start)
   return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
@@ -543,10 +552,13 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
       if (method !== undefined) return function substitution(...values: any[]) {
         state.addCallSubstitution(key, specification, method, values)
       }
+      if (stringAssertion) return assertionMember(state, property, assertionCount(get), get)
       return configureMember(nestedEntry(state, key, specification).state, property)
     },
-    set: function set() {
-      throw configureSetError(set)
+    set: function set(_target: unknown, property: PropertyKey, value: unknown) {
+      if (!stringAssertion) throw configureSetError(set)
+      assertSet(state, property, value, assertionCount(set), set)
+      return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       return configureCall(nestedEntry(state, key, specification).state, SELF, RecordedArguments.forSpecification(args))
