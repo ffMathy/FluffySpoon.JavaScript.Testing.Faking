@@ -1,38 +1,67 @@
-import { NoArgumentMockObjectMixin } from './SubstitutionLevel'
-import { FunctionSubstituteWithOverloads, NoArgumentFunctionSubstitute } from './FunctionSubstitute'
+import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
+import { FunctionSubstitute } from './FunctionSubstitute'
 
-export type PropertySubstitute<TObject, TReturnType> = 
-    TReturnType & 
-    NoArgumentMockObjectMixin<TObject, TReturnType>;
+/** A member read on a substitute: its value intersected with the setup API (`sub.isEnabled.returns(true)`). */
+export type PropertySubstitute<TValue> = SubstitutionResult<TValue, () => TValue>
 
-export type TryToExpandNonArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
-    TObject[TProperty] extends (...args: []) => unknown ? 
-        () => void : 
-        {}
+/**
+ * The object type whose members the views below map.
+ * A type with a string index signature is mapped directly: a homomorphic mapping over it keeps the named members next to
+ * the index signature (T:TY-8), whereas `keyof T` is just `string | number`. Any other type is first turned into a plain
+ * object type with the same members, so that primitives (`Substitute.for<string>()`) and arrays are mapped member by
+ * member too (a homomorphic mapping would return a primitive unchanged and only map the elements of an array).
+ */
+type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 
-export type TryToExpandArgumentedTerminatingFunction<TObject, TProperty extends keyof TObject> =
-    TObject[TProperty] extends (...args: any) => any ? 
-        FunctionSubstituteWithOverloads<TObject[TProperty], true> : 
-        {}
+// All views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
+// (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
+//
+// Special members (T:TY-16, D20). At runtime a substitute never exposes `then`, so that it is not a thenable
+// (`await sub` resolves to the substitute itself); the typings make `then` `never`. `toJSON` is answered by the
+// substitute itself (it serializes the substitute): it keeps its declared type on the substitute (through `& T`) but
+// has no setup API, and it cannot be configured or asserted.
+// Symbol.toPrimitive and util.inspect.custom are special-cased at runtime as well but are not reflected here.
 
-type TryToExpandNonArgumentedFunctionSubstitute<TObject, TProperty extends keyof TObject> =
-    TObject[TProperty] extends (...args: []) => infer R ? 
-        NoArgumentFunctionSubstitute<TObject, R> : 
-        {}
+type SubstituteMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'substitute'> & PropertySubstitute<TValue>
 
-type TryToExpandArgumentedFunctionSubstitute<TObject, TProperty extends keyof TObject> =
-    TObject[TProperty] extends (...args: infer F) => any ? 
-        F extends [] ? 
-            {} : 
-            FunctionSubstituteWithOverloads<TObject[TProperty]> : 
-        {}
-
-type TryToExpandPropertySubstitute<TObject, TProperty extends keyof TObject> = 
-    PropertySubstitute<TObject, TObject[TProperty]>
-
-export type ObjectSubstituteTransformation<K, T = Omit<K, ''>> = {
-    [P in keyof T]: 
-        TryToExpandNonArgumentedFunctionSubstitute<T, P> & 
-        TryToExpandArgumentedFunctionSubstitute<T, P> & 
-        TryToExpandPropertySubstitute<T, P>;
+type SubstituteMembers<T> = {
+  [P in keyof T]-?:
+    P extends 'then' ? never :
+    P extends 'toJSON' ? unknown :
+    SubstituteMember<T[P]>
 }
+
+/** The members of a substitute (without the assertion and configuration methods). */
+export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>>
+
+type AssertionMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
+
+type AssertionMembers<T> = {
+  [P in keyof T]-?:
+    P extends 'then' ? never :
+    P extends 'toJSON' ? never :
+    AssertionMember<T[P]>
+}
+
+/**
+ * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
+ * member type (`sub.received().isEnabled = true`).
+ */
+export type TerminatingObject<T> = AssertionMembers<Members<T>>
+
+type ConfigurationMember<TValue> =
+  FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
+
+type ConfigurationMembers<T> = {
+  [P in keyof T]-?:
+    P extends 'then' ? never :
+    P extends 'toJSON' ? never :
+    ConfigurationMember<T[P]>
+}
+
+/**
+ * The object returned by `sub[configure]()`. Member reads and calls on it are always setups, so they only expose the
+ * setup API. The string forms (`.returns`, `.throws`, ...) are always offered here: the configured value is never
+ * returned from this view, so there is nothing for them to conflict with.
+ */
+export type ConfigureView<T> = ConfigurationMembers<Members<T>>
