@@ -1,3 +1,5 @@
+import { inspect } from 'util'
+
 export type PredicateFunction<T> = (arg: T) => boolean
 export type ArgumentOptions = {
   inverseMatch?: boolean
@@ -35,6 +37,18 @@ class BaseArgument<T> {
   [Symbol.for('nodejs.util.inspect.custom')]() {
     return this._description
   }
+}
+
+// E7: util.inspect looks for the runtime's own util.inspect.custom, which is another symbol than the registered one on
+// Node.js 10.0 to 10.11; without it, failure messages would print matchers as raw objects there.
+const registeredInspectCustom = Symbol.for('nodejs.util.inspect.custom')
+const runtimeInspectCustom = (inspect as { custom?: symbol }).custom
+if (runtimeInspectCustom !== undefined && runtimeInspectCustom !== registeredInspectCustom) {
+  Object.defineProperty(BaseArgument.prototype, runtimeInspectCustom, {
+    value: (BaseArgument.prototype as any)[registeredInspectCustom],
+    writable: true,
+    configurable: true
+  })
 }
 
 export class Argument<T> extends BaseArgument<T> {
