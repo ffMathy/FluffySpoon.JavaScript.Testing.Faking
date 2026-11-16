@@ -38,7 +38,7 @@ Blocks can be marked with an HTML comment right before the fence (several direct
 | `<!-- docs-check: uses=calculator -->` | Runs the named blocks' code first (and the code they use in turn), in the same module. Every block gets its own fresh copy. Several names are separated by commas. |
 | `<!-- docs-check: compile-only -->` | Only type-checked, for example code that needs a test runner. |
 | `<!-- docs-check: esm -->` | An ES module (`.mts` / `.mjs`) instead of CommonJS. |
-| `<!-- docs-check: uncaught=SubstituteException -->` | The block must end with that uncaught exception (an assertion reported on `process.nextTick`). |
+| `<!-- docs-check: uncaught=SubstituteException -->` | The block must end with that uncaught exception (a check reported later, from a microtask). |
 | `<!-- docs-check: error-message -->` | On a ```` ```text ```` block: must equal `<name>: <message>` of the error thrown by the last `// throws` line of the checked block before it. Lines starting with `called at` match any stack frame. |
 | `<!-- docs-check: skip <reason> -->` | Not checked at all: code for an old version, or deliberately partial code. |
 

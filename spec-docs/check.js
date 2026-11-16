@@ -18,7 +18,7 @@
 //   uses=<id>[,<id>]  the named blocks' code (and the code they use) runs first, in the same module; each block
 //                     gets a fresh copy
 //   esm               an ES module (.mts / .mjs) instead of CommonJS
-//   uncaught=<Name>   the block must end with an uncaught <Name> (an assertion reported on process.nextTick)
+//   uncaught=<Name>   the block must end with an uncaught <Name> (a check reported later, from a microtask)
 // A ```text block marked <!-- docs-check: error-message --> must equal "<name>: <message>" of the error thrown by the
 // last `// throws` line of the preceding checked block (lines starting with "called at" match any stack frame).
 //
