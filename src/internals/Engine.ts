@@ -1,6 +1,6 @@
 import { inspect, InspectOptions } from 'util'
 
-import { substituteMarker } from '../shared'
+import { isSubstituteProxy, substituteMarker } from '../shared'
 import { AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { CallRecord, currentSequence, retract } from './CallRecord'
 import { RecordedArguments } from './RecordedArguments'
@@ -415,7 +415,11 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
         }
       }
       if (isFunctionHelperKey(property)) return functionHelper(property, (args, start) => invoke(state, key, args, start, record))
-      return resolve()[property]
+      // D32: a method of the property value runs with the value as `this`, as `value.method()` would
+      // (a substitute value records and resolves its own calls)
+      const resolved = resolve()
+      const member = resolved[property]
+      return typeof member === 'function' && !isSubstituteProxy(resolved) ? member.bind(resolved) : member
     },
     set: function set(_target: unknown, property: PropertyKey, newValue: unknown) {
       resolve()[property] = newValue

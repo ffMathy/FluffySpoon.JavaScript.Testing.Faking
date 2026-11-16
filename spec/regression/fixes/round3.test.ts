@@ -104,6 +104,40 @@ test('ENG2-7 (D28) a substitute is not a jest asymmetric matcher unless asymmetr
   matcher.received(1).asymmetricMatch(42)
 })
 
+test('ENG2-12 (D32) methods read from the value of a member configured as property and method run on that value', t => {
+  const sizes = Substitute.for<any>()
+  sizes.size(Arg.any()).returns(10)
+  sizes.size.returns(3)
+  t.is(sizes.size.toFixed(1), '3.0')
+  t.is(sizes.size(1), 10)
+
+  const dates = Substitute.for<any>()
+  dates.when(Arg.all()).returns('x')
+  dates.when.returns(new Date(0))
+  t.is(dates.when.getTime(), 0)
+
+  const maps = Substitute.for<any>()
+  maps.items(Arg.all()).returns([])
+  maps.items.returns(new Map([['a', 1]]))
+  t.is(maps.items.get('a'), 1)
+  t.true(maps.items.has('a'))
+
+  const names = Substitute.for<any>()
+  names.name(1).returns('x')
+  names.name.returns('Ann')
+  t.is(names.name.toUpperCase(), 'ANN')
+  t.is(names.name.length, 3)
+
+  // a substitute value records and resolves its own calls
+  const inner = Substitute.for<any>()
+  inner.greet().returns('hi')
+  const outer = Substitute.for<any>()
+  outer.child(1).returns(1)
+  outer.child.returns(inner)
+  t.is(outer.child.greet(), 'hi')
+  inner.received(1).greet()
+})
+
 test('ENG2-13 (D33) a property-style didNotReceive().m on a member that was only invoked is reported later', t => {
   const logger = Substitute.for<any>()
   logger.error('disk full')
