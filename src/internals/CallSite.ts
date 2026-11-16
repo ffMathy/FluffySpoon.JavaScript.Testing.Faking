@@ -31,6 +31,52 @@ export type StackHolder = { stack?: unknown }
  */
 export type Frame = { readonly file: string | null | undefined, readonly enclosing: string | null }
 
+const errorConstructor = Error as unknown as Record<string, unknown>
+const STACK_TRACE_LIMIT = 'stackTraceLimit'
+const NONE: unique symbol = Symbol('none')
+const NONE_OWN: unique symbol = Symbol('no own property')
+/** E15: the last limit that could not be lowered for a moment (read-only, getter-only, frozen): it is not tried again. */
+let fixedLimit: unknown = NONE
+
+/**
+ * Lowers Error.stackTraceLimit to 1 for a moment, and gives what to restore: NONE when it was left as it was, because
+ * it is 0 or 1 already or cannot be changed (E15: read-only, getter-only, Object.freeze(Error); then the capture takes
+ * as many frames as the limit says, which is slower but just as correct). undefined for a limit that did not exist.
+ */
+const lowerLimit = (): unknown => {
+  let limit: unknown
+  try {
+    limit = errorConstructor[STACK_TRACE_LIMIT]
+  } catch {
+    return NONE
+  }
+  if ((limit as number) >= 0 && (limit as number) <= 1) return NONE
+  if (limit === fixedLimit) return NONE
+  // a limit that does not exist is restored by deleting it again, not by leaving an own property `undefined` behind
+  if (limit === undefined && !Object.prototype.hasOwnProperty.call(errorConstructor, STACK_TRACE_LIMIT)) limit = NONE_OWN
+  try {
+    errorConstructor[STACK_TRACE_LIMIT] = 1
+  } catch {
+    fixedLimit = limit === NONE_OWN ? undefined : limit
+    return NONE
+  }
+  if (errorConstructor[STACK_TRACE_LIMIT] !== 1) {
+    // an accessor that ignores what it is given: nothing to restore
+    fixedLimit = limit === NONE_OWN ? undefined : limit
+    return NONE
+  }
+  fixedLimit = NONE
+  return limit
+}
+
+const restoreLimit = (limit: unknown): void => {
+  if (limit === NONE) return
+  try {
+    if (limit === NONE_OWN) delete errorConstructor[STACK_TRACE_LIMIT]
+    else errorConstructor[STACK_TRACE_LIMIT] = limit
+  } catch { /* it could be changed a moment ago */ }
+}
+
 // Only the call site (the first frame) is ever used, so only one frame is collected: collecting the whole stack for
 // every call would dominate the cost of a call, especially with a raised stackTraceLimit. Error.stackTraceLimit = 0
 // is honoured: then there is no call site at all.
@@ -40,12 +86,11 @@ export const captureStack = (stackStart: Function): StackHolder => {
     holder.stack = new Error().stack
     return holder
   }
-  const stackTraceLimit = Error.stackTraceLimit
-  if (!(stackTraceLimit >= 0 && stackTraceLimit <= 1)) Error.stackTraceLimit = 1
+  const limit = lowerLimit()
   try {
     Error.captureStackTrace(holder, stackStart)
   } finally {
-    Error.stackTraceLimit = stackTraceLimit
+    restoreLimit(limit)
   }
   return holder
 }
