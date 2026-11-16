@@ -21,7 +21,9 @@ export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
  */
 type Members<T> = { indexed: T, plain: Pick<T, keyof T> }[IndexKind<T>]
 
-type Member<T, P> = T[P & keyof T]
+// `Extract`, not `P & keyof T`: intersecting a key with a large key union (lib.dom's Document has hundreds of members)
+// distributes over the whole union each time a member type is computed.
+type Member<T, P> = T[Extract<P, keyof T>]
 
 // The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
