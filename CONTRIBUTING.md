@@ -28,8 +28,10 @@ npm ci
 | --- | --- |
 | `src/` | The library source (TypeScript). `src/index.ts` is the public entry point. |
 | `spec/` | The runtime specs, run with [ava](https://github.com/avajs/ava). |
+| `spec-types/` | Type-level tests of the public typings (`npm run test:types`), and `spec-types/min-ts/`, which checks the built typings with the oldest supported TypeScript (`npm run test:types:min-ts`). |
+| `spec-docs/` | The documentation check (`npm run test:docs`): it type-checks and runs the code examples of the README, MIGRATION and CHANGELOG. See [spec-docs/README.md](spec-docs/README.md). |
 | `packaging/` | Packaging checks (run as part of `npm test`), the ES module wrapper generator and the smoke tests. |
-| `compatibility-checks/` | A separate npm project that checks the packed package with ava, jest, mocha, node:test and vitest. |
+| `compatibility-checks/` | A separate npm project that checks the packed package with ava, jest, mocha, node:test and vitest, and bundles it with Rollup, webpack, esbuild and Vite. |
 | `dist/` | Build output that gets published (generated, not committed). |
 | `dist-spec/` | Compiled specs used by `npm test` (generated, not committed). |
 
@@ -43,13 +45,28 @@ This compiles `src/` into `dist/` with `tsc` (CommonJS plus `.d.ts` typings) and
 `packaging/build-esm.js`, which generates the native ES module entry point next to it:
 
 - `dist/index.mjs` re-exports every export of `dist/index.js`, plus the default export. It wraps the CommonJS
-  build instead of being a second copy, so CommonJS and ESM consumers share one module instance.
+  build instead of being a second copy, so CommonJS and ESM consumers share one module instance. Tools disagree
+  about what a default import of a CommonJS module that sets `__esModule` is: Node.js, webpack and esbuild give
+  `module.exports`, while Rollup's commonjs plugin, Vite SSR and vitest with inlined dependencies give
+  `exports.default`. The wrapper therefore imports both the default and the namespace of `dist/index.js`, uses
+  whichever one holds the complete exports, and throws at import time if neither does. A packaging test simulates
+  each of these interop shapes, and the compatibility checks bundle the package with the real tools.
 - `dist/index.d.mts` holds the matching typings for TypeScript's `node16`, `nodenext` and `bundler` resolution.
 
 The `exports` map in `package.json` sends `import` to the ES module entry and everything else (`require`, older
-resolvers) to the CommonJS entry. `main` and `types` are kept for resolvers that do not read `exports`. Deep
-imports of compiled files (`@fluffy-spoon/substitute/dist/...`, with or without `.js`) stay available through
-the `./dist/*` subpaths, but they are not public API.
+resolvers) to the CommonJS entry. `exports["."]` is an array: the conditions object comes first, and the plain
+CommonJS entry `./dist/index.js` follows as a fallback for Node.js 13.0 and 13.1, which read `exports` but do not
+understand conditions (without the fallback, `require` fails there). `main` and `types` are kept for resolvers that
+do not read `exports`.
+
+The package supports Node.js 10 and newer with `require`. The ES module entry needs Node.js 12.17 or newer on 12.x,
+or 13.7 or newer (13.2 to 13.6 have ES modules but not the `import` condition, so `import` gets the CommonJS entry
+and named imports fail there).
+
+Deep imports of compiled files (`@fluffy-spoon/substitute/dist/...`, with or without `.js`) stay available through
+the `./dist/*` subpaths, but they are not public API. They need subpath patterns with trailers (Node.js 14.19 or
+newer, or 16.9 or newer) or a Node.js version that ignores `exports` (older than 12.17); on 12.17 to 12.22, all
+of 13.x, 14.0 to 14.18 and 16.0 to 16.8 they fail.
 
 ## Test
 
@@ -82,14 +99,54 @@ npm run build:spec && npx ava spec/regression/returns.spec.ts --match '*order*'
 npm run test:types
 ```
 
-Type-level tests check the public typings with the TypeScript compiler. CI runs them with
-`npm run test:types --if-present`.
+Type-level tests in `spec-types/` check the public typings with the TypeScript compiler of this repository
+(`spec-types/` with `strict`, `spec-types/loose/` without). CI runs them with `npm run test:types --if-present`.
+
+### Oldest supported TypeScript
+
+```sh
+npm run test:types:min-ts
+```
+
+The README promises TypeScript 3.6 or newer. This builds `dist/` and type-checks `spec-types/min-ts/consumer.ts`
+against the built typings (resolved through `package.json` like an installed copy) with TypeScript 3.6, with
+`skipLibCheck` off and on. TypeScript 3.6 is installed on the fly with `npx`, so this needs access to the npm
+registry. To check other versions after `npm run build`, pass them explicitly:
+`node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
+`@ts-expect-error`, for example). If a change makes the typings need a newer TypeScript, that is a breaking change:
+raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the documented minimum together.
+
+### Documentation examples
+
+```sh
+npm run test:docs
+```
+
+This builds `dist/` and checks every code example in `README.md`, `MIGRATION.md` and `CHANGELOG.md`: TypeScript
+examples are type-checked against the built package and run, JavaScript examples are run, and their
+`// prints ...` and `// throws ...` comments must hold. Relative links and `#anchors` must resolve. It then runs a
+self-test against deliberately broken fixtures. A change to the library's behaviour or typings that breaks a
+documented example fails this check, so update the example in the same change. How to write checked examples,
+and the directives that mark blocks (`compile-only`, `esm`, `skip`, ...), are described in
+[spec-docs/README.md](spec-docs/README.md).
 
 ### Compatibility checks
 
-`compatibility-checks/` is a separate npm project with its own dependencies. It verifies that every supported
-test runner (ava, jest, mocha, node:test and vitest) reports a failing Substitute assertion, including one that
-is thrown after the test function has returned. It runs against the packed package, not against `src/`:
+`compatibility-checks/` is a separate npm project with its own dependencies. It runs against the packed package,
+not against `src/`, and checks two things:
+
+- `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
+  inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
+  after the test function has returned. It also runs `test-runners/jest-matchers/` (`npm run validate:jest-matchers`),
+  which must pass: substitutes used inside jest matchers compare by identity, so a non-matching
+  `expect(fn).toHaveBeenCalledWith(substitute)` fails and `expect(42).toEqual(substitute)` fails with jest's normal
+  assertion error.
+- `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
+  (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
+  The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
+  `test-runners/vitest-inline/exports.test.ts`, which checks the same.
+
+Run them with:
 
 ```sh
 cd compatibility-checks
@@ -103,19 +160,24 @@ nor `package-lock.json` of the compatibility checks changes. From the repository
 does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
-`mocha`, `nodejs` or `vitest`). Each of them is expected to fail with exactly one failing test.
+`mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
+`npm run validate:jest-matchers` is the exception: it is expected to pass.
 
 ## Continuous integration
 
 `.github/workflows/nodejs.yml` runs on every push and pull request:
 
-- **test**: `npm ci`, `npm run build`, `npm test` and `npm run test:types --if-present` on every supported
-  Node.js LTS line (22, 24 and 26).
+- **test**: `npm ci`, `npm run build`, `npm test`, `npm run test:types --if-present` and `npm run test:docs` on
+  every supported Node.js LTS line (22, 24 and 26).
+- **types-min-ts**: `npm run test:types:min-ts`, the built typings with the oldest supported TypeScript (3.6), on
+  the development Node.js version.
 - **compatibility**: the compatibility checks against the packed package on the same Node.js versions.
 - **minimum-node**: packs the package and smoke-tests it (`packaging/smoke/`) on the oldest supported Node.js
-  version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`) and on the oldest version with native ES
-  modules (`MINIMUM_ESM_NODE_VERSION`). If a change needs a newer Node.js, raise `engines.node` and
-  `MINIMUM_NODE_VERSION` together; a packaging test checks that they match.
+  version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`), on the oldest version with native ES
+  modules (`MINIMUM_ESM_NODE_VERSION`, 12.17.0), on 13.0.0 (`EXPORTS_FALLBACK_NODE_VERSION`, which only loads the
+  package through the `exports["."]` fallback) and on 13.7.0 (`MINIMUM_ESM_NODE_13_VERSION`, the oldest 13.x with
+  the `import` condition). If a change needs a newer Node.js, raise `engines.node` and `MINIMUM_NODE_VERSION`
+  together; a packaging test checks that they match.
 
 `.github/workflows/codeql-analysis.yml` runs CodeQL on pushes and pull requests to `master` and weekly.
 

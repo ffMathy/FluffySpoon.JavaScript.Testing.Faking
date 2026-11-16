@@ -19,23 +19,32 @@
         "install:local": "node scripts/install-local-build.js",
         "validate:ava": "ava test-runners/ava/**.ts",
         "validate:jest": "jest test-runners/jest/**.ts",
+        "validate:jest-matchers": "jest test-runners/jest-matchers/**.ts",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",
+        "validate:vitest-inline": "vitest run --config vitest.inline.config.mts ./test-runners/vitest-inline/index.spec.ts",
         "pretest": "npm run install:local",
-        "test": "node --require tsx/cjs --test test/index.ts"
+        "test": "node --require tsx/cjs --test test/index.ts test/bundlers.ts"
     },
     "devDependencies": {
+        "@jest/globals": "^30.5.2",
+        "@rollup/plugin-commonjs": "^29.0.3",
+        "@rollup/plugin-node-resolve": "^16.0.3",
         "@types/mocha": "^10.0.10",
         "@types/node": "^22.20.5",
         "ansi-regex": "^6.0.1",
         "ava": "^6.4.1",
+        "esbuild": "^0.28.2",
         "jest": "^30.5.2",
         "mocha": "^12.0.3",
+        "rollup": "^4.68.4",
         "ts-jest": "^29.4.15",
         "tsx": "^4.23.15",
         "typescript": "^5.9.3",
-        "vitest": "^5.1.0"
+        "vite": "^8.3.8",
+        "vitest": "^5.1.0",
+        "webpack": "^5.112.2"
     },
     "volta": {
         "node": "24.22.3"

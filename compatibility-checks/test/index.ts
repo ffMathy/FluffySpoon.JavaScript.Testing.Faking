@@ -32,8 +32,23 @@ test.describe('Verifies test runner compatibility', () => {
     { name: 'mocha', failureAcknowledgementTexts: ['1 failing'], failureLocationText: 'can substitute callable interfaces:' },
     // G:CI-2: this check used to pass vacuously or fail, because the nested `node --test` inherited NODE_TEST_CONTEXT.
     { name: 'nodejs', failureAcknowledgementTexts: ['fail 1'], failureLocationText: 'test-runners/nodejs/index.ts' },
-    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts' }
+    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts' },
+    // F1: vitest with the package inlined (vitest.inline.config.mts), so that Vite, not Node.js, loads its ES module entry.
+    { name: 'vitest-inline', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest-inline/index.spec.ts' }
   ]
+
+  // P28 (ENG2-7): jest's matchers must compare a substitute like any other value. Unlike the runs above, this suite
+  // (test-runners/jest-matchers) must pass.
+  test.describe('jest matchers', () => {
+    test.it('P28 a non-matching toHaveBeenCalledWith(substitute) and toEqual(substitute) fail with normal assertion errors', () => {
+      try {
+        execSync('npm run validate:jest-matchers', { env: testRunnerEnvironment(), stdio: 'pipe' })
+      } catch (error) {
+        // @ts-expect-error
+        assert.fail(`The jest matcher checks failed:\n${error.stdout.toString()}${error.stderr.toString()}`)
+      }
+    })
+  })
 
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {

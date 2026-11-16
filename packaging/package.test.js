@@ -74,6 +74,83 @@ test('DOCS:ESM CommonJS require, deep imports and package.json still work with t
   t.regex(runNode(state.consumer, ['deep-imports.mjs']), /ESM deep import smoke test passed/)
 })
 
+// F1: tools that bundle or transform the package turn dist/index.js (CommonJS, with __esModule and exports.default)
+// into an ES module in different ways. Each shape below is what one family of tools makes of it for the
+// `import ... from './index.js'` in dist/index.mjs. compatibility-checks/test/bundlers.ts checks the real tools.
+const commonJsViews = [
+  { name: 'Node.js 12.17 to 14.12 (module.exports, no named exports)', defaultExport: 'real', namedExports: false },
+  { name: 'Node.js 14.13+, webpack, esbuild and Rolldown (module.exports and the named exports)', defaultExport: 'real', namedExports: true },
+  { name: 'the __esModule interop of Rollup\'s commonjs plugin, Vite SSR and vitest inlining (exports.default and the named exports)', defaultExport: 'real.default', namedExports: true }
+]
+
+const simulateCommonJsView = (directory, cjsEntry, names, { defaultExport, namedExports }) => {
+  fs.mkdirSync(directory)
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ type: 'module' }))
+  fs.copyFileSync(path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.mjs'), path.join(directory, 'index.mjs'))
+  fs.writeFileSync(path.join(directory, 'index.js'), [
+    "import { createRequire } from 'module'",
+    `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
+    `export default ${defaultExport}`,
+    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = real.${name}`) : []),
+    ''
+  ].join('\n'))
+  fs.writeFileSync(path.join(directory, 'check.mjs'), [
+    "import assert from 'assert'",
+    "import { createRequire } from 'module'",
+    "import Substitute, * as namespace from './index.mjs'",
+    `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
+    "assert.strictEqual(Substitute, real.default, 'the default import is the Substitute class')",
+    "assert.deepStrictEqual(Object.keys(namespace).sort(), Object.keys(real).sort(), 'the same export names')",
+    "for (const name of Object.keys(real)) assert.strictEqual(namespace[name], real[name], name)",
+    "console.log('ok')",
+    ''
+  ].join('\n'))
+}
+
+test('F1 the ES module entry gives the real exports whichever CommonJS interop the importer applies', t => {
+  const cjsEntry = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js')
+  const names = Object.keys(require(cjsEntry))
+  commonJsViews.forEach((view, index) => {
+    const directory = path.join(state.consumer, `interop-${index}`)
+    simulateCommonJsView(directory, cjsEntry, names, view)
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+    t.is(result.status, 0, `${view.name}: ${result.stdout}${result.stderr}`)
+  })
+
+  // A view that has neither shape fails loudly at import time instead of exporting undefined values.
+  const directory = path.join(state.consumer, 'interop-unusable')
+  simulateCommonJsView(directory, cjsEntry, names, { defaultExport: '{}', namedExports: false })
+  const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+  t.not(result.status, 0)
+  t.regex(result.stderr, /could not read the exports of its CommonJS build/)
+})
+
+test('F1 the compatibility checks bundle the packed package and run vitest with the package inlined', t => {
+  const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
+  t.regex(compatibility.scripts.test, /\btest\/bundlers\.ts\b/, 'npm test in compatibility-checks runs test/bundlers.ts')
+  for (const dependency of ['rollup', '@rollup/plugin-commonjs', '@rollup/plugin-node-resolve', 'webpack', 'esbuild', 'vite', 'vitest']) {
+    t.truthy(compatibility.devDependencies[dependency], `compatibility-checks depends on ${dependency}`)
+  }
+  const bundlers = fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'bundlers.ts'), 'utf8')
+  t.regex(bundlers, /commonjs\(\)/, 'a bundle is built with @rollup/plugin-commonjs')
+  t.regex(bundlers, /vitest\.inline\.config\.mts/, 'vitest runs with the inline config')
+  const inlineConfig = fs.readFileSync(path.join(root, 'compatibility-checks', 'vitest.inline.config.mts'), 'utf8')
+  t.regex(inlineConfig, /inline:\s*\['@fluffy-spoon\/substitute'\]/)
+  t.regex(compatibility.scripts['validate:vitest-inline'], /--config vitest\.inline\.config\.mts/)
+  t.regex(fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8'), /name: 'vitest-inline'/)
+})
+
+test('P28 the compatibility checks use substitutes inside jest matchers', t => {
+  const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
+  t.is(compatibility.scripts['validate:jest-matchers'], 'jest test-runners/jest-matchers/**.ts')
+  const harness = fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8')
+  t.regex(harness, /execSync\('npm run validate:jest-matchers'/, 'test/index.ts runs the jest matcher suite and expects it to pass')
+  const suite = fs.readFileSync(path.join(root, 'compatibility-checks', 'test-runners', 'jest-matchers', 'index.spec.ts'), 'utf8')
+  t.regex(suite, /expect\(fn\)\.toHaveBeenCalledWith\(logger\)/)
+  t.regex(suite, /expect\(42\)\.toEqual\(logger\)/)
+  t.regex(suite, /Unexpected return from a matcher function/)
+})
+
 const typeScriptConsumer = [
   "import Substitute, { Arg, Substitute as Named } from '@fluffy-spoon/substitute'",
   "import { Arg as DeepArg } from '@fluffy-spoon/substitute/dist/api/Arg'",
@@ -130,6 +207,29 @@ test('G:PK-2 engines.node is the minimum Node version that CI smoke-tests the pa
   t.is(normalizeVersion(engines[1]), minimum[1], 'engines.node matches the version CI tests')
   t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.MINIMUM_NODE_VERSION\s*\}\}/, 'a CI job runs on MINIMUM_NODE_VERSION')
   t.regex(ciWorkflow, /node\s+require\.js/, 'that job runs the CommonJS smoke test')
+})
+
+test('F2 exports["."] falls back to the CommonJS entry for Node.js versions without conditional exports (13.0, 13.1)', t => {
+  const entry = packageJson.exports['.']
+  t.true(Array.isArray(entry), 'exports["."] is a fallback array')
+  t.is(entry.length, 2)
+  const [conditions, fallback] = entry
+  t.deepEqual(conditions, {
+    import: { types: './dist/index.d.mts', default: './dist/index.mjs' },
+    default: { types: './dist/index.d.ts', default: './dist/index.js' }
+  }, 'the conditions come first, so every Node.js version and tool that understands them uses them')
+  t.is(fallback, packageJson.main, 'the fallback is the CommonJS entry')
+  t.is(packageJson.engines.node, '>=10', 'engines.node stays >=10')
+
+  // The packed package resolves like before on this Node.js version.
+  const resolved = runNode(state.consumer, ['-p', "require.resolve('@fluffy-spoon/substitute')"]).trim()
+  t.is(resolved, path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js'))
+
+  // CI smoke-tests the fallback on Node.js 13.0.0, and the ES module entry on 13.7.0, the oldest 13.x it supports.
+  t.regex(ciWorkflow, /EXPORTS_FALLBACK_NODE_VERSION:\s*'13\.0\.0'/)
+  t.regex(ciWorkflow, /MINIMUM_ESM_NODE_13_VERSION:\s*'13\.7\.0'/)
+  t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.EXPORTS_FALLBACK_NODE_VERSION\s*\}\}[\s\S]*?node require\.js/)
+  t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.MINIMUM_ESM_NODE_13_VERSION\s*\}\}[\s\S]*?node require\.js\s*\n\s*node import\.mjs/)
 })
 
 test('G:CI-1 the release workflow only publishes to registries it can authenticate against', t => {
@@ -217,6 +317,43 @@ test('CI:matrix CI tests every supported Node LTS line and runs the type tests',
   for (const version of ['18', '20', '21']) t.false(versions.includes(version), `end-of-life Node ${version} is not in the matrix`)
   t.regex(ciWorkflow, /npm run test:types --if-present/)
   t.regex(ciWorkflow, /pull_request/)
+})
+
+/** The body of a job in a workflow file: everything from `  <job>:` up to the next job. */
+const workflowJob = (workflow, job) => {
+  const match = new RegExp(`\\n  ${job}:\\n([\\s\\S]*?)(?=\\n  [\\w-]+:\\n|$)`).exec(workflow)
+  return match ? match[1] : undefined
+}
+
+test('F4 CI (and so the release gate) type-checks the built typings with the oldest supported TypeScript', t => {
+  t.regex(packageJson.scripts['test:types:min-ts'], /^npm run build && node spec-types\/min-ts\/check\.js$/)
+  t.regex(readText('spec-types/min-ts/check.js'), /MINIMUM_TYPESCRIPT_VERSION = '3\.6'/)
+  const job = workflowJob(ciWorkflow, 'types-min-ts')
+  t.truthy(job, 'nodejs.yml has a types-min-ts job')
+  t.regex(job, /run:\s*npm ci\b/)
+  t.regex(job, /run:\s*npm run test:types:min-ts\s*$/m)
+  t.notRegex(job, /\bif:/, 'the job always runs')
+  // The publish workflow runs the whole CI workflow, this job included, before it publishes.
+  t.regex(publishWorkflow, /uses:\s*\.\/\.github\/workflows\/nodejs\.yml/)
+  t.regex(workflowJob(publishWorkflow, 'publish-npm'), /needs:\s*ci\b/)
+})
+
+test('TD-12 CONTRIBUTING.md documents every CI check, including test:docs and test:types:min-ts', t => {
+  const contributing = readText('CONTRIBUTING.md')
+  for (const command of ['npm run test:docs', 'npm run test:types:min-ts', 'npm run test:types']) {
+    t.true(contributing.includes(command), `CONTRIBUTING.md shows how to run ${command}`)
+  }
+  for (const directory of ['spec-types/', 'spec-docs/']) {
+    t.regex(contributing, new RegExp(`\\| \`${directory}\` \\|`), `the project layout lists ${directory}`)
+  }
+  t.true(contributing.includes('spec-docs/README.md'), 'CONTRIBUTING.md points to the docs check documentation')
+  const ci = contributing.slice(contributing.indexOf('## Continuous integration'), contributing.indexOf('## Releasing'))
+  for (const [, job] of ciWorkflow.matchAll(/\n  ([\w-]+):\n\s+name:/g)) {
+    t.true(ci.includes(`**${job}**`), `the Continuous integration section describes the ${job} job`)
+  }
+  for (const [, command] of workflowJob(ciWorkflow, 'test').matchAll(/run:\s*(npm [^\n]+)/g)) {
+    t.true(ci.includes(command.replace(' --if-present', '')), `the Continuous integration section mentions ${command}`)
+  }
 })
 
 test('DOCS:CONTRIBUTING CONTRIBUTING.md (linked from the README) exists and documents the release process', t => {

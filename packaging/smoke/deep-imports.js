@@ -1,6 +1,7 @@
 'use strict'
 // Deep imports of compiled files under dist/ are not public API, but the "exports" map keeps them working
-// (Node versions with subpath pattern trailer support, i.e. 14.19+ and 16.10+, and versions without "exports" support).
+// (Node versions with subpath pattern trailer support, i.e. 14.19+ and 16.9+, and versions without "exports" support,
+// i.e. older than 12.17; on 12.17 to 12.22, all of 13.x, 14.0 to 14.18 and 16.0 to 16.8 they fail).
 // Run from a directory whose node_modules contains the extracted package tarball:
 //   node deep-imports.js
 var assert = require('assert')

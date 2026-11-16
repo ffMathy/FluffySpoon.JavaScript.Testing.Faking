@@ -16,6 +16,12 @@ env:
   MINIMUM_NODE_VERSION: '10.0.0'
   # The oldest Node.js version with native ES module support, for the ESM entry point (dist/index.mjs).
   MINIMUM_ESM_NODE_VERSION: '12.17.0'
+  # F2: Node.js 13.0 and 13.1 read "exports" but not its conditions. They load the package through the array fallback
+  # in exports["."] (the CommonJS entry); without it, require() fails there.
+  EXPORTS_FALLBACK_NODE_VERSION: '13.0.0'
+  # Node.js 13.2 to 13.6 have ES modules but not the "import" condition, so 13.7 is the oldest 13.x release on which
+  # the ES module entry works.
+  MINIMUM_ESM_NODE_13_VERSION: '13.7.0'
 
 jobs:
   test:
@@ -46,6 +52,26 @@ jobs:
       # Type-checks and runs the code examples of README.md and MIGRATION.md against the built package, and checks links.
       - name: Check the code examples in the documentation
         run: npm run test:docs
+
+  # F4: README, MIGRATION and CHANGELOG promise TypeScript 3.6 or newer. Type-checks the built typings with exactly that
+  # version (spec-types/min-ts/check.js installs it on the fly with npx), so a .d.ts change that needs newer
+  # TypeScript fails CI and is never published.
+  types-min-ts:
+    name: Typings on the oldest supported TypeScript
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          show-progress: false
+      - name: Use the development Node.js version
+        uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build and type-check the typings with the oldest supported TypeScript
+        run: npm run test:types:min-ts
 
   compatibility:
     name: Test runner compatibility on Node ${{ matrix.node-version }}
@@ -114,6 +140,25 @@ jobs:
         with:
           node-version: ${{ env.MINIMUM_ESM_NODE_VERSION }}
       - name: CommonJS and ES module smoke test on Node ${{ env.MINIMUM_ESM_NODE_VERSION }}
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node --version
+          node require.js
+          node import.mjs
+      - name: Use Node.js ${{ env.EXPORTS_FALLBACK_NODE_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.EXPORTS_FALLBACK_NODE_VERSION }}
+      - name: CommonJS smoke test on Node ${{ env.EXPORTS_FALLBACK_NODE_VERSION }} (exports without conditions)
+        working-directory: ${{ runner.temp }}/consumer
+        run: |
+          node --version
+          node require.js
+      - name: Use Node.js ${{ env.MINIMUM_ESM_NODE_13_VERSION }}
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.MINIMUM_ESM_NODE_13_VERSION }}
+      - name: CommonJS and ES module smoke test on Node ${{ env.MINIMUM_ESM_NODE_13_VERSION }}
         working-directory: ${{ runner.temp }}/consumer
         run: |
           node --version
