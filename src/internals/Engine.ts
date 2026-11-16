@@ -3,7 +3,7 @@ import { inspect, InspectOptions, types } from 'util'
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
-import { CallSite, Frame, sameExpression } from './CallSite'
+import { Frame, captureHandOutFrame, currentFrame, handOutFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException } from './SubstituteException'
 import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
@@ -108,12 +108,18 @@ const colorsOf = (options?: InspectOptions) => options?.colors === true
 
 // ---- substitutes and auto-substitutes ---------------------------------------------------------
 
-export const createSubstitute = (): any => createFaceProxy(new SubstituteState())
+export const createSubstitute = (): any => {
+  const state = new SubstituteState()
+  return state.proxy = createFaceProxy(state)
+}
 
 const entryProxy = (entry: AutoEntry): any => {
   if (entry.proxy === undefined) entry.proxy = createFaceProxy(entry)
   return entry.proxy
 }
+
+/** The proxy of a substitute (undefined for an auto-substitute whose proxy was never handed out). */
+const proxyOf = (state: SubstituteState): any => state.owner === undefined ? state.proxy : state.owner.proxy
 
 const faceState = (face: Face): SubstituteState => face instanceof AutoEntry ? face.state : face
 
@@ -123,23 +129,22 @@ const faceState = (face: Face): SubstituteState => face instanceof AutoEntry ? f
  * continues the expression of the operation that handed out its proxy when that operation was the last one of
  * all (adjacency) and both come from the same function in the same file (their first stack frames outside the
  * library). So a value that the code under test got from a substitute, and returned, does not take the code under
- * test's call with it when the test configures or checks that value. Without stack frames (Error.stackTraceLimit
- * = 0), adjacency alone decides.
+ * test's call with it when the test configures or checks that value. Only when neither operation has a stack frame
+ * (Error.stackTraceLimit = 0, or structured call sites cannot be read) does adjacency alone decide (E2).
  */
 
 /** The frame of the current operation, read only when it is needed (the trap function is the stack start). */
-const frameAt = (stackStart: Function) => (): Frame | null => CallSite.capture(stackStart).frame
+const frameAt = (stackStart: Function) => (): Frame | null => currentFrame(stackStart)
 
 /** The candidate (an adjacent hand-out) if the current operation continues its expression. */
 const continuedChain = (candidate: CallRecord | undefined, current: () => Frame | null): CallRecord | undefined => {
   if (candidate === undefined) return undefined
-  const head = candidate.frame
-  return head === null || sameExpression(head, current()) ? candidate : undefined
+  return sameExpression(handOutFrame(candidate), current()) ? candidate : undefined
 }
 
 /** Links a new record to the candidate if it continues the candidate's expression. */
-const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
-  if (continuedChain(candidate, () => record.frame) !== undefined) record.chainPrevious = candidate
+const linkChain = (record: CallRecord, candidate: CallRecord | undefined, stackStart: Function): CallRecord => {
+  if (continuedChain(candidate, frameAt(stackStart)) !== undefined) record.chainPrevious = candidate
   return record
 }
 
@@ -293,10 +298,10 @@ const NOT_CONFIGURED: unique symbol = Symbol('not configured')
  * arguments, or when a mimicked instance has such a member of its own (a function's call/apply/bind inherited from
  * Function.prototype is the direct reading itself, recorded as such).
  */
-const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, rawArgs: any[], hashes: ArgumentHashes, record: CallRecord, thisArg: unknown): any => {
+const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, rawArgs: any[], hashes: ArgumentHashes, record: CallRecord, thisArg: unknown, stackStart: Function): any => {
   const substitution = state.findCallSubstitution(helper, hashes)
   if (substitution !== undefined) {
-    if (substitution.method === 'auto') substitution.entry!.handOut(record)
+    if (substitution.method === 'auto') substitution.entry!.handOut(record, stackStart)
     return execute(substitution, rawArgs, thisArg)
   }
   const instance = state.mimicked?.instance
@@ -357,14 +362,14 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     if (directRecord !== undefined) pairReadings(memberRecord, directRecord)
 
     const hashes = new ArgumentHashes(rawArgs)
-    const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
+    const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg, stackStart)
     if (answer !== NOT_CONFIGURED) return answer
     if (directRecord !== undefined) {
-      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, new ArgumentHashes(directArgs!), directRecord, { thisArg, explicit: true })
+      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, new ArgumentHashes(directArgs!), directRecord, { thisArg, explicit: true }, stackStart)
       if (directAnswer !== NOT_CONFIGURED) return directAnswer
     }
     const entry = memberState.callEntry(helper, hashes)
-    entry.handOut(memberRecord)
+    entry.handOut(memberRecord, stackStart)
     return entryProxy(entry)
   }
 
@@ -389,10 +394,10 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         const memberRecord = memberState.addRecord('call', 'bind', rawArgs, bind)
         memberRecord.chainPrevious = chainHead
         const hashes = new ArgumentHashes(rawArgs)
-        const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, memberRecord, thisArg)
+        const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, memberRecord, thisArg, bind)
         if (answer !== NOT_CONFIGURED) return answer
         const entry = memberState.callEntry('bind', hashes)
-        entry.handOut(memberRecord)
+        entry.handOut(memberRecord, bind)
         return createBoundProxy(face, entry, thisArg, boundArgs)
       }
   }
@@ -479,9 +484,12 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
 
   const substitution = state.propertySubstitution(key)
   if (substitution !== undefined) {
-    const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
+    const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate, stackStart)
     // Configured both as a property and as a method: whether this read is a property read is only known later.
-    if (state.hasCallSubstitutions(key)) return deferredRead(state, key, record, substitution)
+    if (state.hasCallSubstitutions(key)) {
+      captureHandOutFrame(record, stackStart)
+      return deferredRead(state, key, record, substitution)
+    }
     return execute(substitution)
   }
 
@@ -494,21 +502,21 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const value = delegate ? mimicked.instance[key] : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
-      linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
+      linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate, stackStart)
       return value
     }
   }
 
-  const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
+  const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate, stackStart)
   state.addPendingRead(record)
   const entry = state.propertyEntry(key)
-  entry.handOut(record)
+  entry.handOut(record, stackStart)
   return entryProxy(entry)
 }
 
 /** A real property assignment by the code under test. */
 const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chainCandidate: CallRecord | undefined, stackStart: Function): void => {
-  linkChain(state.addRecord('set', key, [value], stackStart), chainCandidate)
+  linkChain(state.addRecord('set', key, [value], stackStart), chainCandidate, stackStart)
   if (state.mimicked !== undefined) state.mimicked.instance[key] = value
 }
 
@@ -529,11 +537,15 @@ const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStar
 
   let record: CallRecord
   if (read !== undefined && read.kind === 'get' && !read.retracted) {
-    read.convertToCall(args, stackStart)
+    // E1: the read keeps its call site only for `sub.method(...)`: the method was read right before, from the
+    // substitute it is invoked on. A method reference invoked later (with another `this`) is a call made elsewhere.
+    const sameExpression = readSource === TAKE_PENDING_READ && read.seq === currentSequence() &&
+      self.thisArg !== undefined && self.thisArg === proxyOf(state)
+    read.convertToCall(args, stackStart, sameExpression)
     record = read
-  } else record = linkChain(state.addRecord('call', key, args, stackStart), chainCandidate)
+  } else record = linkChain(state.addRecord('call', key, args, stackStart), chainCandidate, stackStart)
 
-  return resolveCall(state, key, args, record, self)
+  return resolveCall(state, key, args, record, self, stackStart)
 }
 
 /**
@@ -544,10 +556,10 @@ type Self = { thisArg: unknown, explicit: boolean }
 const NO_SELF: Self = { thisArg: undefined, explicit: false }
 
 /** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
-const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord, self: Self): any => {
+const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord, self: Self, stackStart: Function): any => {
   const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
-    if (substitution.method === 'auto') substitution.entry!.handOut(record)
+    if (substitution.method === 'auto') substitution.entry!.handOut(record, stackStart)
     return execute(substitution, args, self.thisArg)
   }
 
@@ -564,12 +576,12 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
   return NOT_CONFIGURED
 }
 
-const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord, self: Self): any => {
+const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord, self: Self, stackStart: Function): any => {
   const hashes = new ArgumentHashes(args)
-  const answer = configuredAnswer(state, key, args, hashes, record, self)
+  const answer = configuredAnswer(state, key, args, hashes, record, self, stackStart)
   if (answer !== NOT_CONFIGURED) return answer
   const entry = state.callEntry(key, hashes)
-  entry.handOut(record)
+  entry.handOut(record, stackStart)
   return entryProxy(entry)
 }
 

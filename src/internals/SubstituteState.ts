@@ -1,6 +1,7 @@
 import { inspect } from 'util'
 
 import { CallRecord, RecordKind, currentSequence } from './CallRecord'
+import { captureHandOutFrame } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import { hashArguments, identityHashArguments } from './utilities'
@@ -142,9 +143,11 @@ export class AutoEntry {
     return this._state
   }
 
-  public handOut(record: CallRecord): void {
+  /** Notes that the operation of `record` hands out this entry's proxy (`stackStart`: the trap of that operation). */
+  public handOut(record: CallRecord, stackStart: Function): void {
     this._handedOutBy = record
     this._handedOutAt = currentSequence()
+    captureHandOutFrame(record, stackStart)
   }
 
   /**
@@ -286,6 +289,8 @@ export class SubstituteState {
   private readonly _specificationEntries = new Map<PropertyKey, AutoEntry[]>()
 
   public mimicked?: { instance: any }
+  /** The proxy of a substitute created with Substitute.for() (an auto-substitute's proxy is its owner's). */
+  public proxy?: any
 
   constructor(public readonly owner?: AutoEntry) { }
 
