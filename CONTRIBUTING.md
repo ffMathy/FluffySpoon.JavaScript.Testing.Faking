@@ -52,7 +52,14 @@ This compiles `src/` into `dist/` with `tsc` (CommonJS plus `.d.ts` typings) and
 - `dist/index.d.mts` holds the matching typings for TypeScript's `node16`, `nodenext` and `bundler` resolution.
 
 The `exports` map in `package.json` sends `import` to the ES module entry and everything else (`require`, older
-resolvers) to the CommonJS entry. `main` and `types` are kept for resolvers that do not read `exports`. Deep
+resolvers) to the CommonJS entry. `exports["."]` is an array: the conditions object comes first, and the plain
+CommonJS entry `./dist/index.js` follows as a fallback for Node.js 13.0 and 13.1, which read `exports` but do not
+understand conditions (without the fallback, `require` fails there). `main` and `types` are kept for resolvers that
+do not read `exports`.
+
+The package supports Node.js 10 and newer with `require`. The ES module entry needs Node.js 12.17 or newer on 12.x,
+or 13.7 or newer (13.2 to 13.6 have ES modules but not the `import` condition, so `import` gets the CommonJS entry
+and named imports fail there). Deep
 imports of compiled files (`@fluffy-spoon/substitute/dist/...`, with or without `.js`) stay available through
 the `./dist/*` subpaths, but they are not public API.
 
@@ -127,9 +134,11 @@ To try a single runner by hand after `npm run install:local`, use `npm run valid
   Node.js LTS line (22, 24 and 26).
 - **compatibility**: the compatibility checks against the packed package on the same Node.js versions.
 - **minimum-node**: packs the package and smoke-tests it (`packaging/smoke/`) on the oldest supported Node.js
-  version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`) and on the oldest version with native ES
-  modules (`MINIMUM_ESM_NODE_VERSION`). If a change needs a newer Node.js, raise `engines.node` and
-  `MINIMUM_NODE_VERSION` together; a packaging test checks that they match.
+  version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`), on the oldest version with native ES
+  modules (`MINIMUM_ESM_NODE_VERSION`, 12.17.0), on 13.0.0 (`EXPORTS_FALLBACK_NODE_VERSION`, which only loads the
+  package through the `exports["."]` fallback) and on 13.7.0 (`MINIMUM_ESM_NODE_13_VERSION`, the oldest 13.x with
+  the `import` condition). If a change needs a newer Node.js, raise `engines.node` and `MINIMUM_NODE_VERSION`
+  together; a packaging test checks that they match.
 
 `.github/workflows/codeql-analysis.yml` runs CodeQL on pushes and pull requests to `master` and weekly.
 

@@ -198,6 +198,29 @@ test('G:PK-2 engines.node is the minimum Node version that CI smoke-tests the pa
   t.regex(ciWorkflow, /node\s+require\.js/, 'that job runs the CommonJS smoke test')
 })
 
+test('F2 exports["."] falls back to the CommonJS entry for Node.js versions without conditional exports (13.0, 13.1)', t => {
+  const entry = packageJson.exports['.']
+  t.true(Array.isArray(entry), 'exports["."] is a fallback array')
+  t.is(entry.length, 2)
+  const [conditions, fallback] = entry
+  t.deepEqual(conditions, {
+    import: { types: './dist/index.d.mts', default: './dist/index.mjs' },
+    default: { types: './dist/index.d.ts', default: './dist/index.js' }
+  }, 'the conditions come first, so every Node.js version and tool that understands them uses them')
+  t.is(fallback, packageJson.main, 'the fallback is the CommonJS entry')
+  t.is(packageJson.engines.node, '>=10', 'engines.node stays >=10')
+
+  // The packed package resolves like before on this Node.js version.
+  const resolved = runNode(state.consumer, ['-p', "require.resolve('@fluffy-spoon/substitute')"]).trim()
+  t.is(resolved, path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js'))
+
+  // CI smoke-tests the fallback on Node.js 13.0.0, and the ES module entry on 13.7.0, the oldest 13.x it supports.
+  t.regex(ciWorkflow, /EXPORTS_FALLBACK_NODE_VERSION:\s*'13\.0\.0'/)
+  t.regex(ciWorkflow, /MINIMUM_ESM_NODE_13_VERSION:\s*'13\.7\.0'/)
+  t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.EXPORTS_FALLBACK_NODE_VERSION\s*\}\}[\s\S]*?node require\.js/)
+  t.regex(ciWorkflow, /node-version:\s*\$\{\{\s*env\.MINIMUM_ESM_NODE_13_VERSION\s*\}\}[\s\S]*?node require\.js\s*\n\s*node import\.mjs/)
+})
+
 test('G:CI-1 the release workflow only publishes to registries it can authenticate against', t => {
   const owner = /github\.com\/([^/]+)\//.exec(packageJson.repository.url)[1].toLowerCase()
   const scope = packageJson.name.split('/')[0]
