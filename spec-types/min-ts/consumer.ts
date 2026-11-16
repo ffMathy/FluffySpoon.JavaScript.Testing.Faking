@@ -164,6 +164,32 @@ class CounterFixture<T extends Counter> {
 stubCounter(Substitute.for<Counter>())
 new CounterFixture<Counter>().arrange()
 
+// R4TD-2 / R4V-1 / T40: optional and nullable members in generic code, through the configure view. The direct forms
+// (`sub.reset().returns()`, `sub.limit.returns(1)`, `box.maybe.returns(value)`) need TypeScript 4.8 for calls of
+// optional methods and 3.9 for the rest (spec-types/R4TD-2.R4V-1.T40.generic-optional-members.ts).
+interface Machine { start(): void; reset?(): void; find?(id: string): string | undefined; limit?: number; label: string | null }
+function stubMachine<T extends Machine>(sub: SubstituteOf<T>) {
+  sub.start().returns()
+  sub[configure]().reset().returns()
+  sub[configure]().find('a').returns('b')
+  sub[configure]().limit.returns(1)
+  sub[configure]().label.returns(null)
+  sub.received().reset()
+  sub[didNotReceive]().find(Arg.any())
+  const asMachine: Machine = sub
+  return asMachine
+}
+stubMachine(Substitute.for<Machine>())
+interface Box<T> { current: T; maybe?: T; orNull: T | null; find(id: string): T | undefined }
+function stubBox<T>(box: SubstituteOf<Box<T>>, value: T) {
+  box.current.returns(value)
+  box.find('a').returns(value)
+  box[configure]().maybe.returns(value)
+  box[configure]().orNull.returns(value)
+  box[configure]().orNull.returns(null)
+}
+stubBox(Substitute.for<Box<number>>(), 1)
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()
