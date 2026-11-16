@@ -1,5 +1,7 @@
+import { colorsEnabled } from './Colors'
+
 export class TextPart {
-  private _modifiers: string[] = []
+  private _modifiers: number[] = []
   private readonly _value: string
   constructor(valueOrInstance: string | TextPart) {
     if (valueOrInstance instanceof TextPart) {
@@ -8,27 +10,23 @@ export class TextPart {
     } else this._value = valueOrInstance
   }
 
-  private baseTextModifier(modifier: number) {
-    return `\x1b[${modifier}m`
-  }
-
   public bold() {
-    this._modifiers.push(this.baseTextModifier(1))
+    this._modifiers.push(1)
     return this
   }
 
   public faint() {
-    this._modifiers.push(this.baseTextModifier(2))
+    this._modifiers.push(2)
     return this
   }
 
   public italic() {
-    this._modifiers.push(this.baseTextModifier(3))
+    this._modifiers.push(3)
     return this
   }
 
   public underline() {
-    this._modifiers.push(this.baseTextModifier(4))
+    this._modifiers.push(4)
     return this
   }
 
@@ -40,8 +38,9 @@ export class TextPart {
     return new TextPart(this)
   }
 
-  toString() {
-    return this._modifiers.length > 0 ? `${this._modifiers.join('')}${this._value}\x1b[0m` : this._value
+  toString(colors: boolean = colorsEnabled()) {
+    if (!colors || this._modifiers.length === 0) return this._value
+    return `${this._modifiers.map(modifier => `\x1b[${modifier}m`).join('')}${this._value}\x1b[0m`
   }
 }
 
@@ -65,8 +64,8 @@ export class TextBuilder {
     return this
   }
 
-  public toString() {
-    return this._parts.join('')
+  public toString(colors: boolean = colorsEnabled()) {
+    return this._parts.map(part => part.toString(colors)).join('')
   }
 
   public clone() {

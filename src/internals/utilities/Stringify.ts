@@ -1,88 +1,42 @@
-import { InspectOptions, inspect } from 'util'
-import { RecordedArguments } from '../RecordedArguments'
-import { SubstituteNodeModel } from '../Types'
-import { TextBuilder, TextPart } from './TextBuilder'
-import * as is from './Guards'
+import { inspect, InspectOptions } from 'util'
 
-const stringifyArguments = (args: RecordedArguments, options?: InspectOptions) => args.hasArguments()
-  ? `(${args.value.map(x => inspect(x, { colors: true, ...options })).join(', ')})`
-  : ''
+let printDepth = 0
 
-const matchBasedPrefix = (isMatch?: boolean) => {
-  switch (isMatch) {
-    case true: return '✔ '
-    case false: return '✘ '
-    default: return ''
+/**
+ * Runs `print` while marking that the library is printing. Substitutes met while printing (for example a
+ * substitute recorded as an argument of another substitute) are printed in their short form, so
+ * printing never recurses through substitutes, even when they reference each other.
+ */
+export const withPrintGuard = <T>(print: () => T): T => {
+  printDepth++
+  try {
+    return print()
+  } finally {
+    printDepth--
   }
 }
 
-const matchBasedTextPartModifier = (isMatch?: boolean) => (part: TextPart) => isMatch === undefined
-  ? part
-  : isMatch
-    ? part.faint()
-    : part.bold()
+export const isPrinting = (): boolean => printDepth > 0
 
-const stringifyCall = (context: { callPath: string, expectedArguments?: RecordedArguments }) => {
-  return (call: SubstituteNodeModel): TextPart[] => {
-    const isMatch = context.expectedArguments?.match(call.recordedArguments)
-    const textBuilder = new TextBuilder()
-      .add(matchBasedPrefix(isMatch))
-      .add(context.callPath)
-      .add(stringifyArguments(call.recordedArguments))
-    if (call.stack !== undefined && isMatch !== undefined) textBuilder.newLine().add(call.stack.split('\n')[1].replace('at ', 'called at '), t => t.faint())
-    return textBuilder.parts.map(matchBasedTextPartModifier(isMatch))
+export const formatValue = (value: unknown, colors: boolean, options?: InspectOptions): string => {
+  try {
+    return withPrintGuard(() => inspect(value, { ...options, colors }))
+  } catch {
+    return `<${typeof value}>`
   }
 }
 
-const plurify = (str: string, count?: number) => `${str}${count === 1 ? '' : 's'}`
+export const formatArguments = (args: readonly unknown[] | undefined, colors: boolean, options?: InspectOptions): string =>
+  args === undefined ? '' : `(${args.map(arg => formatValue(arg, colors, options)).join(', ')})`
 
-const stringifyExpectation = (expected: { count: number | undefined, call: SubstituteNodeModel }) => {
-  const textBuilder = new TextBuilder()
-  textBuilder.add(expected.count === undefined ? '1 or more' : expected.count.toString(), t => t.bold())
-    .add(' ')
-    .add(expected.call.propertyType.description!, t => t.bold())
-    .add(plurify(' call', expected.count), t => t.bold())
-    .add(' matching ')
-    .addParts(...stringifyCall({ callPath: expected.call.property.toString() })(expected.call).map(t => t.bold()))
-  return textBuilder.parts
+/** The first "at ..." line of a stack trace, if there is one (there is none with Error.stackTraceLimit = 0). */
+export const firstStackFrame = (stack: string | undefined): string | undefined => {
+  if (typeof stack !== 'string') return undefined
+  const lines = stack.split('\n')
+  for (let index = 1; index < lines.length; index++) {
+    if (/^\s*at /.test(lines[index])) return lines[index]
+  }
+  return undefined
 }
 
-const createKey = () => {
-  const textBuilder = new TextBuilder()
-  textBuilder.newLine().add('› ')
-  return textBuilder
-}
-
-const stringifyReceivedCalls = (callPath: string, expected: SubstituteNodeModel, received: SubstituteNodeModel[]) => {
-  const textBuilder = new TextBuilder()
-  const stringify = stringifyCall({ callPath, expectedArguments: expected.recordedArguments })
-  received.forEach(receivedCall => textBuilder.addParts(...createKey().parts, ...stringify(receivedCall)))
-  return textBuilder.newLine().toString()
-}
-
-const stringifyRootNode = (_node: SubstituteNodeModel, stringifiedChildNodes: string) => {
-  const instanceName = '@Substitute'
-  return instanceName + ' {' + stringifiedChildNodes + '\n}'
-
-}
-
-const stringifyNode = (node: SubstituteNodeModel, childNode: SubstituteNodeModel | undefined, options: InspectOptions) => {
-  const hasContext = !is.CONTEXT.none(node.context)
-  const args = stringifyArguments(node.recordedArguments, options)
-  const label = is.CONTEXT.substitution(node.context) ?
-    ' => ' :
-    is.CONTEXT.assertion(node.context) ?
-      `${childNode?.property.toString()}` :
-      ''
-  const s = hasContext ? `${label}${inspect(childNode?.recordedArguments, options)}` : ''
-
-  return `${node.propertyType.description}<${node.property.toString()}>: ${args}${s}`
-}
-
-export const stringify = {
-  call: stringifyCall,
-  expectation: stringifyExpectation,
-  receivedCalls: stringifyReceivedCalls,
-  rootNode: stringifyRootNode,
-  node: stringifyNode
-}
+export const plural = (word: string, count: number | undefined) => `${word}${count === 1 ? '' : 's'}`

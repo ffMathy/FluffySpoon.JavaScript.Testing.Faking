@@ -36,5 +36,8 @@ test('can substitute callable interfaces', async t => {
   lib.received(2).subSection
   t.throws(() => lib.didNotReceive().subSection(), { instanceOf: SubstituteException })
   t.throws(() => lib.received(2).subSection(), { instanceOf: SubstituteException })
-  throwsUncaughtException(() => lib.received(3).subSection, t, { instanceOf: SubstituteException })
+  // D9: fails both as a property read (2 reads) and as a method call (1 call), so it throws synchronously
+  t.throws(() => lib.received(3).subSection, { instanceOf: SubstituteException })
+  // D9: genuinely ambiguous (2 property reads, but received(1).subSection() would pass), so only reported later
+  throwsUncaughtException(() => lib.received(1).subSection, t, { instanceOf: SubstituteException })
 })
