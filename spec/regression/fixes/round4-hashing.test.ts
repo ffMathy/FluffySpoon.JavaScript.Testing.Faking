@@ -1,5 +1,5 @@
 import test, { ExecutionContext } from 'ava'
-import { isDeepStrictEqual, types } from 'util'
+import { inspect, isDeepStrictEqual, types } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { FALLBACK_HASH, hashArguments, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
@@ -24,6 +24,15 @@ const Aggregate = (globalThis as any).AggregateError as (new (errors: unknown[],
 const sharedSymbols = [Symbol('a'), Symbol.for('registered')]
 const sharedFunctions = [() => 1, Substitute.for<any>()]
 const middle = (char: string, half: number) => 'm'.repeat(half) + char + 'm'.repeat(half)
+/**
+ * R4-ADV-4 (E10): an object that inherits from Error.prototype without being a native error, optionally with the
+ * toStringTag of an error. Node.js compares such objects as errors, and finds them deep strictly equal to a native error
+ * with the same message when they have the tag.
+ */
+const errorLike = (message: string, tagged: boolean): Error => Object.create(Error.prototype, {
+  message: { value: message, writable: true, configurable: true },
+  ...(tagged ? { [Symbol.toStringTag]: { value: 'Error', configurable: true } } : {})
+})
 
 /** Builds an object with these entries, in a random insertion order. */
 const objectOf = (next: Next, entries: Array<[PropertyKey, unknown]>): Record<PropertyKey, unknown> => {
@@ -59,6 +68,10 @@ const generate = (next: Next, depth: number): unknown => {
     () => Object.assign(new Error(pick(['a', 'b'])), { code: pick([1, 2]) }),
     () => new (Error as any)('a', { cause: pick([1, 2, undefined]) }),
     () => Aggregate === undefined ? new Error('a') : new Aggregate([pick([1, 2])], 'a'),
+    // R4-ADV-4 (E10): error-like objects, which can be deep strictly equal to the native errors above
+    () => errorLike(pick(['a', 'b']), next() < 0.5),
+    // and native errors that Object.prototype.toString shows as [object Object]: Node.js compares those by their keys
+    () => Object.defineProperty(new Error(pick(['a', 'b'])), Symbol.toStringTag, { value: 'Object', configurable: true }),
     () => Buffer.from(pick(['', 'ab']))
   ])()
   if (depth <= 0 || next() < 0.3) return leaf()
@@ -133,9 +146,13 @@ const deepStrictEqual = (a: unknown, b: unknown): boolean => {
   }
 }
 
+/** A short description of a generated value for a failure message. */
+const describe = (value: unknown): string =>
+  inspect(value, { depth: 3, breakLength: Infinity, maxArrayLength: 6, maxStringLength: 20, showHidden: true }).slice(0, 600)
+
 const hashesAgree = (t: ExecutionContext, a: unknown, b: unknown, message: string): boolean => {
   if (!deepStrictEqual(a, b)) return false
-  if (structuralHash(a) !== structuralHash(b) || hashArguments([a, 1]) !== hashArguments([b, 1])) t.fail(`equal values hash differently: ${message}`)
+  if (structuralHash(a) !== structuralHash(b) || hashArguments([a, 1]) !== hashArguments([b, 1])) t.fail(`equal values hash differently: ${message}: ${describe(a)} and ${describe(b)}`)
   return true
 }
 

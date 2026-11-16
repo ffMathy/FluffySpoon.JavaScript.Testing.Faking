@@ -45,6 +45,56 @@ const verifyJest = (output: string) => {
   )
 }
 
+/*
+ * R4-ADV-3 (E12): what each runner does with the tests around a failure that is reported after the test returned
+ * (on a microtask, E6). The fixtures have passing tests before and after the failing one (and mocha and ava a second
+ * file), and these checks pin what really happens, so that the README stays true when a runner changes.
+ */
+
+/**
+ * mocha marks a synchronous test as passed when it returns. The later failure is reported as a second result of that
+ * test ("1) can substitute callable interfaces", "Uncaught SubstituteException"), and mocha then aborts the run: the
+ * remaining tests do not run, in the same file or in later files. No scheduling of the report can change this, as the
+ * test has passed before any callback runs.
+ */
+const verifyMocha = (output: string) => {
+  assert.ok(output.includes('✔ passes before the failing test'), `mocha did not report the test before the failing one: ${output}`)
+  assert.ok(output.includes('1) can substitute callable interfaces') && output.includes('Uncaught SubstituteException'),
+    `mocha did not report the failure of the test as uncaught: ${output}`)
+  assert.ok(/2 passing/.test(output) && /1 failing/.test(output), `mocha's summary changed: ${output}`)
+  assert.ok(output.includes('mocha loaded later.ts'), `mocha did not load the later file: ${output}`)
+  assert.ok(!output.includes('passes after the failing test') && !output.includes('runs in a later file'),
+    `mocha now runs the tests after the failure: update README "Assertions that fail later" and this check: ${output}`)
+}
+
+/**
+ * ava runs each file in a worker of its own, and the tests of a file concurrently. The failure is an uncaught exception
+ * in the worker, which ends it: the failing test is reported as passed, then "Uncaught exception in <file>" and
+ * "<file> exited with a non-zero exit code"; the tests of that file that had not finished are not reported at all.
+ * Other files are not affected.
+ */
+const verifyAva = (output: string) => {
+  assert.ok(output.includes('later › runs in another file'), `ava did not report the test of the other file: ${output}`)
+  assert.ok(output.includes('index › can substitute callable interfaces'), `ava did not report the failing test: ${output}`)
+  assert.ok(output.includes('Uncaught exception in test-runners/ava/index.ts') &&
+    output.includes('test-runners/ava/index.ts exited with a non-zero exit code'), `ava did not report the uncaught exception: ${output}`)
+  assert.ok(!output.includes('passes before the failing test') && !output.includes('passes after the failing test'),
+    `ava now reports the unfinished tests of the file: update README "Assertions that fail later" and this check: ${output}`)
+}
+
+/** vitest runs and reports every test (as passed), and reports the failure as an unhandled error of the last test. */
+const verifyVitest = (output: string) => {
+  assert.ok(/Tests\s+3 passed \(3\)/.test(output) && /Errors\s+1 error/.test(output), `vitest's summary changed: ${output}`)
+  assert.ok(output.includes('The last test to run before this error was "can substitute callable interfaces"'),
+    `vitest did not name the test: ${output}`)
+}
+
+/** node:test runs and reports every test (as passed), and fails the file with the error. */
+const verifyNodeTest = (output: string) => {
+  assert.ok(/pass 3/.test(output) && output.includes('passes after the failing test'), `node:test did not run every test: ${output}`)
+  assert.ok(output.includes('generated asynchronous activity after the test ended'), `node:test did not report the error: ${output}`)
+}
+
 test.describe('Verifies test runner compatibility', () => {
   const failingExec = (command: string): string => {
     try {
@@ -58,7 +108,7 @@ test.describe('Verifies test runner compatibility', () => {
   }
 
   const testRunners: TestRunner[] = [
-    { name: 'ava', failureAcknowledgementTexts: ['1 uncaught exception', '1 test failed'], failureLocationText: 'test-runners/ava/index.ts' },
+    { name: 'ava', failureAcknowledgementTexts: ['1 uncaught exception', '1 test failed'], failureLocationText: 'test-runners/ava/index.ts', verify: verifyAva },
     {
       name: 'jest',
       failureAcknowledgementTexts: ['Tests:'],
@@ -66,10 +116,10 @@ test.describe('Verifies test runner compatibility', () => {
       mapsCallSites: true,
       verify: verifyJest
     },
-    { name: 'mocha', failureAcknowledgementTexts: ['1 failing'], failureLocationText: 'can substitute callable interfaces:' },
+    { name: 'mocha', failureAcknowledgementTexts: ['1 failing'], failureLocationText: 'can substitute callable interfaces:', verify: verifyMocha },
     // G:CI-2: this check used to pass vacuously or fail, because the nested `node --test` inherited NODE_TEST_CONTEXT.
-    { name: 'nodejs', failureAcknowledgementTexts: ['fail 1'], failureLocationText: 'test-runners/nodejs/index.ts' },
-    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts', mapsCallSites: true },
+    { name: 'nodejs', failureAcknowledgementTexts: ['fail 1'], failureLocationText: 'test-runners/nodejs/index.ts', verify: verifyNodeTest },
+    { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts', mapsCallSites: true, verify: verifyVitest },
     // F1: vitest with the package inlined (vitest.inline.config.mts), so that Vite, not Node.js, loads its ES module entry.
     { name: 'vitest-inline', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest-inline/index.spec.ts', mapsCallSites: true }
   ]

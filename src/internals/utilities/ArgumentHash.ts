@@ -23,7 +23,9 @@ import { isDeepStrictEqual, types } from 'util'
  * - long arrays are sampled by position (their length, the first and the last items and items at a fixed stride),
  *   long strings and byte arrays likewise; the samples depend only on the length;
  * - objects with many keys, and large Maps and Sets, contribute every key, but only shallowly (primitives by value,
- *   objects by a constant tag).
+ *   objects by a constant tag), and the widest ones only their size;
+ * - E9: within one hash, the shallow part of a wide object, Map or Set is computed once (by identity), however many
+ *   values refer to it (rows that share a lookup table).
  * No limit depends on the order of keys or of Map and Set entries, as deep strictly equal values may differ in it.
  * Arguments that cannot be read give the constant FALLBACK_HASH: anything that throws while it is read, such as a
  * throwing getter or a revoked proxy.
@@ -54,8 +56,11 @@ const MAX_DEPTH = 32
 const SAMPLED_ITEMS = 256
 /** Objects with more keys, and Maps and Sets with more entries, are hashed shallowly. */
 const MAX_ENTRIES = 256
-/** Objects with more keys, and Maps and Sets with more entries, are hashed by their size only. */
-const MAX_SCANNED_ENTRIES = 65536
+/**
+ * Objects with more keys, and Maps and Sets with more entries, are hashed by their size only (E9: hashing 10,000 keys
+ * shallowly takes about 3 ms; deep strictly equal values have the same size, and live equality sorts out the rest).
+ */
+const MAX_SCANNED_ENTRIES = 4096
 /** Strings and byte arrays that are longer are sampled, like arrays. */
 const SAMPLED_UNITS = 4096
 
@@ -195,6 +200,34 @@ const errorParts = ((): { name: boolean, message: boolean, cause: boolean, error
   }
 })()
 
+/**
+ * E10: which objects are hashed as errors, by name and message (see errorParts). The running Node.js compares an object
+ * as an error when `isNativeError(value) || value instanceof Error`, unless its Object.prototype.toString tag is
+ * `[object Object]`: such objects are compared by their keys alone (on Node.js 24 and later only when the other side is
+ * not a native error, so that equality is not symmetric there). So an object that inherits from Error.prototype and has
+ * the toStringTag 'Error' is compared like a native error, and can be deep strictly equal to one. Objects tagged
+ * `[object Object]` are hashed by their keys, which keeps every pair that Node.js finds equal, in either order,
+ * together. Whether error-like objects count is found out once, when the library is loaded (under jest, whose test
+ * files have an Error of their own, Node.js does not count their error-like objects as errors, and neither does this
+ * check, which uses the same Error).
+ */
+const errorLikesAreErrors = ((): boolean => {
+  const errorLike = (message: string) => Object.create(Error.prototype, {
+    message: { value: message, writable: true, configurable: true },
+    [Symbol.toStringTag]: { value: 'Error', configurable: true }
+  })
+  try {
+    return !isDeepStrictEqual(errorLike('a'), errorLike('b'))
+  } catch {
+    return false
+  }
+})()
+
+const objectToString = Object.prototype.toString
+
+const isComparedAsError = (value: object): value is Error & { cause?: unknown, errors?: unknown } =>
+  (types.isNativeError(value) || (errorLikesAreErrors && value instanceof Error)) && objectToString.call(value) !== '[object Object]'
+
 /** Each child's share of an object's budget. */
 const share = (budget: number, children: number): number => children === 0 ? 0 : Math.floor((budget - 1) / children)
 
@@ -209,6 +242,29 @@ const ownEnumerableKeys = (object: object): PropertyKey[] => {
 
 const hashKey = (key: PropertyKey): number => typeof key === 'symbol' ? hashPrimitive(key) : hashString(key as string, Tag.Key)
 
+/**
+ * E9: the hashes of the wide objects, Maps and Sets (more than MAX_ENTRIES entries) hashed so far by the current hash.
+ * Their hash is shallow, so it does not depend on the budget or the depth they are reached with.
+ */
+let wideHashes: Map<object, number> | undefined
+
+const rememberWide = (container: object, hash: number): number => {
+  if (wideHashes === undefined) wideHashes = new Map()
+  wideHashes.set(container, hash)
+  return hash
+}
+
+/** Runs one hash with a memory of wide containers of its own (a getter could start another hash while it runs). */
+const withWideHashes = <T>(hash: () => T): T => {
+  const outer = wideHashes
+  wideHashes = undefined
+  try {
+    return hash()
+  } finally {
+    wideHashes = outer
+  }
+}
+
 /** The hash of one value with a budget of objects (see above). */
 const hashValue = (value: unknown, budget: number, depth: number): number => {
   if (typeof value === 'function') return mix(Tag.Function, idOf(value))
@@ -218,6 +274,10 @@ const hashValue = (value: unknown, budget: number, depth: number): number => {
 }
 
 const hashObject = (object: object, budget: number, depth: number): number => {
+  if (wideHashes !== undefined) {
+    const known = wideHashes.get(object)
+    if (known !== undefined) return known
+  }
   if (Array.isArray(object)) {
     const length = object.length
     const count = length <= SAMPLED_ITEMS ? length : SAMPLED_ITEMS
@@ -244,9 +304,9 @@ const hashObject = (object: object, budget: number, depth: number): number => {
   // own enumerable string and symbol keys, in any order
   const keys = ownEnumerableKeys(object)
   const count = keys.length
-  const error = types.isNativeError(object) ? object as Error & { cause?: unknown, errors?: unknown } : undefined
+  const error = isComparedAsError(object) ? object : undefined
   let h = mix(types.isArgumentsObject(object) ? Tag.Arguments : error !== undefined ? Tag.Error : Tag.Object, count)
-  if (count > MAX_SCANNED_ENTRIES) return mix(h, Tag.Wide)
+  if (count > MAX_SCANNED_ENTRIES) return rememberWide(object, mix(h, Tag.Wide))
   const errorChildren = error === undefined ? 0 : (errorParts.cause ? 1 : 0) + (errorParts.errors ? 1 : 0)
   // wide objects: every key and its value, shallowly
   const childBudget = count > MAX_ENTRIES ? 0 : share(budget, count + errorChildren)
@@ -263,7 +323,7 @@ const hashObject = (object: object, budget: number, depth: number): number => {
     if (errorParts.cause) h = mix(h, hashValue(error.cause, childBudget, depth))
     if (errorParts.errors) h = mix(h, hashValue(error.errors, childBudget, depth))
   }
-  return h
+  return count > MAX_ENTRIES ? rememberWide(object, h) : h
 }
 
 /** Map entries in any order. Large Maps contribute every entry, shallowly (objects among them by a constant tag). */
@@ -274,10 +334,10 @@ const hashMap = (map: Map<unknown, unknown>, budget: number, depth: number): num
   let sum = 0
   if (size > MAX_ENTRIES) {
     for (const [key, value] of map) sum = (sum + spread(mix(shallowHash(key), shallowHash(value)))) | 0
-  } else {
-    const childBudget = share(budget, 2 * size)
-    for (const [key, value] of map) sum = (sum + spread(mix(hashValue(key, childBudget, depth), hashValue(value, childBudget, depth)))) | 0
+    return rememberWide(map, mix(h, sum))
   }
+  const childBudget = share(budget, 2 * size)
+  for (const [key, value] of map) sum = (sum + spread(mix(hashValue(key, childBudget, depth), hashValue(value, childBudget, depth)))) | 0
   return mix(h, sum)
 }
 
@@ -289,25 +349,39 @@ const hashSet = (set: Set<unknown>, budget: number, depth: number): number => {
   const childBudget = size > MAX_ENTRIES ? 0 : share(budget, size)
   let sum = 0
   for (const value of set) sum = (sum + spread(hashValue(value, childBudget, depth))) | 0
-  return mix(h, sum)
+  return size > MAX_ENTRIES ? rememberWide(set, mix(h, sum)) : mix(h, sum)
 }
 
 /** The hash of one value (see above). Exported for the tests of the contract. */
-export const structuralHash = (value: unknown): number => {
+export const structuralHash = (value: unknown): number => withWideHashes(() => {
   try {
     return hashValue(value, BUDGET, 0)
   } catch {
     return FALLBACK_HASH
   }
-}
+})
 
 /** The structural hash of an argument list (see above). Each argument has a budget of its own. */
-export const hashArguments = (args: readonly unknown[]): number => {
+export const hashArguments = (args: readonly unknown[]): number => withWideHashes(() => {
   let h = mix(Tag.Array, args.length)
   try {
     for (let index = 0; index < args.length; index++) h = mix(h, hashValue(args[index], BUDGET, 0))
   } catch {
     return FALLBACK_HASH
+  }
+  return h
+})
+
+/**
+ * E9: a hash of an argument list that does not look into objects: primitives by value, functions by identity, every
+ * object alike. Deep strictly equal lists share it, and computing it costs nothing, so the index of literal
+ * substitutions uses it to see that no substitution can match a call before it computes the structural hash.
+ */
+export const coarseHashArguments = (args: readonly unknown[]): number => {
+  let h = mix(Tag.Array, args.length)
+  for (let index = 0; index < args.length; index++) {
+    const value = args[index]
+    h = mix(h, typeof value === 'object' && value !== null ? Tag.Object : shallowHash(value))
   }
   return h
 }
