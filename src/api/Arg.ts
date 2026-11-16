@@ -78,16 +78,27 @@ type IsNot = {
 // (no type is assignable to every object type).
 type AnyFunction = Argument<Function> & ((...args: any[]) => any) & (new (...args: any[]) => any)
 
-type MapAnyReturn<T> = T extends 'any' ?
+// 'undefined' fits only parameters that accept `undefined` (T38). (`Argument<undefined> & undefined` is `never`, which
+// fits every parameter.) The type is taken from where the matcher is used: `TContext` is inferred from the parameter (or
+// property) type it is passed to. That type is used when it accepts `undefined`, and `undefined` otherwise, which is
+// then a compile error. Without such a type (`const m = Arg.any('undefined')`) it is `undefined`. A type assertion to a
+// matcher type (`<Argument<unknown>>Arg.any('undefined')`) keeps working.
+type UndefinedArg<TContext> = undefined extends TContext ? TContext : TContext extends Argument<any> ? TContext : undefined
+
+type MapAnyReturn<T, TContext> = T extends 'any' ?
 ReturnArg<any> : T extends 'string' ?
 ReturnArg<string> : T extends 'number' ?
 ReturnArg<number> : T extends 'boolean' ?
 ReturnArg<boolean> : T extends 'symbol' ?
 ReturnArg<symbol> : T extends 'undefined' ?
-ReturnArg<undefined> : T extends 'object' ?
+UndefinedArg<TContext> : T extends 'object' ?
 ReturnArg<any> : T extends 'function' ?
 AnyFunction : T extends 'array' ?
 ReturnArg<any[]> : any
+
+// `Arg.any.not('undefined')` matches every defined value, so it fits any parameter. The other types keep the type of
+// the matcher without `.not`.
+type MapAnyNotReturn<T> = T extends 'undefined' ? ReturnArg<any> : MapAnyReturn<T, undefined>
 
 type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any'
 type Any = {
@@ -96,7 +107,7 @@ type Any = {
    * 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and substitutes),
    * 'array' or 'any'.
    */
-  <T extends AnyType = 'any'>(type?: T): MapAnyReturn<T>
+  <T extends AnyType = 'any', TContext = undefined>(type?: T): MapAnyReturn<T, TContext>
   /**
    * The inverse of `Arg.any`: `Arg.any.not(type)` matches every argument that is NOT of the given type, e.g.
    * `Arg.any.not('string')` matches every argument that is not a string.
@@ -111,7 +122,7 @@ type AnyNot = {
    * `Arg.any.not()` matches nothing. Types: 'string', 'number', 'boolean', 'symbol', 'undefined', 'object' (non-null
    * objects, arrays and substitutes), 'function' (functions, classes and substitutes), 'array' or 'any'.
    */
-  <T extends AnyType = 'any'>(type?: T): MapAnyReturn<T>
+  <T extends AnyType = 'any'>(type?: T): MapAnyNotReturn<T>
 }
 
 const createAnyPredicate = (type: string): PredicateFunction<unknown> => {
