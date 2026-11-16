@@ -3,7 +3,7 @@ import { spawnSync } from 'child_process'
 import * as path from 'path'
 import { inspect, promisify, types } from 'util'
 
-import { Substitute, Arg, configure, mimick } from '../../../src'
+import { Substitute, Arg, configure, didNotReceive, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -42,6 +42,143 @@ const reportsNothingLater = (t: ExecutionContext, run: () => unknown) => {
     clock.uninstall()
   }
 }
+
+// ---- D25: code under test for the chain tests, in functions of its own (as in a module under test) ----
+
+function getConnection(cache: any, driver: any) {
+  cache.get('conn')
+  return driver.connect('db://x')
+}
+
+class Service {
+  constructor(private readonly app: any) { }
+  getLogger() { return this.app.logger }
+}
+
+// test helpers in the same file as the code under test
+function arrangeOpen(connection: any) {
+  connection.isOpen.returns(true)
+}
+
+function arrangeCalculator(app: any) {
+  app.getCalc().add(1, 2).returns(99)
+}
+
+test('ENG2-1 / V2-1 (D25) a setup or check on a value the code under test returned keeps the call that returned it', t => {
+  const cache = Substitute.for<any>()
+  const driver = Substitute.for<any>()
+  const connection = getConnection(cache, driver)
+  connection.isOpen.returns(true)
+  t.true(connection.isOpen)
+  t.throws(() => driver.didNotReceive().connect('db://x'), { instanceOf: SubstituteException })
+  t.notThrows(() => driver.received(1).connect('db://x'))
+  t.notThrows(() => cache.received(1).get('conn'))
+
+  // V2-1: a check on the returned auto-substitute
+  const factory = Substitute.for<any>()
+  const connect = () => factory.create('db')
+  const created = connect()
+  created.didNotReceive().close()
+  t.notThrows(() => factory.received(1).create('db'))
+
+  // a nested member returned by a method, checked with the string and the symbol forms, or configured
+  const app = Substitute.for<any>()
+  const logger = new Service(app).getLogger()
+  logger.didNotReceive().info('x')
+  logger[didNotReceive]().warn('x')
+  logger[configure]().level.returns(3)
+  t.is(logger.level, 3)
+  t.notThrows(() => app.received(1).logger)
+
+  // a value the code under test configured nothing on, asserted with a matcher call
+  const repository = Substitute.for<any>()
+  const users = (() => repository.table('users'))()
+  users.find(Arg.any()).returns('found')
+  t.is(users.find(1), 'found')
+  t.notThrows(() => repository.received(1).table('users'))
+})
+
+test('ENG2-1 (D25) a chain written over several lines in one function is still one expression', t => {
+  const app = Substitute.for<any>()
+  app
+    .getCalc()
+    .add(1, 2)
+    .returns(99)
+  t.is(inspect(app), '@Substitute {\n}', 'nothing of the setup is recorded')
+  t.is(app.getCalc().add(1, 2), 99)
+  app.received(1).getCalc()
+
+  const service = Substitute.for<any>()
+  service.logger.info('hi')
+  service
+    .logger
+    .received(1)
+    .info('hi')
+  service
+    .logger[received](1)
+    .info('hi')
+  t.notThrows(() => service.received(1).logger, 'only the real read is left')
+
+  // the test's own stored handle, used in the same function, is part of the setup (accepted by D25)
+  const settings = Substitute.for<any>()
+  const handle = settings.display
+  handle.level.returns(3)
+  t.is(settings.display.level, 3)
+  t.notThrows(() => settings.received(1).display)
+})
+
+test('ENG2-1 (D25) chains in a helper function in the same file as the code under test', t => {
+  const driver = Substitute.for<any>()
+  const connection = getConnection(Substitute.for<any>(), driver)
+  arrangeOpen(connection)
+  t.true(connection.isOpen)
+  t.notThrows(() => driver.received(1).connect('db://x'))
+
+  const app = Substitute.for<any>()
+  arrangeCalculator(app)
+  t.is(inspect(app), '@Substitute {\n}')
+  t.is(app.getCalc().add(1, 2), 99)
+})
+
+test('ENG2-1 (D25) code under test defined as an arrow function inside the test function', t => {
+  const driver = Substitute.for<any>()
+  const open = (url: string) => driver.connect(url)
+  const connection = open('db://y')
+  connection.query('select 1').returns([1])
+  t.deepEqual(connection.query('select 1'), [1])
+  t.notThrows(() => driver.received(1).connect('db://y'))
+  t.throws(() => driver.didNotReceive().connect('db://y'), { instanceOf: SubstituteException })
+
+  const handlers = Substitute.for<any>()
+  const register = function () { return handlers.on('click') }
+  register().didNotReceive().off()
+  t.notThrows(() => handlers.received(1).on('click'))
+})
+
+test('ENG2-1 (D25) without stack frames (Error.stackTraceLimit = 0) adjacency alone decides', t => {
+  const stackTraceLimit = Error.stackTraceLimit
+  Error.stackTraceLimit = 0
+  try {
+    const app = Substitute.for<any>()
+    app.getCalc().add(1, 2).returns(99)
+    t.is(inspect(app), '@Substitute {\n}')
+    t.is(app.getCalc().add(1, 2), 99)
+
+    // the fallback: a setup right after the call that returned the value retracts that call...
+    const driver = Substitute.for<any>()
+    const connection = getConnection(Substitute.for<any>(), driver)
+    connection.isOpen.returns(true)
+    t.notThrows(() => driver.didNotReceive().connect('db://x'))
+    // ... unless another operation on a substitute happened in between
+    const other = Substitute.for<any>()
+    const kept = getConnection(Substitute.for<any>(), other)
+    Substitute.for<any>().ping()
+    kept.isOpen.returns(true)
+    t.notThrows(() => other.received(1).connect('db://x'))
+  } finally {
+    Error.stackTraceLimit = stackTraceLimit
+  }
+})
 
 test('ENG2-5 (D27) Arg matchers nested in plain objects and arrays match deeply, and make the call a setup', t => {
   const repository = Substitute.for<any>()

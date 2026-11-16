@@ -3,6 +3,7 @@ import { inspect, InspectOptions, types } from 'util'
 import { isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { CallRecord, currentSequence, retract } from './CallRecord'
+import { CallSite, Frame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException } from './SubstituteException'
 import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
@@ -112,7 +113,34 @@ const entryProxy = (entry: AutoEntry): any => {
 }
 
 const faceState = (face: Face): SubstituteState => face instanceof AutoEntry ? face.state : face
-const faceChainHead = (face: Face): CallRecord | undefined => face instanceof AutoEntry ? face.chainHead() : undefined
+
+/*
+ * D25: chains. `sub.a.b(1).returns(2)` reads `a`, reads `b` on the auto-substitute that read handed out, and
+ * so on; a setup or an assertion at the end of the chain retracts the records of the whole expression. A step
+ * continues the expression of the operation that handed out its proxy when that operation was the last one of
+ * all (adjacency) and both come from the same function in the same file (their first stack frames outside the
+ * library). So a value that the code under test got from a substitute, and returned, does not take the code under
+ * test's call with it when the test configures or checks that value. Without stack frames (Error.stackTraceLimit
+ * = 0), adjacency alone decides.
+ */
+
+/** The frame of the current operation, read only when it is needed (the trap function is the stack start). */
+const frameAt = (stackStart: Function) => (): Frame | null => CallSite.capture(stackStart).frame
+
+/** The candidate (an adjacent hand-out) if the current operation continues its expression. */
+const continuedChain = (candidate: CallRecord | undefined, current: () => Frame | null): CallRecord | undefined => {
+  if (candidate === undefined) return undefined
+  const head = candidate.frame
+  return head === null || sameExpression(head, current()) ? candidate : undefined
+}
+
+/** Links a new record to the candidate if it continues the candidate's expression. */
+const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
+  if (continuedChain(candidate, () => record.frame) !== undefined) record.chainPrevious = candidate
+  return record
+}
+
+const adjacentHandOut = (face: Face): CallRecord | undefined => face instanceof AutoEntry ? face.adjacentHandOut() : undefined
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
@@ -181,44 +209,47 @@ const substitutionOnSubstituteError = (property: PropertyKey, start: Function) =
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
+  const candidate = adjacentHandOut(face)
+  // for the operations that create no record: compared with the frame of this access
+  const chainHead = () => continuedChain(candidate, frameAt(stackStart))
+
   if (!(face instanceof AutoEntry)) {
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
     const entry = face
     const method = substitutionMethodOf(property)
-    if (method !== undefined) return setupFunction(entry, method)
+    if (method !== undefined) return setupFunction(entry, method, chainHead())
 
     if (entry.kind === 'get' && isFunctionHelperKey(property))
       return functionHelper(property, (args, start) => invoke(entry.parent, entry.key, args, start, TAKE_PENDING_READ))
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
     if (entry.kind === 'call' && isStringAssertionKey(entry.key)) {
-      const assertion = resolveStringAssertion(entry, stackStart)
+      const assertion = resolveStringAssertion(entry, chainHead(), stackStart)
       return assertionMember(assertion.state, property, assertion.count, stackStart)
     }
   }
 
   const context = contextMethodOf(property)
-  if (context !== undefined) return contextFunction(context, () => faceState(face), faceChainHead(face))
+  if (context !== undefined) return contextFunction(context, () => faceState(face), chainHead())
 
-  const chainHead = faceChainHead(face)
-  return realGet(faceState(face), property, chainHead, stackStart)
+  return realGet(faceState(face), property, candidate, stackStart)
 }
 
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
+  const candidate = adjacentHandOut(face)
   if (face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key)) {
-    const assertion = resolveStringAssertion(face, stackStart)
+    const assertion = resolveStringAssertion(face, continuedChain(candidate, frameAt(stackStart)), stackStart)
     assertSet(assertion.state, property, value, assertion.count, stackStart)
     return
   }
-  const chainHead = faceChainHead(face)
-  realSet(faceState(face), property, value, chainHead, stackStart)
+  realSet(faceState(face), property, value, candidate, stackStart)
 }
 
 const faceApply = (face: Face, _thisArg: unknown, args: any[], stackStart: Function): any => {
   if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined)
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ)
-  return invoke(face.state, SELF, args, stackStart, undefined, face.chainHead())
+  return invoke(face.state, SELF, args, stackStart, undefined, face.adjacentHandOut())
 }
 
 /** `.call`, `.apply` and `.bind` on a member behave like invoking the member (D7). */
@@ -271,12 +302,12 @@ const answersProtocolKey = (state: SubstituteState, key: PropertyKey): boolean =
   (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
 
 /** A real property read by the code under test. */
-const realGet = (state: SubstituteState, key: PropertyKey, chainPrevious: CallRecord | undefined, stackStart: Function): any => {
+const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallRecord | undefined, stackStart: Function): any => {
   if (isProtocolKey(key) && !answersProtocolKey(state, key)) return undefined
 
   const substitution = state.propertySubstitution(key)
   if (substitution !== undefined) {
-    const record = state.addRecord('get', key, undefined, stackStart, chainPrevious)
+    const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
     // Configured both as a property and as a method: whether this read is a property read is only known later.
     if (state.hasCallSubstitutions(key)) return deferredRead(state, key, record, substitution)
     return execute(substitution)
@@ -290,12 +321,12 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainPrevious: CallRe
       !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
     const value = delegate ? mimicked.instance[key] : undefined
     if (delegate && typeof value !== 'function') {
-      state.addRecord('get', key, undefined, stackStart, chainPrevious)
+      linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
       return value
     }
   }
 
-  const record = state.addRecord('get', key, undefined, stackStart, chainPrevious)
+  const record = linkChain(state.addRecord('get', key, undefined, stackStart), chainCandidate)
   state.addPendingRead(record)
   const entry = state.propertyEntry(key)
   entry.handOut(record)
@@ -303,8 +334,8 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainPrevious: CallRe
 }
 
 /** A real property assignment by the code under test. */
-const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chainPrevious: CallRecord | undefined, stackStart: Function): void => {
-  state.addRecord('set', key, [value], stackStart, chainPrevious)
+const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chainCandidate: CallRecord | undefined, stackStart: Function): void => {
+  linkChain(state.addRecord('set', key, [value], stackStart), chainCandidate)
   if (state.mimicked !== undefined) state.mimicked.instance[key] = value
 }
 
@@ -313,13 +344,13 @@ const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chain
  * substitution runs. Otherwise it is a real call: it is recorded (taking over the property read of the
  * method, if there is one) and resolved.
  */
-const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStart: Function, readSource: ReadSource, chainPrevious?: CallRecord): any => {
+const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStart: Function, readSource: ReadSource, chainCandidate?: CallRecord): any => {
   const read = readSource === TAKE_PENDING_READ ? state.takePendingRead(key) : readSource
 
   if (RecordedArguments.containsMatchers(args)) {
     const specification = RecordedArguments.forSpecification(args)
     retract(read)
-    retract(chainPrevious)
+    retract(continuedChain(chainCandidate, frameAt(stackStart)))
     return configureCall(state, key, specification, isStringAssertionKey(key))
   }
 
@@ -327,7 +358,7 @@ const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStar
   if (read !== undefined && read.kind === 'get' && !read.retracted) {
     read.convertToCall(args, stackStart)
     record = read
-  } else record = state.addRecord('call', key, args, stackStart, chainPrevious)
+  } else record = linkChain(state.addRecord('call', key, args, stackStart), chainCandidate)
 
   return resolveCall(state, key, args, record)
 }
@@ -356,28 +387,27 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   return entryProxy(entry)
 }
 
-/** The actual arguments of the call that handed out this auto-substitute, when that was the previous operation. */
-const actualArgumentsOf = (entry: AutoEntry): any[] => {
-  const head = entry.chainHead()
-  if (head !== undefined && head.kind === 'call' && head.args !== undefined) return head.args
+/** The actual arguments of the call that handed out this auto-substitute, when it is part of the same expression. */
+const actualArgumentsOf = (entry: AutoEntry, chainHead: CallRecord | undefined): any[] => {
+  if (chainHead !== undefined && chainHead.kind === 'call' && chainHead.args !== undefined) return chainHead.args
   return entry.args?.value ?? []
 }
 
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
-const setupFunction = (entry: AutoEntry, method: SubstitutionMethod): Function => {
+const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined): Function => {
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
-    ? RecordedArguments.from(actualArgumentsOf(entry)) // handed out by a matcher setup: configure the actual call
+    ? RecordedArguments.from(actualArgumentsOf(entry, chainHead)) // handed out by a matcher setup: configure the actual call
     : entry.args
-  retract(entry.chainHead())
+  retract(chainHead)
   return function substitution(...values: any[]) {
     if (entry.kind === 'get') entry.parent.setPropertySubstitution(entry.key, method, values)
     else entry.parent.addCallSubstitution(entry.key, specification!, method, values)
   }
 }
 
-const resolveStringAssertion = (entry: AutoEntry, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
-  const args = actualArgumentsOf(entry)
-  retract(entry.chainHead())
+const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefined, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
+  const args = actualArgumentsOf(entry, chainHead)
+  retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
   return { state: entry.parent, count }
 }
@@ -437,7 +467,7 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) {
-        if (record.seq === currentSequence()) retract(record)
+        if (record.seq === currentSequence()) retract(continuedChain(record, frameAt(get)))
         return function substitution(...values: any[]) {
           state.setPropertySubstitution(key, method, values)
         }

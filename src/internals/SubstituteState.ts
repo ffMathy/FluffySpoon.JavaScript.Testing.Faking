@@ -143,11 +143,11 @@ export class AutoEntry {
   }
 
   /**
-   * The record that handed out this proxy, if that was the most recent operation of all. Then the
-   * current operation continues the same expression (`sub.a.b`), and setups or assertions resolved
-   * later on in the chain retract it.
+   * The record that handed out this proxy, if that was the most recent operation of all. Then the current
+   * operation may continue the same expression (`sub.a.b`): the engine checks that both come from the same
+   * function (D25), and setups or assertions resolved later on in the chain retract it.
    */
-  public chainHead(): CallRecord | undefined {
+  public adjacentHandOut(): CallRecord | undefined {
     return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
   }
 }
@@ -297,8 +297,8 @@ export class SubstituteState {
 
   // ---- received calls -------------------------------------------------------------------------
 
-  public addRecord(kind: RecordKind, key: PropertyKey, args: any[] | undefined, stackStart: Function, chainPrevious?: CallRecord): CallRecord {
-    const record = new CallRecord(kind, key, args, stackStart, chainPrevious)
+  public addRecord(kind: RecordKind, key: PropertyKey, args: any[] | undefined, stackStart: Function): CallRecord {
+    const record = new CallRecord(kind, key, args, stackStart)
     this._records.push(record)
     const forKey = this._recordsByKey.get(key)
     if (forKey === undefined) this._recordsByKey.set(key, [record])
