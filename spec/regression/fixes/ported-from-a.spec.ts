@@ -1,5 +1,5 @@
 import test, { ExecutionContext, ThrowsExpectation } from 'ava'
-import * as fakeTimers from '@sinonjs/fake-timers'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 import { EventEmitter } from 'events'
 import * as path from 'path'
 import { inspect, types } from 'util'
@@ -29,7 +29,7 @@ const plain = (message: string) => message.replace(/\x1b\[\d+m/g, '')
 const substitute = <T = unknown>(): any => Substitute.for<T>()
 
 const throwsOnNextTick = (cb: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation) => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     cb()
     t.throws(() => clock.tick(1), expectation)
@@ -39,7 +39,7 @@ const throwsOnNextTick = (cb: () => unknown, t: ExecutionContext, expectation: T
 }
 
 const doesNotThrowOnNextTick = (cb: () => unknown, t: ExecutionContext) => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     cb()
     t.notThrows(() => clock.tick(1))
@@ -281,8 +281,12 @@ test('D7 each invocation is its own record, also through stored references, call
   t.notThrows(() => logger.received(7).log(Arg.all()))
   for (const value of [1, 2, 3, 4, 5]) t.notThrows(() => logger.received(1).log(value))
   t.notThrows(() => logger.received(1).log(6, 0, [6, 7]))
-  // every read of `log` above was followed by invocations: none of them is a property read
-  t.notThrows(() => logger.received(0).log)
+  // every read of `log` above was followed by invocations: none of them is a property read. Since D33 (round 3) the
+  // property-style received(0).log on a member that was only invoked is reported later, and the report says so.
+  throwsOnNextTick(() => logger.received(0).log, t, {
+    instanceOf: SubstituteException,
+    message: /but received 7 method calls\. log was called 7 times as a method/
+  })
 
   const guard = substitute()
   if (guard.onDone) guard.onDone(1)

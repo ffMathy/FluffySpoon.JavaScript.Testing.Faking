@@ -1,5 +1,5 @@
 import test, { ExecutionContext } from 'ava'
-import * as fakeTimers from '@sinonjs/fake-timers'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 import { EventEmitter } from 'events'
 import { inspect, types } from 'util'
 
@@ -20,7 +20,7 @@ const substitute = <T = unknown>(): any => Substitute.for<T>()
 
 /** The message of a failure that is only reported on process.nextTick; nothing may be thrown before. */
 const messageOnNextTick = (cb: () => unknown, t: ExecutionContext): string => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   try {
     t.notThrows(cb)
     return plain(t.throws<SubstituteException>(() => clock.tick(1), { instanceOf: SubstituteException }).message)
@@ -174,7 +174,9 @@ test('D18 messages: kind-neutral wording when the kind is unknown, expected argu
   calculator.add(1, 2)
   void calculator.total
 
-  t.is(plain(t.throws(() => calculator.received(2).total)!.message).split('\n')[1], 'Expected to receive 2 property reads matching total, but received 1.')
+  // D36 (round 3): total was only read, with a count above the reads, so it fails for both readings
+  t.is(plain(t.throws(() => calculator.received(2).total)!.message).split('\n')[1],
+    'Expected to receive 2 property reads or method calls matching total, but received 1 property read and no method calls.')
   // amended D9: add was only invoked, so a property-style failure is reported on process.nextTick (engine A threw it
   // at once) and says that add was called as a method
   t.is(messageOnNextTick(() => calculator.received(2).add, t).split('\n')[1],

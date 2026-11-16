@@ -1,5 +1,5 @@
 import test, { ExecutionContext, ThrowsExpectation } from 'ava'
-import * as fakeTimers from '@sinonjs/fake-timers'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 import { types } from 'util'
 
 import { Substitute } from '../../../src'
@@ -16,7 +16,7 @@ interface Subsection {
 }
 
 const throwsUncaughtException = (cb: () => any, t: ExecutionContext, expectation: ThrowsExpectation) => {
-  const clock = fakeTimers.install({ toFake: ['nextTick'] })
+  const clock = interceptDeferredReports()
   cb()
   t.throws(() => clock.tick(1), expectation)
   clock.uninstall()
