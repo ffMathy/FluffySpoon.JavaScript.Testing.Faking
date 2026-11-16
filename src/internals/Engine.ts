@@ -230,9 +230,13 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainPrevious: CallRe
   }
 
   const mimicked = state.mimicked
-  if (mimicked !== undefined && hasMember(mimicked.instance, key)) {
-    const value = mimicked.instance[key]
-    if (typeof value !== 'function') {
+  if (mimicked !== undefined) {
+    // A member the instance does not have reads as undefined, like on the instance, unless the
+    // substitute itself needs it: the string assertion forms, configured calls and nested setups.
+    const delegate = hasMember(mimicked.instance, key) ||
+      !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
+    const value = delegate ? mimicked.instance[key] : undefined
+    if (delegate && typeof value !== 'function') {
       state.addRecord('get', key, undefined, stackStart, chainPrevious)
       return value
     }

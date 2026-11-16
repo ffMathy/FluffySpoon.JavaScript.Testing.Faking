@@ -164,6 +164,18 @@ test('D12 sub[mimick](instance) delegates unconfigured members to the instance',
   // assertions never run the instance
   t.is(instance.calls, 1)
 
+  // a member the instance does not have reads as undefined, like on the instance itself,
+  // unless the substitute configures it
+  const loose = substitute as any
+  t.is(loose.missing, undefined)
+  t.throws(() => loose.missingMethod(), { instanceOf: TypeError })
+  loose[configure]().extra(1).returns(5)
+  t.is(loose.extra(1), 5)
+  loose[configure]().nested.value.returns('n')
+  t.is(loose.nested.value, 'n')
+  loose.received(1).extra(1)
+  loose.received(1).missing
+
   // the string mimick is an ordinary member
   const other = Substitute.for<any>()
   other.mimick(instance)

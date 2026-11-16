@@ -235,6 +235,11 @@ export class SubstituteState {
     return entry
   }
 
+  /** True when the auto-substitute behind a member has its own configuration or records. */
+  public hasConfiguredPropertyEntry(key: PropertyKey): boolean {
+    return this._propertyEntries.get(key)?.materializedState !== undefined
+  }
+
   /** The auto-substitute for a call with these actual (literal) arguments. */
   public callEntry(key: PropertyKey, actualArguments: any[]): AutoEntry {
     let index = this._callEntries.get(key)
