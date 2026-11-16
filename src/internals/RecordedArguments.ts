@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
 import { SubstituteException } from './SubstituteException'
-import { FAMILY_KEYS, isInFamily } from './utilities/ArgumentHash'
+import { FAMILY_KEYS, forgetListings, isInFamily, noteListing } from './utilities/ArgumentHash'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -114,6 +114,8 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
   const count = keys.length + symbols.length
   if (count > MAX_SCANNED_ITEMS) {
     tooWideToSearch.add(container)
+    // E13: the hash, which comes next, takes the keys from here
+    noteListing(container, symbols.length === 0 ? keys : [...keys, ...symbols.filter(symbol => Object.prototype.propertyIsEnumerable.call(container, symbol))])
     return false
   }
   if (count > search.items) return false
@@ -301,8 +303,12 @@ export class RecordedArguments {
     return true
   }
 
-  /** Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). */
+  /**
+   * Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). The first
+   * look at the arguments of an invocation: it starts the operation's notes of listed keys afresh (see noteListing).
+   */
   static containsMatchers(rawArguments: readonly unknown[]): boolean {
+    forgetListings()
     for (const argument of rawArguments) if (isArgumentMatcher(argument) || containsNestedMatcher(argument)) return true
     return false
   }

@@ -1,4 +1,4 @@
-import test from 'ava'
+import test, { ExecutionContext } from 'ava'
 import { isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg, configure } from '../../../src'
@@ -74,6 +74,28 @@ test.serial('R5V-1 (E13) distinct wide objects with the same keys are told apart
   t.notThrows(() => sub.received(1).put(alsoChanged))
 })
 
+/**
+ * The cliff around each limit: calls with distinct objects of `size` keys, on both sides of 256 (wide containers),
+ * 1,025 (families) and 65,536 (a sample of the values above). `prefix` gives each run key sets of its own.
+ */
+const eachLimit = (t: ExecutionContext, prefix: string) => {
+  for (const size of [255, 256, 257, 1024, 1025, 1026, 4096, 4097, 65_535, 65_536, 65_537]) {
+    const calls = size > 10_000 ? 10 : 200
+    const values = Array.from({ length: calls }, (_, call) => wideObject(size, key => call * 1_000_000 + key, key => `${prefix}${size}_${key}`))
+    const elapsed = timeCalls(values)
+    t.log(`${calls} calls with distinct ${size}-key objects: ${elapsed.toFixed(1)} ms`)
+    t.true(elapsed < 1000, `${calls} calls with distinct ${size}-key objects: ${elapsed} ms`)
+    // a copy in another key order hashes alike, also without families
+    t.is(structuralHash(shuffledCopy(values[1], size)), structuralHash(values[1]), `${size} keys`)
+    t.is(refinedStructuralHash(shuffledCopy(values[1], size)), refinedStructuralHash(values[1]), `${size} keys (refined)`)
+  }
+}
+
+test.serial('R5-ADV-1 (E13) objects on both sides of each limit (256, 1,025 and 65,536 keys) cost about the same per key', t => {
+  // the first wide key sets of this file: each one starts a family (see ArgumentHash)
+  eachLimit(t, 'w')
+})
+
 test.serial('R5-ADV-1 (E13) 50 normalized-state actions with a nested 5,000-entry byId finish well under 1s', t => {
   const actions = Array.from({ length: 50 }, (_, action) => ({
     type: 'users/loaded',
@@ -85,6 +107,35 @@ test.serial('R5-ADV-1 (E13) 50 normalized-state actions with a nested 5,000-entr
   t.true(elapsed < 1000, `50 normalized-state actions: ${elapsed} ms`)
   t.is(store.dispatch({ ...actions[7], payload: { byId: { ...actions[7].payload.byId } } }), store.dispatch(actions[7]))
   t.not(store.dispatch(actions[8]), store.dispatch(actions[7]))
+})
+
+test.serial('R5-ADV-1 (E13) distinct tables of records, Sets of objects and Maps with object keys are told apart: 100 calls each', t => {
+  // 45facfb (and ec64181): 3.4 to 4.2 s each, as the objects among the entries of a wide container all counted alike
+  const records = (call: number) => Array.from({ length: 5000 }, (_, key) => ({ id: call * 5000 + key, name: `n${key}` }))
+  const shapes: Array<[string, unknown[]]> = [
+    ['100 Sets of 5,000 records', Array.from({ length: 100 }, (_, call) => new Set(records(call)))],
+    ['100 Maps with 5,000 object keys', Array.from({ length: 100 }, (_, call) => new Map(records(call).map((record, key): [object, object] => [{ key }, record])))],
+    ['100 tables of 5,000 records with the same keys', Array.from({ length: 100 }, (_, call) => { const rows = records(call); return wideObject(5000, key => rows[key], key => `user${key}`) })],
+    // the same keys and ids, other names: snapshots of a normalized state
+    ['100 snapshots of 5,000 records', Array.from({ length: 100 }, (_, call) => wideObject(5000, key => ({ id: key, name: `n${key}`, address: { city: `c${call}` } }), key => `id${key}`))]
+  ]
+  for (const [name, values] of shapes) {
+    const elapsed = timeCalls(values)
+    t.log(`${name}: ${elapsed.toFixed(1)} ms`)
+    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+  }
+
+  // still exact: equal copies (in another order) find the same auto-substitute, a record that differs anywhere (also
+  // deeper than the budget of an entry looks) another one
+  const sub = Substitute.for<any>()
+  const table = () => new Set(Array.from({ length: 300 }, (_, key) => ({ id: key, deep: { deeper: { deepest: 1 } } })))
+  const first = sub.put(table())
+  t.is(sub.put(new Set([...table()].reverse())), first)
+  const changed = table()
+  ;[...changed][7].deep.deeper.deepest = 2
+  t.not(sub.put(changed), first)
+  t.notThrows(() => sub.received(2).put(table()))
+  t.notThrows(() => sub.received(1).put(changed))
 })
 
 test.serial('R5-ADV-1 (E13) 200 literal setups and 200 calls with copies of distinct 5,000-key objects finish well under 1s', t => {
@@ -104,19 +155,6 @@ test.serial('R5-ADV-1 (E13) 200 literal setups and 200 calls with copies of dist
   sink[configure]().write(shuffledCopy(objects[5], 5)).returns('again')
   t.is(sink.write(objects[5]), 'again')
   t.is(sink.write(copies[6]), 6)
-})
-
-test.serial('R5-ADV-1 (E13) objects on both sides of each limit (256, 1,025 and 65,536 keys) cost about the same per key', t => {
-  for (const size of [255, 256, 257, 1024, 1025, 1026, 4096, 4097, 65_535, 65_536, 65_537]) {
-    const calls = size > 10_000 ? 10 : 200
-    const values = Array.from({ length: calls }, (_, call) => wideObject(size, key => call * 1_000_000 + key, key => `w${size}_${key}`))
-    const elapsed = timeCalls(values)
-    t.log(`${calls} calls with distinct ${size}-key objects: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${calls} calls with distinct ${size}-key objects: ${elapsed} ms`)
-    // a copy in another key order hashes alike, also without families
-    t.is(structuralHash(shuffledCopy(values[1], size)), structuralHash(values[1]), `${size} keys`)
-    t.is(refinedStructuralHash(shuffledCopy(values[1], size)), refinedStructuralHash(values[1]), `${size} keys (refined)`)
-  }
 })
 
 test.serial('R5-ADV-1 (E13) Maps and Sets on both sides of each limit (256 and 65,536 entries), with primitive and object keys', t => {
@@ -223,4 +261,9 @@ test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with s
   t.notThrows(() => store.received(1).put(withMatcher))
   store[configure]().put(withMatcher).returns('configured')
   t.is(store.put({ ...withMatcher }), 'configured')
+})
+
+test.serial('R5-ADV-1 (E13) objects on both sides of each limit cost about the same per key, also once every family is taken', t => {
+  // the tests above took every family: these wide objects are hashed with every key, listed once
+  eachLimit(t, 'x')
 })

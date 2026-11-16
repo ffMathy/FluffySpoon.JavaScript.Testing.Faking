@@ -65,6 +65,9 @@ const widest = (): unknown[] => {
   return sharedWide
 }
 
+/** R5V-1 (E13, round 6): records shared by the tables below (copies copy them, other values refer to the same ones). */
+const sharedRecords = Array.from({ length: 4 }, (_, index) => ({ id: index, name: `r${index}` }))
+
 const generateWide = (next: Next, depth: number): unknown => {
   const pick = <T>(items: readonly T[]): T => items[Math.floor(next() * items.length)]
   if (next() < 0.05) return pick(widest())
@@ -72,10 +75,26 @@ const generateWide = (next: Next, depth: number): unknown => {
   // two key sets, values that differ in a few places: independently generated values are often equal
   const prefix = pick(['k', 'q'])
   const special = (index: number) => index === 3 ? generate(next, depth - 1) : index === size - 1 ? pick([1, 2]) : index
+  // E13 (round 6): records as the values of wide containers, hashed with a small budget each; they differ in a few
+  // places (a field, a nested field, a shared record), so that tables of records are often equal as well
+  const record = (index: number): unknown => index === 4 ? pick(sharedRecords)
+    : index === 5 ? { id: index, name: pick(['a', 'b']) }
+    : index === 6 ? { id: index, address: { city: pick(['x', 'y']) } }
+    : index === 7 ? generate(next, depth - 1)
+    : { id: index }
+  const keyed = (count: number, value: (index: number) => unknown) =>
+    objectOf(next, Array.from({ length: count }, (_, index): [PropertyKey, unknown] => [`${prefix}${index}`, value(index)]))
   return pick<() => unknown>([
-    () => objectOf(next, Array.from({ length: size }, (_, index): [PropertyKey, unknown] => [`${prefix}${index}`, special(index)])),
+    () => keyed(size, special),
     () => new Map(shuffle(next, Array.from({ length: Math.min(size, 257) }, (_, index): [unknown, unknown] => [index % 50 === 0 ? { index } : `${prefix}${index}`, special(index)]))),
-    () => new Set(shuffle(next, Array.from({ length: Math.min(size, 257) }, (_, index) => special(index))))
+    () => new Set(shuffle(next, Array.from({ length: Math.min(size, 257) }, (_, index) => special(index)))),
+    // tables of records: a wide object, a Map with object keys and a Set of records
+    () => keyed(size, record),
+    () => new Map(shuffle(next, Array.from({ length: Math.min(size, 300) }, (_, index): [unknown, unknown] => [index === 8 ? { key: pick([1, 2]) } : { key: index }, record(index)]))),
+    () => new Set(shuffle(next, Array.from({ length: Math.min(size, 300) }, (_, index) => record(index)))),
+    // a table of tables (a wide container inside an entry counts as a constant), and a cycle through a wide container
+    () => keyed(300, index => index === 2 ? keyed(300, record) : index === 9 ? new Set(Array.from({ length: 300 }, (_, member) => member === 1 ? pick([1, 2]) : -member)) : index),
+    () => { const table: any = keyed(size, record); table.self = table; return table }
   ])()
 }
 
@@ -113,6 +132,9 @@ const generate = (next: Next, depth: number): unknown => {
     () => objectOf(next, Array.from({ length: size }, (_, index): [PropertyKey, unknown] => [pick(['a', 'b', 'c']) + index, child()])),
     () => objectOf(next, [[pick(sharedSymbols), child()], ['plain', size]]),
     () => new Point(child(), child()),
+    // E13 (round 6): plain objects are hashed without further checks: objects without a prototype, arguments objects
+    () => Object.assign(Object.create(null), objectOf(next, [['a', child()], ['b', pick([1, 2])]])),
+    () => (function (..._: unknown[]) { return arguments })(...Array.from({ length: size }, child)),
     () => new Map(shuffle(next, Array.from({ length: size }, (_, index): [unknown, unknown] => [index % 2 === 0 ? index : { key: index }, child()]))),
     () => new Set(shuffle(next, Array.from({ length: size }, child))),
     // cycles of several shapes: a self reference, a child-to-parent back-reference, a cycle through two objects
@@ -139,6 +161,7 @@ const copy = (next: Next, value: unknown, seen = new Map<object, unknown>()): un
     return result
   }
   if (Buffer.isBuffer(value)) return Buffer.from(value)
+  if (types.isArgumentsObject(value)) return (function (..._: unknown[]) { return arguments })(...Array.from(value as ArrayLike<unknown>, item => copy(next, item, seen)))
   if (value instanceof Date) return new Date(value.getTime())
   if (value instanceof Map) {
     const result = new Map()
@@ -160,7 +183,8 @@ const copy = (next: Next, value: unknown, seen = new Map<object, unknown>()): un
   for (const key of shuffle(next, Reflect.ownKeys(value))) {
     if (key === 'stack') continue
     const descriptor = Object.getOwnPropertyDescriptor(value, key)!
-    Object.defineProperty(result, key, { ...descriptor, value: copy(next, descriptor.value, seen) })
+    // an accessor (the callee of a strict arguments object) is kept as it is
+    Object.defineProperty(result, key, 'value' in descriptor ? { ...descriptor, value: copy(next, descriptor.value, seen) } : descriptor)
   }
   return result
 }
@@ -213,9 +237,37 @@ test('R3-ADV-2 / R3-1 (E3) the bounded hash agrees with the running Node.js isDe
       if (structuralHash(a) === structuralHash(b)) collisions++
     }
   }
+  t.log(`${equalPairs} equal pairs, ${unequal} unequal pairs, ${collisions} collisions`)
   t.true(equalPairs > 3000, `${equalPairs} equal pairs`)
   t.true(unequal > 1000)
   // only values that differ in what the hash leaves out collide: prototypes, holes, deep or sampled parts, ...
+  t.true(collisions / unequal < 0.1, `${collisions} collisions in ${unequal} unequal pairs`)
+})
+
+test('R5V-1 / R5-ADV-1 (E13) wide objects, Maps and Sets around every limit agree with the running Node.js isDeepStrictEqual (property test)', t => {
+  // round 6: only wide values (the test above meets one now and then), with records, tables of tables and cycles
+  const next = random(20261116)
+  const values: unknown[] = []
+  let equalPairs = 0
+  for (let index = 0; index < 400; index++) {
+    const value = generateWide(next, 3)
+    values.push(value)
+    if (hashesAgree(t, value, copy(next, value), `copy ${index}`)) equalPairs++
+    t.not(structuralHash(value), FALLBACK_HASH)
+  }
+  let unequal = 0
+  let collisions = 0
+  for (let index = 0; index < 4000; index++) {
+    const a = values[Math.floor(next() * values.length)]
+    const b = values[Math.floor(next() * values.length)]
+    if (hashesAgree(t, a, b, `pair ${index}`)) equalPairs++
+    else {
+      unequal++
+      if (structuralHash(a) === structuralHash(b)) collisions++
+    }
+  }
+  t.log(`${equalPairs} equal pairs, ${unequal} unequal pairs, ${collisions} collisions`)
+  t.true(equalPairs > 400 && unequal > 1000, `${equalPairs} equal pairs, ${unequal} unequal pairs`)
   t.true(collisions / unequal < 0.1, `${collisions} collisions in ${unequal} unequal pairs`)
 })
 
