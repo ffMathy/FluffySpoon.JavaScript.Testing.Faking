@@ -56,4 +56,15 @@ export function checkCurrent<T>(holder: SubstituteOf<Holder<T>>, value: T) {
   ;(holder.received() as Holder<T>).current = value
 }
 
+// Generic code whose constraint is a union with a method whose return type differs per variant (T39 covers concrete
+// unions): TypeScript computes the call from each variant of the constraint, and `.returns()` then only takes what
+// every variant's return type accepts. Configure it through the constraint type itself.
+interface Cat { kind: 'cat'; speak(): 'meow' }
+interface Dog { kind: 'dog'; speak(): 'woof' }
+export function stubPet<T extends Cat | Dog>(pet: SubstituteOf<T>) {
+  // @ts-expect-error `.returns()` takes `'meow' & 'woof'`, i.e. `never`
+  pet.speak().returns('meow')
+  ;(pet as SubstituteOf<Cat | Dog>).speak().returns('meow')
+}
+
 export { found }
