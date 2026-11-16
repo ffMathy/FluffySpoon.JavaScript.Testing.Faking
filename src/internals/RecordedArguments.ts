@@ -63,37 +63,60 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
 }
 
 /*
- * E3: the search for nested matchers runs on the arguments of every call, so its cost is bounded like the structural
- * hash's (see ArgumentHash): each argument has a budget of SCAN_BUDGET containers, a container shares the rest of its
- * budget evenly among its items, and containers without a share, nested more than MAX_SCAN_DEPTH levels deep (so
- * cycles end), or with more than MAX_SCANNED_ITEMS items or keys are not searched. Matchers there are not recognised,
- * and the value is compared literally. Items without a share are still checked for being a matcher themselves.
+ * E3, E9: the search for nested matchers runs on the arguments of every call, so its cost is bounded like the
+ * structural hash's (see ArgumentHash): each argument has a budget of SCAN_BUDGET containers, a container shares the
+ * rest of its budget evenly among its items, and containers without a share, nested more than MAX_SCAN_DEPTH levels
+ * deep (so cycles end), or with more than MAX_SCANNED_ITEMS items or keys are not searched. Each container is searched
+ * once per argument however often it is referenced, and an argument looks at SCAN_ITEMS items and keys in all at most.
+ * Matchers beyond these bounds are not recognised, and the value is compared literally. Items without a share are still
+ * checked for being a matcher themselves.
+ * The keys of an object can only be counted by listing them all, which is slow for a wide one (a millisecond for
+ * 10,000 keys), so an object found too wide once is remembered (weakly) and never listed again: an object shared by
+ * many calls, such as a lookup table, costs nothing after its first call.
  */
 const SCAN_BUDGET = 1024
 const MAX_SCAN_DEPTH = 32
 const MAX_SCANNED_ITEMS = 1024
+const SCAN_ITEMS = 4096
 
-const holdsMatcherItem = (item: unknown, budget: number, depth: number): boolean =>
-  isArgumentMatcher(item) || (budget > 0 && depth < MAX_SCAN_DEPTH && isPlainContainer(item) && holdsMatcher(item, budget, depth + 1))
+const tooWideToSearch = new WeakSet<object>()
+
+/** One search: the argument, the containers searched so far (created once a nested one is reached), the items left. */
+type Search = { root: object, visited: Set<object> | undefined, items: number }
+
+const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean =>
+  isArgumentMatcher(item) || (budget > 0 && depth < MAX_SCAN_DEPTH && isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search))
 
 /** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
-const holdsMatcher = (container: object, budget: number, depth: number): boolean => {
+const holdsMatcher = (container: object, budget: number, depth: number, search: Search): boolean => {
+  if (depth > 0) {
+    const visited = search.visited ?? (search.visited = new Set([search.root]))
+    if (visited.has(container)) return false // searched already (or being searched further up)
+    visited.add(container)
+  }
   if (Array.isArray(container)) {
     const length = container.length
-    if (length > MAX_SCANNED_ITEMS) return false
+    if (length > MAX_SCANNED_ITEMS || length > search.items) return false
+    search.items -= length
     const share = Math.floor((budget - 1) / length)
-    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth)) return true
+    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search)) return true
     return false
   }
+  if (tooWideToSearch.has(container)) return false
   const keys = Object.keys(container)
   const symbols = Object.getOwnPropertySymbols(container)
   const count = keys.length + symbols.length
-  if (count > MAX_SCANNED_ITEMS) return false
+  if (count > MAX_SCANNED_ITEMS) {
+    tooWideToSearch.add(container)
+    return false
+  }
+  if (count > search.items) return false
+  search.items -= count
   const share = Math.floor((budget - 1) / count)
-  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth)) return true
+  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search)) return true
   for (let index = 0; index < symbols.length; index++) {
     const symbol = symbols[index]
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth)) return true
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search)) return true
   }
   return false
 }
@@ -105,7 +128,7 @@ const holdsMatcher = (container: object, budget: number, depth: number): boolean
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0)
+    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS })
   } catch {
     return false
   }

@@ -4,7 +4,7 @@ import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { hashArguments, identityHashArguments } from './utilities'
+import { coarseHashArguments, hashArguments, identityHashArguments } from './utilities'
 
 let substitutionOrder = 0
 
@@ -15,12 +15,19 @@ let substitutionOrder = 0
 export class ArgumentHashes {
   private _structural?: number
   private _identity?: number | null
+  private _coarse?: number
 
   constructor(public readonly args: readonly unknown[]) { }
 
   public get structural(): number {
     if (this._structural === undefined) this._structural = hashArguments(this.args)
     return this._structural
+  }
+
+  /** E9: primitives and functions only (see coarseHashArguments): free to compute. */
+  public get coarse(): number {
+    if (this._coarse === undefined) this._coarse = coarseHashArguments(this.args)
+    return this._coarse
   }
 
   public get identity(): number | undefined {
@@ -185,11 +192,21 @@ const mostRecentMatch = (list: readonly Substitution[], actualArguments: readonl
  * shape of the arguments. Those with objects among their arguments are also indexed by identity, so passing the same
  * objects again still matches after they were mutated (mutating an argument after the setup is otherwise not
  * supported, amended D15). Substitutions with Arg matchers are kept in a list.
+ *
+ * E9: a call computes the structural hash of its arguments only when a literal substitution could match it. The same
+ * objects as a literal substitution's, found by identity, answer right away when no literal substitution is more
+ * recent. And a call whose primitive arguments are those of no literal substitution (coarseHashArguments) cannot
+ * match one. So a call with a large object as an argument costs the same as any other, whatever literal substitutions
+ * there are with other arguments.
  */
 class CallSubstitutions {
   /** In configuration order within each bucket. */
   private readonly _literal: Buckets<Substitution> = new Map()
   private readonly _byIdentity: Buckets<Substitution> = new Map()
+  /** The coarse hashes of the literal substitutions (a replaced substitution has the coarse hash of its replacement). */
+  private readonly _coarse = new Set<number>()
+  /** The order of the most recent literal substitution. */
+  private _latestLiteral = 0
   private readonly _withMatchers: Substitution[] = []
   private _size = 0
 
@@ -214,6 +231,8 @@ class CallSubstitutions {
       if (replaced.identity !== undefined) bucketRemove(this._byIdentity, replaced.identity, replaced)
     } else this._size++
     bucketAdd(this._literal, hash, substitution)
+    this._coarse.add(coarseHashArguments(args.value!))
+    this._latestLiteral = substitution.order
     const identity = identityHashArguments(args.value!)
     if (identity !== undefined) {
       substitution.identity = identity
@@ -232,12 +251,15 @@ class CallSubstitutions {
     const actualArguments = hashes.args
     let best: Substitution | undefined
     if (this._literal.size > 0) {
-      const literal = bucketItems(this._literal, hashes.structural)
-      if (literal !== undefined) best = mostRecentMatch(literal, actualArguments, best)
       if (this._byIdentity.size > 0) {
         const identity = hashes.identity
         const sameObjects = identity === undefined ? undefined : bucketItems(this._byIdentity, identity)
         if (sameObjects !== undefined) best = mostRecentMatch(sameObjects, actualArguments, best)
+        if (best !== undefined && best.order === this._latestLiteral) return best
+      }
+      if (this._coarse.has(hashes.coarse)) {
+        const literal = bucketItems(this._literal, hashes.structural)
+        if (literal !== undefined) best = mostRecentMatch(literal, actualArguments, best)
       }
       if (best !== undefined) return best
     }
