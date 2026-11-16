@@ -43,6 +43,9 @@ const kindPhrase = (kind: ExpectedKind, count: number | undefined): string => {
 
 const memberLabel = (key: PropertyKey): string => key === SELF ? '' : keyToString(key)
 
+/** D23: a failure message lists at most this many received calls, then "› … and N more". */
+export const MAX_LISTED_CALLS = 50
+
 const describeExpectedCall = (mismatch: CallCountMismatch, colors: boolean): string => {
   const { key, expected } = mismatch
   const name = key === SELF ? mismatch.substitutePath : keyToString(key)
@@ -110,7 +113,8 @@ export class SubstituteException extends Error {
 
     if (mismatch.listed.length > 0) {
       textBuilder.newLine().add(`All property or method calls to ${memberPath} received so far:`)
-      for (const listed of mismatch.listed) {
+      const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
+      for (const listed of shown) {
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
@@ -121,6 +125,8 @@ export class SubstituteException extends Error {
         if (listed.predicateThrew)
           textBuilder.newLine().add(`    (an Arg.is predicate threw while matching this call: ${describeError(listed.predicateError)})`, t => t.faint())
       }
+      const hidden = mismatch.listed.length - shown.length
+      if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
     }
 

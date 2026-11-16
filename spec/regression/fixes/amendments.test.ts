@@ -6,6 +6,9 @@ import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 // Round 2 amendments of the fix spec (D22-D24, the amended D9 message) and the message hints.
 
+const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
+const listedLines = (message: string) => plain(message).split('\n').filter(line => line.startsWith('› '))
+
 const substitutionSymbols = { returns, throws, resolves, rejects, mimicks }
 
 test('D22 a substitution symbol read on a root substitute is a usage error', t => {
@@ -60,4 +63,45 @@ test('D22 substitution symbols on members and calls, and the string names on the
   t.true(error.message.includes('sub[configure]()'))
   factory[configure]().create('a').returns('reconfigured')
   t.is(factory.create('a'), 'reconfigured')
+})
+
+test('D23 a message lists at most 50 received calls, then "… and N more"', t => {
+  const logger = Substitute.for<any>()
+  for (let index = 0; index < 60; index++) logger.log(index)
+  const error = t.throws(() => logger.received(1).log('x'), { instanceOf: SubstituteException })
+  const message = plain(error.message)
+  t.true(message.includes('\n› … and 10 more\n'))
+  const lines = listedLines(message)
+  t.is(lines.length, 51)
+  t.is(lines[0], '› ✘ @Substitute.log(0)')
+  t.is(lines[49], '› ✘ @Substitute.log(49)')
+  t.is(lines[50], '› … and 10 more')
+  t.false(message.includes('@Substitute.log(50)'))
+  t.true(message.endsWith('› … and 10 more\n'))
+
+  // the count in the expectation line still covers every call
+  const tooMany = t.throws(() => logger.received(61).log(Arg.any()), { instanceOf: SubstituteException })
+  t.regex(plain(tooMany.message), /Expected to receive 61 method calls matching log\(Arg\.any\{any\}\), but received 60\./)
+  t.true(plain(tooMany.message).includes('› ✔ @Substitute.log(49)\n'))
+  t.true(plain(tooMany.message).includes('› … and 10 more'))
+
+  // exactly 50 calls: no "more" line
+  const fifty = Substitute.for<any>()
+  for (let index = 0; index < 50; index++) fifty.log(index)
+  const complete = plain(t.throws(() => fifty.received(1).log('x'), { instanceOf: SubstituteException }).message)
+  t.is(listedLines(complete).length, 50)
+  t.false(complete.includes('more'))
+
+  // property reads and assignments are capped the same way
+  const settings = Substitute.for<any>()
+  for (let index = 0; index < 55; index++) {
+    void settings.value
+    settings.value = index
+  }
+  const reads = plain(t.throws(() => settings.received(56).value, { instanceOf: SubstituteException }).message)
+  t.true(reads.includes('› … and 5 more'))
+  const sets = plain(t.throws(() => { settings.received(1).value = -1 }, { instanceOf: SubstituteException }).message)
+  t.is(listedLines(sets).length, 51)
+  t.true(sets.includes('› ✘ @Substitute.value = 49\n'))
+  t.true(sets.includes('› … and 5 more'))
 })
