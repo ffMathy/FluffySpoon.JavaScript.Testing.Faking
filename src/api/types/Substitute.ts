@@ -1,8 +1,12 @@
-import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
+import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
 import { FunctionSubstitute } from './FunctionSubstitute'
 
-/** A member read on a substitute: its value intersected with the setup API (`sub.isEnabled.returns(true)`). */
-export type PropertySubstitute<TValue> = SubstitutionResult<TValue, () => TValue>
+/**
+ * The setup API of a member read on a substitute (`sub.isEnabled.returns(true)`). The value itself is not part of it:
+ * `SubstituteOf<T>` intersects the members with `T`, which supplies it. Intersecting the value here as well would
+ * multiply a large union member type with itself (lib.dom's `HTMLInputElement.autocomplete`, TS2590, TD-8).
+ */
+export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
 
 /**
  * The object type whose members the views below map.

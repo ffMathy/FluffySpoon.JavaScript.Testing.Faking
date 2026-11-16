@@ -1,5 +1,5 @@
 import { constants } from '../../shared'
-import { HasMember, LibraryMemberName } from './Utilities'
+import { HasMember, LibraryMemberName, Primitive } from './Utilities'
 
 export const returns: typeof constants.CONTEXT.returns.symbol = constants.CONTEXT.returns.symbol
 export const throws: typeof constants.CONTEXT.throws.symbol = constants.CONTEXT.throws.symbol
@@ -50,6 +50,8 @@ type StringForm<TCheck, TName extends LibraryMemberName, TMethod> = TCheck exten
   never
 
 type CheckedStringSetupMethods<TReturnType, TImplementation> =
+  // Primitives (and unions of literals, however large) have no conflicting member: skip the per-member check (TD-8).
+  [NonNullable<TReturnType>] extends [Primitive] ? StringSetupMethods<TReturnType, TImplementation> :
   StringForm<NonNullable<TReturnType> & {}, 'returns', ReturnsFunction<TReturnType>> &
   StringForm<NonNullable<TReturnType> & {}, 'throws', ThrowsFunction> &
   StringForm<NonNullable<TReturnType> & {}, 'mimicks', MimicksFunction<TImplementation>> &
@@ -59,11 +61,12 @@ type CheckedStringSetupMethods<TReturnType, TImplementation> =
   ) : {})
 
 /**
- * The setup API offered on the result of a member access or call of a substitute.
+ * The setup API offered on the result of a member access or call of a substitute: the symbol forms, plus each string
+ * form unless the value has a member with that name.
  * `TReturnType` is the member's value (or return) type, `TImplementation` the function type `mimicks` accepts.
  * `TReturnType` must not be `never`, `null` or `undefined` (see `SubstitutionResult`).
  */
-type SetupMethods<TReturnType, TImplementation> =
+export type SetupMethods<TReturnType, TImplementation> =
   SymbolSetupMethods<TReturnType, TImplementation> & CheckedStringSetupMethods<TReturnType, TImplementation>
 
 /** The setup API without name-conflict checks, used where the value itself is not exposed (`[configure]()`). */
@@ -71,7 +74,7 @@ export type UncheckedSetupMethods<TReturnType, TImplementation> =
   SymbolSetupMethods<TReturnType, TImplementation> & StringSetupMethods<TReturnType, TImplementation>
 
 /**
- * The type of a member access or call on a substitute: the value intersected with the setup API.
+ * The type of a call on a substitute: the returned value intersected with the setup API.
  * `null` and `undefined` cannot carry the setup API, so they are dropped from the value part (T:TY-9), while the
  * setup methods still accept them. When nothing is left (`null`, `undefined` or `never`), only the setup API remains.
  * For `never` (a member that always throws) `returns` accepts no value (T:TY-12), so only `throws` and `mimicks` can be

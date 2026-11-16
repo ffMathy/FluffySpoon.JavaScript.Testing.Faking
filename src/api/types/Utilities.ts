@@ -8,6 +8,12 @@ export type IsNever<T> = [T] extends [never] ? true : false
 
 export type IsAny<T> = 0 extends (1 & T) ? true : false
 
+/**
+ * The non-nullish primitive types. They are not callable, and the typings assume that they have no members named like
+ * the library's methods.
+ */
+export type Primitive = string | number | boolean | bigint | symbol
+
 /** The names the library uses: these are the names whose presence in a type the typings check. */
 export type LibraryMemberName = 'received' | 'didNotReceive' | 'returns' | 'throws' | 'resolves' | 'rejects' | 'mimicks'
 

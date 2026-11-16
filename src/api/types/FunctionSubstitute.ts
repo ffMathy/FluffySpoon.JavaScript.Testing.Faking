@@ -1,6 +1,6 @@
 import { AllArguments } from '../../shared'
 import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
-import { Equals, IsAny, IsNever } from './Utilities'
+import { Equals, IsAny, IsNever, Primitive } from './Utilities'
 
 /**
  * What a call returns in each view of a substitute:
@@ -34,6 +34,8 @@ type Slot<TArguments, TReturnType, TNextArguments, TNextReturnType> = TArguments
   NoOverload
 type LastSlot<TArguments, TReturnType> = TArguments extends any[] ? Overload<TArguments, TReturnType> : NoOverload
 
+type NoOverloads = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload]
+
 /**
  * The overloads of a function type, as a fixed-length list of `Overload | NoOverload` (empty slots first), or only
  * `NoOverload` when the type is not callable.
@@ -42,21 +44,24 @@ type LastSlot<TArguments, TReturnType> = TArguments extends any[] ? Overload<TAr
  * typing for the last 8 only (T:TY-11).
  * The checked type is intersected with `TFunction` itself so that TypeScript defers the check until `TFunction` is
  * known (an object type that merely contains a type parameter would be resolved eagerly, and wrongly).
+ * Primitives (also large unions of string literals, such as lib.dom's `AutoFill`) are never callable: they are ruled out
+ * first, without distributing the pattern over the union (TD-8).
  */
-type Overloads<TFunction> = ({ substituteOverloads: TFunction } & TFunction) extends {
-  substituteOverloads(...args: infer A1): infer R1
-  substituteOverloads(...args: infer A2): infer R2
-  substituteOverloads(...args: infer A3): infer R3
-  substituteOverloads(...args: infer A4): infer R4
-  substituteOverloads(...args: infer A5): infer R5
-  substituteOverloads(...args: infer A6): infer R6
-  substituteOverloads(...args: infer A7): infer R7
-  substituteOverloads(...args: infer A8): infer R8
-} ? [
-  Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
-  Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
-] :
-  [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload]
+type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads(...args: infer A1): infer R1
+    substituteOverloads(...args: infer A2): infer R2
+    substituteOverloads(...args: infer A3): infer R3
+    substituteOverloads(...args: infer A4): infer R4
+    substituteOverloads(...args: infer A5): infer R5
+    substituteOverloads(...args: infer A6): infer R6
+    substituteOverloads(...args: infer A7): infer R7
+    substituteOverloads(...args: infer A8): infer R8
+  } ? [
+    Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
+    Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
+  ] :
+  NoOverloads
 
 type PositionalSignature<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
   (...args: TOverload['arguments']) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
