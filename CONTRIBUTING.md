@@ -115,6 +115,9 @@ registry. To check other versions after `npm run build`, pass them explicitly:
 `node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
 `@ts-expect-error`, for example). If a change makes the typings need a newer TypeScript, that is a breaking change:
 raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the documented minimum together.
+Afterwards the same script runs `spec-types/TD-10.T32.jsdoc.js`, which uses the TypeScript of this repository to
+check that the public API in the built typings carries documentation comments (editor quick info). It fails when
+one of them is missing.
 
 ### Documentation examples
 
@@ -169,8 +172,8 @@ To try a single runner by hand after `npm run install:local`, use `npm run valid
 
 - **test**: `npm ci`, `npm run build`, `npm test`, `npm run test:types --if-present` and `npm run test:docs` on
   every supported Node.js LTS line (22, 24 and 26).
-- **types-min-ts**: `npm run test:types:min-ts`, the built typings with the oldest supported TypeScript (3.6), on
-  the development Node.js version.
+- **types-min-ts**: `npm run test:types:min-ts`, the built typings with the oldest supported TypeScript (3.6) and
+  the documentation comments of the public API, on the development Node.js version.
 - **compatibility**: the compatibility checks against the packed package on the same Node.js versions.
 - **minimum-node**: packs the package and smoke-tests it (`packaging/smoke/`) on the oldest supported Node.js
   version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`), on the oldest version with native ES
