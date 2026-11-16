@@ -1,6 +1,6 @@
 import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
 import { CallKind, FunctionSubstitute } from './FunctionSubstitute'
-import { IndexKind, ValueKind } from './Utilities'
+import { GenericKind, IndexKind, ValueKind } from './Utilities'
 
 /**
  * The setup API of a member read on a substitute (`sub.isEnabled.returns(true)`). The value itself is not part of it:
@@ -47,10 +47,25 @@ type SubstituteMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'substit
 // is `unknown`.
 type SubstituteMemberOf<TKind, TValue> = TKind extends 'value' ? SubstituteMember<TValue> : unknown
 
+// Keys that exist only through a string index signature (T41, R4TD-3): in the mappings below their template is
+// instantiated with `P = string`. In generic code (`T extends { [key: string]: number; port: number }`, `sub.timeout`),
+// `TMembers[P]` is then `T[string]`, and TypeScript never lets a value be written to `T[string]` of a type parameter (a
+// subtype could have a narrower index signature): `.returns(5)` would take nothing. There the member is computed by a
+// conditional type distributive over `TMembers`, which TypeScript resolves with the constraint when the member is used
+// (`.returns()` takes the constraint's index signature type, `number`). For a union constraint that is computed per
+// variant. For a concrete type nothing changes (`GenericKind` is `any`, which selects the number index signature).
+type IndexSignatureMember<TMembers, P extends keyof TMembers> = {
+  generic: EachSubstituteMember<TMembers, P>
+  [concrete: number]: SubstituteMemberOf<ValueKind<TMembers[P]>, TMembers[P]>
+}[GenericKind<TMembers>]
+type EachSubstituteMember<TMembers, P extends keyof TMembers> =
+  TMembers extends unknown ? SubstituteMemberOf<ValueKind<TMembers[P]>, TMembers[P]> : never
+
 type SubstituteMembers<TMembers> = {
   [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? unknown :
+    string extends P ? IndexSignatureMember<TMembers, P> :
     SubstituteMemberOf<ValueKind<TMembers[P]>, TMembers[P]>
 }
 
@@ -123,10 +138,19 @@ export type TerminatingObject<T> =
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
 
+// See `IndexSignatureMember`.
+type IndexSignatureConfiguration<TMembers, P extends keyof TMembers> = {
+  generic: EachConfigurationMember<TMembers, P>
+  [concrete: number]: ConfigurationMember<TMembers[P]>
+}[GenericKind<TMembers>]
+type EachConfigurationMember<TMembers, P extends keyof TMembers> =
+  TMembers extends unknown ? ConfigurationMember<TMembers[P]> : never
+
 type ConfigurationMembers<TMembers> = {
   [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? never :
+    string extends P ? IndexSignatureConfiguration<TMembers, P> :
     ConfigurationMember<TMembers[P]>
 }
 

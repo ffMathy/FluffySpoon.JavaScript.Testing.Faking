@@ -10,10 +10,40 @@ import { Equals, IsAny, ObjectKind, Primitive } from './Utilities'
  */
 export type SubstituteView = 'substitute' | 'configure' | 'assertion'
 
-type CallResult<TView extends SubstituteView, TArguments extends any[], TReturnType> =
-  TView extends 'assertion' ? void :
+type SetupResult<TView extends SubstituteView, TArguments extends any[], TReturnType> =
   TView extends 'configure' ? ConfigurationResult<TReturnType, (...args: TArguments) => TReturnType> :
   SubstitutionResult<TReturnType, (...args: TArguments) => TReturnType>
+
+// The result of a call of an overload (parameters `TArguments`, return type `TReturnType`) of a variant of the member
+// type `TFunction`.
+// A concrete union of function types is expanded per variant (see `EachSignatures`), so that each variant's overloads
+// keep their own parameters. Their setup API must take the value of any variant, though (T39, R4TD-1): for `Cat | Dog`
+// with `speak(): 'meow'` and `speak(): 'woof'`, a call would return `SubstitutionResult<'meow'> |
+// SubstitutionResult<'woof'>`, whose `.returns()` takes only what both accept (`never`). So when the variants have
+// overloads with the same parameters but different return types, every variant's call result is computed from the
+// union of those return types instead (as TypeScript does for a call of a union of function types): `.returns()`
+// takes `'meow' | 'woof'`, and `.resolves()`, `.mimicks()` and the configure view likewise.
+// The choice is an indexed access, as for the kinds in Utilities.ts: `UnionKind` is `'own'` when this overload's
+// return type covers the union (always so for a type that is not a union) and `any` otherwise, which selects the number
+// index signature. In generic code, where `TFunction` is a type parameter, TypeScript cannot decide it and uses
+// `'own'`: the return type of the constraint's overload (T33). Being part of the signature's return type, all of this
+// is only computed for the calls that are made.
+// (The overload is identified by its parameters, not by its position: identical overloads in several positions of
+// `Overloads` must give identical signature types, or the intersection of all signatures would not collapse; for a
+// rest parameter typed as a union of tuples each position is a union, and their combinations multiply.)
+type CallResult<TView extends SubstituteView, TArguments extends any[], TReturnType, TFunction> =
+  TView extends 'assertion' ? void : {
+    own: SetupResult<TView, TArguments, TReturnType>
+    [union: number]: SetupResult<TView, TArguments, UnionReturnTypes<TFunction, TArguments>>
+  }[UnionKind<TFunction, TArguments, TReturnType>]
+
+// The return types of the overloads of the variants of `TFunction` that have the parameters `TArguments`.
+type UnionReturnTypes<TFunction, TArguments> =
+  TFunction extends unknown ? MatchingReturnType<Overloads<TFunction>[number], TArguments> : never
+type MatchingReturnType<TOverload, TArguments> =
+  TOverload extends Overload<infer A, infer R> ? (Equals<A, TArguments> extends true ? R : never) : never
+type UnionKind<TFunction, TArguments, TReturnType> =
+  [UnionReturnTypes<TFunction, TArguments>] extends [TReturnType] ? 'own' : any
 
 type Overload<TArguments extends any[], TReturnType> = { arguments: TArguments, returnType: TReturnType }
 // Not `undefined`: without strictNullChecks `undefined` would match `Overload`.
@@ -66,8 +96,9 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
 // `unknown` (not `{}`) when there is no signature, so that `FunctionSubstitute<...> & TValue` is exactly `TValue` for a
 // member that is not callable: `{} & undefined` is `never` (TypeScript >= 4.8), which would drop `undefined` from an
 // optional property in the assertion view (TD-7).
-type PositionalSignature<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
-  (...args: TOverload['arguments']) => CallResult<TView, TOverload['arguments'], TOverload['returnType']> :
+type PositionalSignature<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  (...args: TOverload['arguments']) => CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction> :
   unknown
 
 // The `Arg.all()` signatures of an overload:
@@ -81,38 +112,45 @@ type PositionalSignature<TOverload, TView extends SubstituteView> = TOverload ex
 //   nesting stops at the first position the overload does not have. (`A extends [any?]` would be shorter, but
 //   TypeScript 4.0 and 4.1 consider `[string, number?]` assignable to `[any?]`.)
 // (The return types are written inside each signature, where TypeScript only computes them when the signature is used.)
-type AllArgumentsSignatures<TOverload, TView extends SubstituteView> = TOverload extends Overload<any[], any> ?
-  ((allArguments: AllArguments<TOverload['arguments']>) => CallResult<TView, TOverload['arguments'], TOverload['returnType']>) &
-  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView> :
+type AllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  ((allArguments: AllArguments<TOverload['arguments']>) => CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction>) &
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
   unknown
 
-type TrailingAllArgumentsSignatures<A extends any[], R, V extends SubstituteView> = [Exclude<A['length'], 0 | 1>] extends [never] ? unknown :
-  ((arg0: A[0], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? unknown :
-  ((arg0: A[0], arg1: A[1], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3>] extends [never] ? unknown :
-  ((arg0: A[0], arg1: A[1], arg2: A[2], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4>] extends [never] ? unknown :
-  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5>] extends [never] ? unknown :
-  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], allArguments: AllArguments<A>) => CallResult<V, A, R>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5 | 6>] extends [never] ? unknown :
-  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], arg5: A[5], allArguments: AllArguments<A>) => CallResult<V, A, R>))))))
+type TrailingAllArgumentsSignatures<A extends any[], R, V extends SubstituteView, F> = [Exclude<A['length'], 0 | 1>] extends [never] ? unknown :
+  ((arg0: A[0], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2 | 3>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5 | 6>] extends [never] ? unknown :
+  ((arg0: A[0], arg1: A[1], arg2: A[2], arg3: A[3], arg4: A[4], arg5: A[5], allArguments: AllArguments<A>) => CallResult<V, A, R, F>))))))
 
 // All positional signatures come before the `Arg.all()` signatures, so a call with a single matcher
 // (`Arg.any()`, `Arg.is(...)`) resolves against the real parameter lists first (T:TY-10).
-type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView> =
-  PositionalSignature<TOverloads[0], TView> & PositionalSignature<TOverloads[1], TView> &
-  PositionalSignature<TOverloads[2], TView> & PositionalSignature<TOverloads[3], TView> &
-  PositionalSignature<TOverloads[4], TView> & PositionalSignature<TOverloads[5], TView> &
-  PositionalSignature<TOverloads[6], TView> & PositionalSignature<TOverloads[7], TView> &
-  AllArgumentsSignatures<TOverloads[0], TView> & AllArgumentsSignatures<TOverloads[1], TView> &
-  AllArgumentsSignatures<TOverloads[2], TView> & AllArgumentsSignatures<TOverloads[3], TView> &
-  AllArgumentsSignatures<TOverloads[4], TView> & AllArgumentsSignatures<TOverloads[5], TView> &
-  AllArgumentsSignatures<TOverloads[6], TView> & AllArgumentsSignatures<TOverloads[7], TView>
+// `TFunction` is the whole member type (see `CallResult`).
+type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, TFunction> =
+  PositionalSignature<TOverloads[0], TView, TFunction> & PositionalSignature<TOverloads[1], TView, TFunction> &
+  PositionalSignature<TOverloads[2], TView, TFunction> & PositionalSignature<TOverloads[3], TView, TFunction> &
+  PositionalSignature<TOverloads[4], TView, TFunction> & PositionalSignature<TOverloads[5], TView, TFunction> &
+  PositionalSignature<TOverloads[6], TView, TFunction> & PositionalSignature<TOverloads[7], TView, TFunction> &
+  AllArgumentsSignatures<TOverloads[0], TView, TFunction> & AllArgumentsSignatures<TOverloads[1], TView, TFunction> &
+  AllArgumentsSignatures<TOverloads[2], TView, TFunction> & AllArgumentsSignatures<TOverloads[3], TView, TFunction> &
+  AllArgumentsSignatures<TOverloads[4], TView, TFunction> & AllArgumentsSignatures<TOverloads[5], TView, TFunction> &
+  AllArgumentsSignatures<TOverloads[6], TView, TFunction> & AllArgumentsSignatures<TOverloads[7], TView, TFunction>
 
-// The signatures of one non-primitive type. (Not `[TFunction] extends [(...args: any) => any]`: in its true branch
-// TypeScript would add that signature to TFunction.)
-type SignaturesOf<TFunction, TView extends SubstituteView> = OverloadSignatures<Overloads<TFunction>, TView>
+// The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
+// `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
+type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
+  OverloadSignatures<Overloads<TVariant>, TView, TFunction>
 
-// Distributive over `TFunction`, so that in generic code (a member type such as `T['add']` with `T extends Calculator`)
-// TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
-type EachSignatures<TFunction, TView extends SubstituteView> = TFunction extends unknown ? SignaturesOf<TFunction, TView> : never
+// Distributive over `TVariant`, so that in generic code (a member type such as `T['add']` with `T extends Calculator`)
+// TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33). A
+// concrete union of function types is expanded per variant as well (matching the whole union against the overload
+// pattern is much slower for large unions, such as the methods of all lib.dom elements); `TFunction` passes the whole
+// member type on to the call results (see `CallResult`).
+type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
+  TVariant extends unknown ? SignaturesOf<TVariant, TView, TFunction> : never
 
 // Primitives, `never` and `any` are ruled out without distributing over a (possibly very large) union of literals
 // (TD-8). Their branch is `any` for `any` (a member typed `any` stays `any`) and `never` otherwise: in generic code
@@ -120,7 +158,7 @@ type EachSignatures<TFunction, TView extends SubstituteView> = TFunction extends
 // is left out as well (see `ObjectKind`).
 type GuardedSignatures<TFunction, TView extends SubstituteView> =
   [TFunction] extends [Primitive] ? (IsAny<TFunction> extends true ? any : never) :
-  EachSignatures<TFunction, TView>
+  EachSignatures<TFunction, TView, TFunction>
 
 type FunctionSubstituteOf<TKind, TFunction, TView extends SubstituteView> =
   TKind extends 'object' ? GuardedSignatures<TFunction, TView> : unknown

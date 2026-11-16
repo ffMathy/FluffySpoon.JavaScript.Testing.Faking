@@ -2,7 +2,8 @@
 // configure view work through the constraint, as for a SubstituteOf<Calculator>. The values they take are checked
 // against the constraint's member types.
 // (On TypeScript 3.6 to 3.8, members whose type includes null or undefined, such as `name` and `limit` below, have no
-// setup API in generic code; spec-types/min-ts/consumer.ts checks the rest with TypeScript 3.6.)
+// setup API in generic code, and on TypeScript 3.6 to 4.7 calls of optional methods are not callable there; see
+// R4TD-2.R4V-1.T40.generic-optional-members.ts. spec-types/min-ts/consumer.ts checks the rest with TypeScript 3.6.)
 import { Substitute, SubstituteOf, Arg, configure, received, didNotReceive, returns, mimicks } from '../src'
 
 interface Calculator {
