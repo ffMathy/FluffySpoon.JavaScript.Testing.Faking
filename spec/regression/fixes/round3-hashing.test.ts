@@ -154,7 +154,11 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   same(new Map([[{ k: 1 }, 'a']]), new Map([[{ k: 1 }, 'a']]), 'Map object keys')
   same(new Set([1, { a: 2 }]), new Set([{ a: 2 }, 1]), 'Set order')
   same(new Date(5), new Date(5), 'Dates')
-  t.false(isDeepStrictEqual(new Date(NaN), new Date(NaN)), 'invalid Dates are never equal')
+  // Node.js changed this in 24: two invalid Dates are unequal up to Node.js 22 and equal from 24 on. The hash only
+  // has to agree with whatever the running Node.js decides.
+  if (isDeepStrictEqual(new Date(NaN), new Date(NaN))) {
+    t.is(structuralHash(new Date(NaN)), structuralHash(new Date('nope')), 'invalid Dates, where Node.js finds them equal')
+  }
   same(/x/gi, new RegExp('x', 'gi'), 'RegExps')
   same(Buffer.from('abc'), Buffer.from('abc'), 'Buffers')
   same(new Float64Array([-0, NaN]), new Float64Array([-0, NaN]), 'typed arrays')
@@ -182,7 +186,7 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   cyclic.self = cyclic
   const longer: any = { name: 'a', self: { name: 'a' } }
   longer.self.self = longer
-  t.true(isDeepStrictEqual(cyclic, longer))
+  // Node.js up to 22 finds these two equal, Node.js 24 and later do not; the hash must agree in both cases
   t.is(structuralHash(cyclic), FALLBACK_HASH)
   t.is(structuralHash(longer), FALLBACK_HASH)
   const throwing = { get value(): never { throw new Error('getter') } }

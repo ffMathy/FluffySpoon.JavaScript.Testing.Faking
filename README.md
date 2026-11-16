@@ -366,7 +366,7 @@ repository.didNotReceive().save({ id: Arg.any(), name: 'bob', roles: [] })
 * `String(sub)` shows nested matchers, for example `save({ id: Arg.any{any}, name: 'bob' }) => returns('saved')`.
 
 ## How arguments are compared
-Arguments that are not matchers are compared with deep strict equality, the rule of `assert.deepStrictEqual` (`util.isDeepStrictEqual`). Objects and arrays are equal when they have the same prototype and their own enumerable properties (with string or symbol keys) are equal. `NaN` equals `NaN`, but `0` and `-0` are different, and an invalid `Date` equals nothing, not even another invalid `Date`. Substitutes are compared by identity and never member by member.
+Arguments that are not matchers are compared with deep strict equality, the rule of `assert.deepStrictEqual` (`util.isDeepStrictEqual`). Objects and arrays are equal when they have the same prototype and their own enumerable properties (with string or symbol keys) are equal. `NaN` equals `NaN`, but `0` and `-0` are different. Where Node.js changed the rule, the library follows the running version: two invalid `Date`s are different up to Node.js 22 and equal from Node.js 24 on, and two cyclic objects whose cycles have a different shape are equal up to Node.js 22 and different from Node.js 24 on. Substitutes are compared by identity and never member by member.
 
 Deep strict equality cannot see `#private` fields or other internal state. So all instances of a class that keeps its state only in `#private` fields are equal to each other. For such classes, pass the same instance, or match with `Arg.is()`:
 
