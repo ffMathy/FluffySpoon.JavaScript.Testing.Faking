@@ -1,10 +1,11 @@
 import { deferredReports } from '../../src/internals/Assertions'
 
 /**
- * Runs the library's deferred reports (D9, D33) on demand instead of on process.nextTick.
+ * Runs the library's deferred reports (D9, D33) on demand instead of on a microtask.
  *
- * Since D34 the library captures the real process.nextTick when it is loaded, so fake timers installed by a test
- * no longer intercept the reports. The tests use this stand-in, which has the same shape as the fake clock they
+ * Since D34 the library captures the real scheduler when it is loaded (since E6 queueMicrotask, process.nextTick
+ * where there is none), so fake timers installed by a test no longer intercept the reports. Every report goes
+ * through `deferredReports.schedule`, which this stand-in replaces. It has the same shape as the fake clock the tests
  * used before: `tick()` runs the reports scheduled so far and rethrows the first one that throws.
  */
 export const interceptDeferredReports = () => {

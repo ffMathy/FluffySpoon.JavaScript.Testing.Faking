@@ -12,6 +12,16 @@ import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 const library = path.resolve(__dirname, '../../../src/index.js')
 
+/** Runs a script with the library in a child process, and returns what it prints as JSON. */
+const runScript = (script: string, options: { args?: string[], env?: Record<string, string> } = {}): any => {
+  const result = spawnSync(process.execPath, [...(options.args ?? []), '-e', script], {
+    encoding: 'utf8',
+    env: { ...process.env, NO_COLOR: '1', ...options.env }
+  })
+  if (result.status !== 0) throw new Error(`exit code ${result.status}: ${result.stderr}`)
+  return JSON.parse(result.stdout)
+}
+
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
 const messageOf = (assertion: () => unknown): string => {
@@ -211,15 +221,42 @@ test('R3-ADV-4 (E5) reading call sites never changes Error.prepareStackTrace for
   }
 })
 
-/** Runs a script with the library in a child process, and returns what it prints as JSON. */
-const runScript = (script: string, options: { args?: string[], env?: Record<string, string> } = {}): any => {
-  const result = spawnSync(process.execPath, [...(options.args ?? []), '-e', script], {
-    encoding: 'utf8',
-    env: { ...process.env, NO_COLOR: '1', ...options.env }
-  })
-  if (result.status !== 0) throw new Error(`exit code ${result.status}: ${result.stderr}`)
-  return JSON.parse(result.stdout)
-}
+test('R3-ADV-5 (E6) deferred reports are thrown from a microtask, also when fake timers replace it later', t => {
+  const script = (setup: string) => `
+    const { Substitute } = require(${JSON.stringify(library)})
+    ${setup}
+    const order = []
+    process.on('uncaughtException', error => order.push('report: ' + error.constructor.name))
+    process.nextTick(() => order.push('nextTick'))
+    Promise.resolve().then(() => order.push('promise job before'))
+    const calculator = Substitute.for()
+    calculator.add(1, 2)
+    calculator.add(3, 4)
+    calculator.received(1).add // D9: decided once it is known that add is not invoked
+    Promise.resolve().then(() => order.push('promise job after'))
+    setImmediate(() => console.log(JSON.stringify(order)))
+  `
+  // a microtask runs with the promise jobs, in order, after the queued nextTick callbacks
+  const expected = ['nextTick', 'promise job before', 'report: SubstituteException', 'promise job after']
+  t.deepEqual(runScript(script('')), expected)
+  // fake timers installed after the library was loaded cannot delay or swallow the report (D34)
+  const fakeTimers = require.resolve('@sinonjs/fake-timers')
+  const withFakeTimers = runScript(script(`
+    const clock = require(${JSON.stringify(fakeTimers)}).install({ toFake: ['queueMicrotask', 'nextTick', 'setTimeout'] })
+  `))
+  t.true(withFakeTimers.includes('report: SubstituteException'), JSON.stringify(withFakeTimers))
+
+  // plain Node.js: the report is an uncaught exception, printed, and the process exits with code 1
+  const result = spawnSync(process.execPath, ['-e', `
+    const { Substitute } = require(${JSON.stringify(library)})
+    const logger = Substitute.for()
+    logger.error('disk full')
+    logger.didNotReceive().error // D33: the parentheses were forgotten
+  `], { encoding: 'utf8', env: { ...process.env, NO_COLOR: '1' } })
+  t.is(result.status, 1)
+  t.regex(result.stderr, /SubstituteException: Call count mismatch in @Substitute\.error:/)
+  t.regex(result.stderr, /to assert calls, invoke it: sub\.didNotReceive\(\)\.error\(\.\.\.\)/)
+})
 
 test('R3-2 (E7) the runtime\'s own util.promisify.custom and util.inspect.custom are used, also where they are not the registered symbols', t => {
   // Node.js 10.0 to 12.16.1 and 13.0 to 13.11 have a util.promisify.custom of their own (Node.js 10.0 to 10.11 the
