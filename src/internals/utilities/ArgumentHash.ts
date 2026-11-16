@@ -195,6 +195,34 @@ const errorParts = ((): { name: boolean, message: boolean, cause: boolean, error
   }
 })()
 
+/**
+ * E10: which objects are hashed as errors, by name and message (see errorParts). The running Node.js compares an object
+ * as an error when `isNativeError(value) || value instanceof Error`, unless its Object.prototype.toString tag is
+ * `[object Object]`: such objects are compared by their keys alone (on Node.js 24 and later only when the other side is
+ * not a native error, so that equality is not symmetric there). So an object that inherits from Error.prototype and has
+ * the toStringTag 'Error' is compared like a native error, and can be deep strictly equal to one. Objects tagged
+ * `[object Object]` are hashed by their keys, which keeps every pair that Node.js finds equal, in either order,
+ * together. Whether error-like objects count is found out once, when the library is loaded (under jest, whose test
+ * files have an Error of their own, Node.js does not count their error-like objects as errors, and neither does this
+ * check, which uses the same Error).
+ */
+const errorLikesAreErrors = ((): boolean => {
+  const errorLike = (message: string) => Object.create(Error.prototype, {
+    message: { value: message, writable: true, configurable: true },
+    [Symbol.toStringTag]: { value: 'Error', configurable: true }
+  })
+  try {
+    return !isDeepStrictEqual(errorLike('a'), errorLike('b'))
+  } catch {
+    return false
+  }
+})()
+
+const objectToString = Object.prototype.toString
+
+const isComparedAsError = (value: object): value is Error & { cause?: unknown, errors?: unknown } =>
+  (types.isNativeError(value) || (errorLikesAreErrors && value instanceof Error)) && objectToString.call(value) !== '[object Object]'
+
 /** Each child's share of an object's budget. */
 const share = (budget: number, children: number): number => children === 0 ? 0 : Math.floor((budget - 1) / children)
 
@@ -244,7 +272,7 @@ const hashObject = (object: object, budget: number, depth: number): number => {
   // own enumerable string and symbol keys, in any order
   const keys = ownEnumerableKeys(object)
   const count = keys.length
-  const error = types.isNativeError(object) ? object as Error & { cause?: unknown, errors?: unknown } : undefined
+  const error = isComparedAsError(object) ? object : undefined
   let h = mix(types.isArgumentsObject(object) ? Tag.Arguments : error !== undefined ? Tag.Error : Tag.Object, count)
   if (count > MAX_SCANNED_ENTRIES) return mix(h, Tag.Wide)
   const errorChildren = error === undefined ? 0 : (errorParts.cause ? 1 : 0) + (errorParts.errors ? 1 : 0)
