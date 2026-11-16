@@ -1,6 +1,6 @@
 import { AllArguments } from '../../shared'
 import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
-import { Equals, IsAny, IsNever, Primitive } from './Utilities'
+import { Equals, IsAny, ObjectKind, Primitive } from './Utilities'
 
 /**
  * What a call returns in each view of a substitute:
@@ -106,13 +106,43 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView> 
   AllArgumentsSignatures<TOverloads[4], TView> & AllArgumentsSignatures<TOverloads[5], TView> &
   AllArgumentsSignatures<TOverloads[6], TView> & AllArgumentsSignatures<TOverloads[7], TView>
 
+// The signatures of one non-primitive type. (Not `[TFunction] extends [(...args: any) => any]`: in its true branch
+// TypeScript would add that signature to TFunction.)
+type SignaturesOf<TFunction, TView extends SubstituteView> = OverloadSignatures<Overloads<TFunction>, TView>
+
+// Distributive over `TFunction`, so that in generic code (a member type such as `T['add']` with `T extends Calculator`)
+// TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
+type EachSignatures<TFunction, TView extends SubstituteView> = TFunction extends unknown ? SignaturesOf<TFunction, TView> : never
+
+// Primitives, `never` and `any` are ruled out without distributing over a (possibly very large) union of literals
+// (TD-8). Their branch is `any` for `any` (a member typed `any` stays `any`) and `never` otherwise: in generic code
+// TypeScript cannot decide the check and uses the union of both branches, where `never` drops out, and an `any` branch
+// is left out as well (see `ObjectKind`).
+type GuardedSignatures<TFunction, TView extends SubstituteView> =
+  [TFunction] extends [Primitive] ? (IsAny<TFunction> extends true ? any : never) :
+  EachSignatures<TFunction, TView>
+
+type FunctionSubstituteOf<TKind, TFunction, TView extends SubstituteView> =
+  TKind extends 'object' ? GuardedSignatures<TFunction, TView> : unknown
+
 /**
  * The call signatures a member of type `TFunction` has on a substitute: per overload, the overload's own parameter list,
  * a single `Arg.all()` argument, and the leading parameters followed by `Arg.all()`. `unknown` when `TFunction` is not
- * callable.
+ * callable, `any` when it is `any`.
+ * In generic code the signatures are computed from the constraint of the member type, so that
+ * `sub.add(1, 2).returns(3)` type-checks on a `SubstituteOf<T>` with `T extends Calculator` (T33).
  */
 export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substitute'> =
-  IsNever<TFunction> extends true ? unknown :
-  IsAny<TFunction> extends true ? (...args: any[]) => CallResult<TView, any[], any> :
-  // Not `[TFunction] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TFunction.
-  OverloadSignatures<Overloads<TFunction>, TView>
+  FunctionSubstituteOf<ObjectKind<TFunction>, TFunction, TView>
+
+// The assertion view of a callable member also checks the call arguments; for a property it is only the property's
+// type. `'call'` or `'plain'` per non-primitive member of the union (see `AssertionMember`).
+type EachCallKind<TFunction> = TFunction extends (...args: any[]) => any ? 'call' : 'plain'
+type GuardedCallKind<TFunction> = [TFunction] extends [Primitive] ? never : EachCallKind<TFunction>
+
+/**
+ * `'call'` when `TFunction` (a member type without `null | undefined`) is callable, otherwise `'plain'`. In generic
+ * code it is decided by the member's constraint.
+ */
+export type CallKind<TFunction> = CallKindOf<ObjectKind<TFunction>, TFunction>
+type CallKindOf<TKind, TFunction> = TKind extends 'object' ? GuardedCallKind<TFunction> : 'plain'
