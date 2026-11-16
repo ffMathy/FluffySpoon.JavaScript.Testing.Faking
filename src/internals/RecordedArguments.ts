@@ -34,9 +34,13 @@ const literalEquals = (expected: unknown, actual: unknown): boolean => {
 /** Arrays, and objects whose prototype is Object.prototype or null: the only values that may hold nested matchers. */
 const isPlainContainer = (value: unknown): value is object => {
   if (typeof value !== 'object' || value === null || isArgumentMatcher(value)) return false
-  if (Array.isArray(value)) return true
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
+  try {
+    if (Array.isArray(value)) return true
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  } catch {
+    return false // a revoked proxy
+  }
 }
 
 /** The own enumerable string and symbol keys of a plain object (the keys deep strict equality compares). */
@@ -52,15 +56,24 @@ const containerEntries = (container: object): Array<[PropertyKey, unknown]> => A
   ? Array.from({ length: container.length }, (_, index): [PropertyKey, unknown] => [index, container[index]])
   : ownEnumerableKeys(container).map((key): [PropertyKey, unknown] => [key, (container as any)[key]])
 
-/** Whether some value inside a plain container satisfies the predicate, without allocating per item. */
+/** The value of an own data property; getters are not run (a matcher behind a getter is not looked for). */
+const dataValue = (object: object, key: PropertyKey): unknown => {
+  const descriptor = Object.getOwnPropertyDescriptor(object, key)
+  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
+}
+
+/**
+ * Whether some value inside a plain container satisfies the predicate. Used on the arguments of every call, so it
+ * allocates nothing per item and runs no getters of the code under test's objects.
+ */
 const someItem = (container: object, predicate: (item: unknown) => boolean): boolean => {
   if (Array.isArray(container)) {
     for (let index = 0; index < container.length; index++) if (predicate(container[index])) return true
     return false
   }
-  for (const key of Object.keys(container)) if (predicate((container as any)[key])) return true
+  for (const key of Object.keys(container)) if (predicate(dataValue(container, key))) return true
   for (const symbol of Object.getOwnPropertySymbols(container))
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && predicate((container as any)[symbol])) return true
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && predicate(dataValue(container, symbol))) return true
   return false
 }
 

@@ -352,6 +352,19 @@ test('ENG2-5 (D27) Arg matchers nested in plain objects and arrays match deeply,
   literal.put(new Map([['k', Arg.any()]]))
   literal.received(2).put(Arg.all())
 
+  // looking for nested matchers runs no getters of the arguments, and survives revoked proxies
+  let getterReads = 0
+  const lazy = {}
+  Object.defineProperty(lazy, 'value', { enumerable: true, get() { getterReads++; return 1 } })
+  const scanned = Substitute.for<any>()
+  scanned.take(lazy)
+  scanned.take(lazy)
+  t.true(getterReads <= 1, `${getterReads} getter reads`)
+  const { proxy: revoked, revoke } = Proxy.revocable({}, {})
+  revoke()
+  t.notThrows(() => scanned.take(revoked))
+  t.throws(() => scanned.received(2).take(revoked), { instanceOf: SubstituteException })
+
   // cycles end, in the specification and in the actual arguments
   const cyclicSpecification: any = { name: Arg.any() }
   cyclicSpecification.self = cyclicSpecification
