@@ -29,7 +29,11 @@ export type CallCountMismatch = {
   expected: CallCountExpectation
   /** How many matching calls were received, already phrased (e.g. 'none', '4', '2 property reads and 1 method call'). */
   receivedText: string
+  /** Continues the expectation line, e.g. to explain what was received instead. */
+  explanation?: string
   listed: ListedCall[]
+  /** Lines after the listing that explain a likely mistake. */
+  hints?: string[]
 }
 
 const kindPhrase = (kind: ExpectedKind, count: number | undefined): string => {
@@ -110,6 +114,7 @@ export class SubstituteException extends Error {
       .add(', but received ')
       .add(mismatch.receivedText, t => t.faint())
       .add('.')
+    if (mismatch.explanation !== undefined) textBuilder.add(` ${mismatch.explanation}`)
 
     if (mismatch.listed.length > 0) {
       textBuilder.newLine().add(`All property or method calls to ${memberPath} received so far:`)
@@ -128,6 +133,12 @@ export class SubstituteException extends Error {
       const hidden = mismatch.listed.length - shown.length
       if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
+    }
+
+    const hints = mismatch.hints ?? []
+    if (hints.length > 0) {
+      if (mismatch.listed.length === 0) textBuilder.newLine()
+      for (const hint of hints) textBuilder.add(hint).newLine()
     }
 
     return textBuilder.toString(colors)

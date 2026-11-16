@@ -4,6 +4,8 @@ import { SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
+import { keyToString } from './Constants'
+import { plural } from './utilities'
 
 /** undefined means "1 or more" */
 export type ExpectedCount = number | undefined
@@ -26,14 +28,34 @@ const countMatches = (count: ExpectedCount, actual: number) => count === undefin
 
 const receivedText = (matches: number) => matches === 0 ? 'none' : matches.toString()
 
+const times = (count: number) => `${count} ${plural('time', count)}`
+
+/** A method assertion found too few calls, and the member was also read without being invoked. */
+const readWithoutCallHint = (state: SubstituteState, key: PropertyKey, reads: number): string =>
+  `${state.memberPath(key)} was read ${times(reads)} without being called; reading a method does not count as calling it.`
+
+/**
+ * didNotReceive().m(...) on a member that was only read (A:RT-3). The property-style half of the assertion is
+ * decided when the member is read (D9), so the reads fail it even when an invocation follows.
+ */
+const onlyReadHint = (state: SubstituteState, key: PropertyKey, reads: number): string => {
+  const name = keyToString(key)
+  return `${state.memberPath(key)} was read ${times(reads)} but never called. ` +
+    `If it is a method that was only read, for example passed as a callback, these reads still fail didNotReceive().${name}(...): ` +
+    `the assertion is decided when ${name} is read, before it is known whether it is called. ` +
+    `Call sub[clearReceivedCalls]() after the arrange step to reset the reads.`
+}
+
 /** Method assertion: counts invocations whose arguments match. Property reads never count. */
 export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[], count: ExpectedCount, stackStart?: Function): void => {
   const specification = RecordedArguments.forSpecification(args)
   const records = state.recordsFor(key).filter(record => record.kind !== 'set')
   const listed: ListedCall[] = []
   let matches = 0
+  let reads = 0
   for (const record of records) {
     if (record.kind !== 'call') {
+      reads++
       listed.push({ record, matches: false })
       continue
     }
@@ -42,12 +64,14 @@ export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[]
     listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError })
   }
   if (countMatches(count, matches)) return
+  const tooFew = matches < (count ?? 1)
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     key,
     expected: { count, kind: 'method', specification },
     receivedText: receivedText(matches),
-    listed
+    listed,
+    hints: tooFew && reads > 0 ? [readWithoutCallHint(state, key, reads)] : undefined
   }, stackStart)
 }
 
@@ -125,7 +149,12 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
     key,
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
-    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' }))
+    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' })),
+    hints: reads === 0 ? undefined
+      : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]
+        // invoked as well, so most likely a method, with fewer calls than expected
+        : calls > 0 && count !== undefined && calls < count ? [readWithoutCallHint(state, key, reads)]
+          : undefined
   }, start)
 
   if (!deferrable) throw createError(stackStart)

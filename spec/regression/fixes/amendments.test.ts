@@ -1,7 +1,8 @@
 import test from 'ava'
+import { EventEmitter } from 'events'
 import { types } from 'util'
 
-import { Substitute, Arg, configure, mimick, received, returns, throws, resolves, rejects, mimicks } from '../../../src'
+import { Substitute, Arg, clearReceivedCalls, configure, mimick, received, returns, throws, resolves, rejects, mimicks } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { shouldUseColors } from '../../../src/internals/utilities/Colors'
 
@@ -182,4 +183,70 @@ test('D24 assertion messages have no ANSI codes with NODE_DISABLE_COLORS or TERM
   withProcessEnvironment({ NODE_DISABLE_COLORS: '1' }, true, () => t.false(hasAnsi(messageOf()), 'NODE_DISABLE_COLORS=1'))
   withProcessEnvironment({ NODE_DISABLE_COLORS: '1', FORCE_COLOR: '1' }, true, () => t.true(hasAnsi(messageOf()), 'forced'))
   withProcessEnvironment({ TERM: 'dumb', FORCE_COLOR: '1' }, false, () => t.true(hasAnsi(messageOf()), 'forced without a TTY'))
+})
+
+const messageOf = (assertion: () => unknown): string => {
+  try {
+    assertion()
+  } catch (error) {
+    if (!(error instanceof SubstituteException)) throw error
+    return plain(error.message)
+  }
+  throw new Error('expected the assertion to fail')
+}
+
+test('hint: a failed method assertion says when the method was read without being called', t => {
+  const hint = (path: string, times: string) =>
+    `${path} was read ${times} without being called; reading a method does not count as calling it.`
+
+  const handler = Substitute.for<any>()
+  new EventEmitter().on('click', handler.onClick)
+  const message = messageOf(() => handler.received(1).onClick('x', 1))
+  t.true(message.includes("Expected to receive 1 method call matching onClick('x', 1), but received none."))
+  t.true(message.endsWith(`\n${hint('@Substitute.onClick', '1 time')}\n`))
+  void handler.onClick
+  t.true(messageOf(() => handler.received().onClick(Arg.all())).includes(hint('@Substitute.onClick', '2 times')))
+
+  // nested paths; a read and a call, with a count above the calls (decided when the member is read, D9)
+  const app = Substitute.for<any>()
+  void app.logger.flush
+  app.logger.flush()
+  t.true(messageOf(() => app.logger.received(2).flush()).includes(hint('@Substitute.logger.flush', '1 time')))
+  t.true(messageOf(() => app.logger.received(1).flush(1)).includes(hint('@Substitute.logger.flush', '1 time')))
+
+  // no hint when there were no reads, when there were too many calls, or for a member that is only a property
+  const calculator = Substitute.for<any>()
+  calculator.add(1)
+  t.false(messageOf(() => calculator.received(2).add(1)).includes('without being called'))
+  t.false(messageOf(() => app.logger.didNotReceive().flush()).includes('without being called'))
+  const settings = Substitute.for<any>()
+  void settings.flag
+  const property = messageOf(() => settings.received(2).flag)
+  t.false(property.includes('without being called'))
+  t.false(property.includes('never called'))
+})
+
+test('hint: didNotReceive() on a member that was only read points to clearReceivedCalls (A:RT-3 residual)', t => {
+  const handler = Substitute.for<any>()
+  const callback = handler.onClick
+  new EventEmitter().on('click', callback)
+
+  // forced by D9: the assertion is decided when onClick is read, and it was read once
+  const message = messageOf(() => handler.didNotReceive().onClick(42))
+  t.true(message.includes('Expected to receive 0 property reads matching onClick, but received 1.'))
+  const hint = '@Substitute.onClick was read 1 time but never called. ' +
+    'If it is a method that was only read, for example passed as a callback, these reads still fail didNotReceive().onClick(...): ' +
+    'the assertion is decided when onClick is read, before it is known whether it is called. ' +
+    'Call sub[clearReceivedCalls]() after the arrange step to reset the reads.'
+  t.true(message.endsWith(`\n${hint}\n`))
+  t.true(messageOf(() => handler.received(0).onClick).includes(hint))
+
+  // the workaround from the hint
+  handler[clearReceivedCalls]()
+  t.notThrows(() => handler.didNotReceive().onClick(42))
+  callback(42)
+  const called = messageOf(() => handler.didNotReceive().onClick(42))
+  t.true(called.includes('Expected to receive 0 method calls matching onClick(42), but received 1.'))
+  t.false(called.includes('never called'))
+  t.notThrows(() => handler.didNotReceive().onClick(43))
 })
