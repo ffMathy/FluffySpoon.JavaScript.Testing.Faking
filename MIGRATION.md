@@ -7,7 +7,7 @@ Each section says which versions it applies to. Code marked "Before" is for the 
 - [Requirements](#requirements)
 - [Removed APIs](#removed-apis): [`Substitute.disableFor`](#substitutedisablefor), [`clearSubstitute` and `ClearType`](#clearsubstitute-and-cleartype), [string `mimick(instance)`](#the-string-mimickinstance)
 - [Names that conflict with the library: the symbol API](#names-that-conflict-with-the-library-the-symbol-api)
-- [Behaviour changes](#behaviour-changes): [sequences](#sequences-repeat-the-last-value), [auto-substitutes](#auto-substitutes-and-nested-checks), [matcher calls](#calls-with-argument-matchers-are-setups), [match order](#match-order), [re-configuring](#re-configuring-a-call), [what counts as a call](#what-counts-as-a-call), [checks](#checks-never-run-setups), [`received(count)`](#receivedcount-is-validated), [matchers](#matchers), [messages](#messages)
+- [Behaviour changes](#behaviour-changes): [sequences](#sequences-repeat-the-last-value), [auto-substitutes](#auto-substitutes-and-nested-checks), [matcher calls](#calls-with-argument-matchers-are-setups), [match order](#match-order), [re-configuring](#re-configuring-a-call), [what counts as a call](#what-counts-as-a-call), [checks](#checks-never-run-setups), [`received(count)`](#receivedcount-is-validated), [checks that fail later](#checks-that-fail-later), [matchers](#matchers), [argument comparison](#how-arguments-are-compared), [`this` in `mimicks()`](#this-in-mimicks), [protocol members](#protocol-members-read-as-undefined), [messages](#messages)
 - [Imports and packaging](#imports-and-packaging)
 - [TypeScript](#typescript)
 
@@ -40,7 +40,8 @@ Prereleases are still published under the `beta` tag.
 ## Requirements
 *Applies to: everyone.*
 
-* Node.js 10 or newer for CommonJS, and 12.17 or newer for the native ES module entry point.
+* Node.js 10 or newer for CommonJS (`require`).
+* For the native ES module entry point (`import`): Node.js 12.17 or newer on 12.x, 13.7 or newer on 13.x, or 14 or newer. On 13.2 to 13.6, `import` gets the CommonJS entry and named imports fail; use `require` there.
 * TypeScript 3.6 or newer. The 1.x README said TypeScript 3.0; 2.0.0-beta.4 needed 3.8.
 * `strict` mode, including `strictNullChecks`, is supported. The 1.x README told you to turn `strictNullChecks` off; that is no longer needed.
 
@@ -162,7 +163,9 @@ The package exports symbols for its methods: `received`, `didNotReceive`, `clear
 
 * `clearReceivedCalls`, `mimick` and `configure` exist **only** as symbols.
 * In TypeScript, if a type has a member called `received`, `didNotReceive`, `returns`, `throws`, `resolves`, `rejects` or `mimicks`, its substitute offers only `sub[received]()` and `sub[didNotReceive]()`. Code that used the string forms on such a type no longer compiles.
-* `.returns()`, `.throws()`, `.mimicks()`, `.resolves()` and `.rejects()` are not offered on a value that has its own member with that name. Use `[returns]` and so on there. (In 2.0.0-beta.4, a member called `returns` on the substituted interface removed `.returns()` from all of its properties; that is fixed.)
+* `.returns()`, `.throws()`, `.mimicks()`, `.resolves()` and `.rejects()` are not offered on a value that has its own member with that name. Use `[returns]` and so on there.
+* **In JavaScript, a string check of a member called `returns`, `throws`, `resolves`, `rejects` or `mimicks` is now a setup, and passes silently.** In 1.x and the betas, `sub.received(1).returns(5)` was a check of a member called `returns`. Now `sub.received(1)` followed by `.returns(...)` configures a member of your own called `received` (see [Names that conflict with the library](README.md#in-javascript)). Search your tests for `received(...).returns(`, `.throws(`, `.resolves(`, `.rejects(` and `.mimicks(`, and use the symbol: `sub[received](1).returns(5)`.
+* In generic code, the type parameter's constraint decides: an unconstrained `SubstituteOf<T>` offers `sub.received()` and `sub.didNotReceive()`, as in 2.0.0-beta.4, while for `T extends Account`, where `Account` has a member with one of these names, only the symbols are offered.
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -173,6 +176,8 @@ console.log(calculator.add(1, 2)) // prints 3
 calculator[received](1).add(1, 2)
 calculator[didNotReceive]().subtract(Arg.all())
 ```
+
+`call`, `apply` and `bind` on a substitute value now mean both the function's own method and a member of your own with that name; see [What counts as a call](#what-counts-as-a-call).
 
 ## Behaviour changes
 ### Sequences repeat the last value
@@ -228,6 +233,8 @@ calculator.subtract(Arg.any(), 2)
 calculator.didNotReceive().subtract(Arg.all())
 ```
 
+This also holds for matchers inside plain objects and arrays, which are new: `repository.save({ id: Arg.any(), name: 'bob' }).returns('saved')` is a setup, and it matches `save({ id: 1, name: 'bob' })`. Before, a matcher inside an object was compared as a value, so such a call was a received call and never matched anything. Matchers inside class instances, `Map`s and `Set`s are still compared as values. See [Matchers inside objects and arrays](README.md#matchers-inside-objects-and-arrays).
+
 ### Match order
 *Applies to: 1.x and the betas.*
 
@@ -244,7 +251,7 @@ console.log(calculator.add(5, 0)) // prints 1
 ### Re-configuring a call
 *Applies to: 1.x and the betas.*
 
-A call whose literal arguments match an existing setup returns the configured value, so `calculator.add(1, 2).returns(5)` after `calculator.add(1, 2).returns(4)` fails (a number has no `.returns`). Use the new `sub[configure]()` view, in which every call is a setup:
+A call whose literal arguments match an existing setup returns the configured value, so `calculator.add(1, 2).returns(5)` after `calculator.add(1, 2).returns(4)` fails (a number has no `.returns`). If the configured value is a substitute, `.returns(5)` is silently recorded as a call of that substitute's member `returns`, and nothing is configured. Use the new `sub[configure]()` view, in which every call is a setup:
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -263,8 +270,9 @@ console.log(calculator.add(1, 3)) // prints 1337
 *Applies to: 1.x and the betas.*
 
 * Reading a method without calling it is not a call. Before, merely reading a method (for example to register it as an event handler) satisfied `received().method(...)`.
-* `.call()`, `.apply()` and `.bind()` on a method return the configured value and are recorded like a direct call. Before, `.call()` and `.apply()` returned a proxy.
+* `.call()`, `.apply()` and `.bind()` on a method, a function substitute, the result of a call or a nested member return the configured value and count as a direct call, and a mimicked function or a `mimicks()` function gets their first argument as `this`. Before, they returned a proxy (in 1.x, `.bind()` on a method already worked). They also count as a call of a member called `call`, `apply` or `bind`, and a setup such as `client.rpc.call('getUser', 1).returns(user)` configures that member. See [`call`, `apply` and `bind`](README.md#call-apply-and-bind).
 * Every call through a stored or destructured reference, or a callback, is recorded. In the betas, each such call overwrote the previous one (1.x was not affected).
+* The reads and calls that lead up to a setup or a check in the same expression, like `app.getCalculator()` in `app.getCalculator().add(1, 2).returns(99)`, are not recorded. Before, they were received calls, so `app.didNotReceive().getCalculator()` failed after that setup. Calls that the code under test made are kept: see [Which calls lead to a setup or a check](README.md#which-calls-lead-to-a-setup-or-a-check) for how the library tells them apart.
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -301,6 +309,13 @@ calculator.received(0).add(1, 2)
 calculator.received(1.5).add(1, 2) // throws SubstituteException: Expected count has to be a non-negative integer
 ```
 
+### Checks that fail later
+*Applies to: 1.x and the betas.*
+
+`sub.didNotReceive().member` or `sub.received(0).member` without parentheses, on a member that was called as a method, passed silently before. Now its failure is reported on `process.nextTick`, because the parentheses were probably forgotten: `Expected to receive 0 property reads or method calls matching add, but received 1 method call. add was called 1 time as a method; to assert calls, invoke it: sub.didNotReceive().add(...)`. Add the call: `sub.didNotReceive().add(1, 2)`, or `.add(Arg.all())`. See [Assertions that fail later](README.md#assertions-that-fail-later).
+
+Reports on `process.nextTick` use the `process.nextTick` that the library found when it was loaded, so fake timers installed later in a test no longer hold them back.
+
 ### Matchers
 *Applies to: 1.x and the betas.*
 
@@ -309,10 +324,58 @@ calculator.received(1.5).add(1, 2) // throws SubstituteException: Expected count
 * `Arg.is()` with something other than a function throws a `TypeError` right away. A predicate that throws counts as a non-match instead of crashing the code under test.
 * Substitutes passed as arguments are compared by identity, and are never compared or printed member by member. In the betas, a failed check overflowed the stack when substitutes referred to each other through their arguments.
 
+### How arguments are compared
+*Applies to: 1.x and the betas.*
+
+Literal arguments are compared with deep strict equality (`util.isDeepStrictEqual`), as before: own enumerable properties and prototypes. `#private` fields and other internal state are invisible to it, so all instances of a class that keeps its state only in `#private` fields are equal to each other. Use the same instance, or `Arg.is()`, for such classes (see [How arguments are compared](README.md#how-arguments-are-compared)).
+
+What changed: an argument object that you change after using it in a setup only matches that setup when the same object is passed again. Before, a new object equal to the changed one matched as well. Create the setup with the object as the code under test will pass it, or with a matcher.
+
+<!-- docs-check: uses=migration-calculator -->
+```typescript
+interface Repository {
+  save(user: { name: string }): string
+}
+
+const repository = Substitute.for<Repository>()
+const user = { name: 'ann' }
+repository.save(user).returns('saved')
+user.name = 'bob'
+
+console.log(repository.save(user)) // prints saved
+console.log(repository.save({ name: 'bob' }) === 'saved') // prints false
+```
+
+### `this` in `mimicks()`
+*Applies to: 1.x and the betas.*
+
+A `mimicks()` function is called with the `this` of the call, like a method: the substitute for `sub.method(...)`, the first argument of `.call()` and `.apply()`, and `undefined` for a property read. Before, it was `undefined` (in 2.0.0-beta.4) or the library's own proxy (in 1.x). An implementation that relied on that, or that needs a `this` of its own, should be an arrow function or a bound method.
+
+### Protocol members read as `undefined`
+*Applies to: 1.x and the betas.*
+
+`Symbol.iterator`, `Symbol.asyncIterator`, `Symbol.hasInstance`, `Symbol.isConcatSpreadable`, `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, `Symbol.split`, `Symbol.species`, `Symbol.toStringTag`, `Symbol.unscopables`, `util.promisify.custom` and `asymmetricMatch` read as `undefined` on a substitute unless they are configured, and the reads are not recorded (see [Special members](README.md#special-members)). Before, they returned auto-substitutes. So:
+
+* `[].concat(sub)` keeps the substitute as one element (it was dropped), `value instanceof sub.SomeClass` is `false` (it was `true`), `'text'.startsWith(sub.prefix)` no longer throws, and `util.promisify(sub.readFile)` calls the substitute.
+* jest no longer takes a substitute for an asymmetric matcher. Before, `expect(fn).toHaveBeenCalledWith(sub)` and `expect(list).toContainEqual(sub)` passed whatever the arguments or items were, and a failing `expect(value).toEqual(sub)` threw jest's internal "Unexpected return from a matcher function" error. Now they compare the substitute by identity, so tests that passed only because of this fail.
+* **A substitute is not iterable.** `[...sub]`, `for...of`, `for await...of` and `Promise.all(sub)` on a substitute that is not configured throw a `TypeError`. In the betas they treated it as empty; in 1.x they threw a different `TypeError`. Configure the iterator, or mimick an array:
+
+```js
+const { Substitute, configure, mimick } = require('@fluffy-spoon/substitute')
+
+const items = Substitute.for()
+items[configure]()[Symbol.iterator]().mimicks(() => ['a', 'b'][Symbol.iterator]())
+console.log([...items]) // prints [ 'a', 'b' ]
+
+const list = Substitute.for()
+list[mimick](['a', 'b'])
+console.log(list.length) // prints 2
+```
+
 ### Messages
 *Applies to: 1.x and the betas.*
 
-The wording of `SubstituteException` messages changed, for example "Expected to receive 2 method calls matching add(1, 2), but received 1.", followed by the calls that were received (at most 50). Tests that compare message texts need updating. Messages contain ANSI colours only when the output is a terminal (`NO_COLOR`, `NODE_DISABLE_COLORS`, `TERM=dumb` and `FORCE_COLOR` are honoured). In the betas, messages always contained them; 1.x messages had no colours.
+The wording of `SubstituteException` messages changed, for example "Expected to receive 2 method calls matching add(1, 2), but received 1.", followed by the calls that were received (at most 50). Tests that compare message texts need updating. When the kind of call is not known, messages say "property reads or method calls" instead of "property calls". A check of a member that was never used at all fails when it reads the member, so its message cannot name the expected arguments ("... matching add, but received none."); once the method has been called, the message names them. Messages contain ANSI colours only when the output is a terminal (`NO_COLOR`, `NODE_DISABLE_COLORS`, `TERM=dumb` and `FORCE_COLOR` are honoured). In the betas, messages always contained them; 1.x messages had no colours.
 
 `SubstituteException` is now exported from the package root: `import { SubstituteException } from '@fluffy-spoon/substitute'`.
 
@@ -330,14 +393,14 @@ calculator.add(Arg.any(), 2).returns(3)
 console.log(calculator.add(1, 2)) // prints 3
 ```
 
-**Deep imports moved.** package.json now has an `exports` map. The public entry point is the package root; import everything from there:
+**Deep imports moved.** package.json now has an `exports` map. The public entry point is the package root; import everything from there. 1.x had its files under `dist/src/`, the betas directly under `dist/`:
 
 | Before | After |
 |---|---|
-| `@fluffy-spoon/substitute/dist/Substitute` (`Substitute`, `SubstituteOf`) | `@fluffy-spoon/substitute` |
-| `@fluffy-spoon/substitute/dist/Arguments` (`Arg`) | `@fluffy-spoon/substitute` |
-| `@fluffy-spoon/substitute/dist/SubstituteException` (betas), `.../dist/SubstituteBase` (1.x) | `import { SubstituteException } from '@fluffy-spoon/substitute'` |
-| `@fluffy-spoon/substitute/dist/Transformations` (`ObjectSubstitute`, ...) | `SubstituteOf<T>` from `@fluffy-spoon/substitute` |
+| `@fluffy-spoon/substitute/dist/src/Substitute` (1.x), `.../dist/Substitute` (betas): `Substitute`, `SubstituteOf` | `@fluffy-spoon/substitute` |
+| `@fluffy-spoon/substitute/dist/src/Arguments` (1.x), `.../dist/Arguments` (betas): `Arg` | `@fluffy-spoon/substitute` |
+| `@fluffy-spoon/substitute/dist/src/SubstituteBase` (1.x), `.../dist/SubstituteException` (betas): `SubstituteException` | `import { SubstituteException } from '@fluffy-spoon/substitute'` |
+| `@fluffy-spoon/substitute/dist/src/Transformations` (1.x), `.../dist/Transformations` (betas): `ObjectSubstitute`, ... | `SubstituteOf<T>` from `@fluffy-spoon/substitute` |
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -351,7 +414,11 @@ try {
 }
 ```
 
-The compiled files now live under `dist/api`, `dist/internals` and `dist/shared`. They can still be imported as `@fluffy-spoon/substitute/dist/<path>` (with or without `.js`), but they are not public API and can change in any release. Directory imports such as `@fluffy-spoon/substitute/dist/api` no longer resolve on Node.js versions that read `exports`.
+The other files were internals and are gone without a replacement: in 1.x `dist/src/Context`, `dist/src/Utilities` and `dist/src/states/...`; in the betas `dist/SubstituteNode`, `dist/SubstituteNodeBase`, `dist/Recorder`, `dist/RecordsSet`, `dist/RecordedArguments`, `dist/Types` and `dist/Utilities` (`dist/utilities/...` in 2.0.0-beta.4). Development builds made from the repository after 2.0.0-beta.4 had them under `dist/internals/` (`dist/internals/SubstituteNode`, `dist/internals/Recorder`, `dist/internals/RecordsSet`, ...); those are gone, too.
+
+The compiled files of 2.0.1 live under `dist/api`, `dist/internals` and `dist/shared`. They are not public API and can change in any release. They can be imported as `@fluffy-spoon/substitute/dist/<path>`, with or without `.js`, on Node.js 14.19 or newer on 14.x, 16.9 or newer on 16.x, any later version, and versions older than 12.17 (which ignore `exports`). On 12.17 to 12.19, 13.x and 14.0 to 14.12, deep imports fail; on 12.20 to 12.22, 14.13 to 14.18 and 16.0 to 16.8, only the form without `.js` works. Directory imports such as `@fluffy-spoon/substitute/dist/api` no longer resolve on Node.js versions that read `exports`.
+
+**`require` works on every Node.js version from 10 on, and `import` needs 12.17 or newer on 12.x, 13.7 or newer on 13.x, or 14 or newer** (see [Requirements](#requirements)).
 
 ## TypeScript
 *Applies to: 1.x and the betas.*
@@ -359,7 +426,10 @@ The compiled files now live under `dist/api`, `dist/internals` and `dist/shared`
 The typings were reworked. Most code compiles unchanged, but:
 
 * The [symbol rules](#names-that-conflict-with-the-library-the-symbol-api) above: string checks are not offered on types with conflicting member names, and `mimick(instance)` is symbol only.
-* The symbol API is available on every substitute, also on `SubstituteOf<T>` for a generic `T` (in the betas, generic helpers could not call `received()`).
+* The symbol API is available on every substitute, also on `SubstituteOf<T>` for a generic `T`. In generic code, the string forms `sub.received()` and `sub.didNotReceive()` are offered for a type parameter without a constraint, as in the betas. With a constraint, the constraint decides: if it has a member called `received`, `didNotReceive`, `returns`, `throws`, `resolves`, `rejects` or `mimicks`, only the symbols are offered. Calls that return the type parameter keep `.returns()` and the other setup methods.
 * A member called `then` is typed `never`: substitutes are never thenables.
-* Now supported: `mimicks()` on methods that return a union (including `boolean`), optional members, named members next to an index signature, overloads without parameters, up to 8 overloads, `(...args: unknown[])` methods, and `.throws()` on methods that return `never`.
+* Members typed only `null` or `undefined` (`error?: undefined`, `ownerDocument: null`) keep their plain type and no longer have `.returns()` and the other setup methods. Configure them through `sub[configure]()`.
+* In generic code, a property typed as the type parameter itself (`current: T`) has no setup API; use `sub[configure]().current.returns(value)`.
+* `Arg.any('function')` is typed as any function or class, so it fits typed callback parameters. `Arg.any('object')` is typed `any`, like `Arg.any()` (it was `object`).
+* Now supported: optional members (also `sub.received().optionalProperty = undefined`), named members next to an index signature, overloads without parameters, up to 8 overloads, `(...args: unknown[])` methods, `.throws()` on methods that return `never`, `Arg.all()` after other arguments (after up to 6 of them), and types with very large unions of string literals, such as lib.dom's `HTMLInputElement`.
 * See [Typing limitations](README.md#typing-limitations) for what TypeScript cannot express.
