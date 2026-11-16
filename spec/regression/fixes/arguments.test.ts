@@ -208,20 +208,24 @@ test('A:RT-13 Arg.is rejects a missing or non-function predicate when it is crea
 })
 
 const withEnvironment = (environment: { NO_COLOR?: string, FORCE_COLOR?: string, tty: boolean }, run: () => void) => {
-  const saved = { NO_COLOR: process.env.NO_COLOR, FORCE_COLOR: process.env.FORCE_COLOR }
+  // NODE_DISABLE_COLORS and TERM=dumb also turn colours off (D24): they are cleared so that the result does not
+  // depend on the environment the tests run in.
+  const names = ['NO_COLOR', 'FORCE_COLOR', 'NODE_DISABLE_COLORS', 'TERM'] as const
+  const saved = names.map(name => [name, process.env[name]] as const)
   const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
-  const set = (name: 'NO_COLOR' | 'FORCE_COLOR', value: string | undefined) => {
+  const set = (name: typeof names[number], value: string | undefined) => {
     if (value === undefined) delete process.env[name]
     else process.env[name] = value
   }
   try {
     set('NO_COLOR', environment.NO_COLOR)
     set('FORCE_COLOR', environment.FORCE_COLOR)
+    set('NODE_DISABLE_COLORS', undefined)
+    set('TERM', undefined)
     Object.defineProperty(process.stdout, 'isTTY', { value: environment.tty, configurable: true, writable: true })
     run()
   } finally {
-    set('NO_COLOR', saved.NO_COLOR)
-    set('FORCE_COLOR', saved.FORCE_COLOR)
+    for (const [name, value] of saved) set(name, value)
     if (ttyDescriptor !== undefined) Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor)
     else delete (process.stdout as any).isTTY
   }

@@ -3,6 +3,7 @@ import { types } from 'util'
 
 import { Substitute, Arg, configure, mimick, received, returns, throws, resolves, rejects, mimicks } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { shouldUseColors } from '../../../src/internals/utilities/Colors'
 
 // Round 2 amendments of the fix spec (D22-D24, the amended D9 message) and the message hints.
 
@@ -104,4 +105,81 @@ test('D23 a message lists at most 50 received calls, then "… and N more"', t =
   t.is(listedLines(sets).length, 51)
   t.true(sets.includes('› ✘ @Substitute.value = 49\n'))
   t.true(sets.includes('› … and 5 more'))
+})
+
+test('D24 the colour decision honours FORCE_COLOR, NO_COLOR, NODE_DISABLE_COLORS, TERM=dumb and the TTY', t => {
+  const cases: Array<[Record<string, string>, boolean, boolean]> = [
+    // [environment, stdout is a TTY, colours]
+    [{}, true, true],
+    [{}, false, false],
+    [{ TERM: 'xterm-256color' }, true, true],
+    [{ NO_COLOR: '1' }, true, false],
+    [{ NO_COLOR: '' }, true, true],
+    [{ NODE_DISABLE_COLORS: '1' }, true, false],
+    [{ NODE_DISABLE_COLORS: 'true' }, true, false],
+    [{ NODE_DISABLE_COLORS: '' }, true, true],
+    [{ TERM: 'dumb' }, true, false],
+    [{ TERM: 'dumb', NODE_DISABLE_COLORS: '1', NO_COLOR: '1' }, true, false],
+    // FORCE_COLOR forces them on, whatever else is set, and also without a TTY
+    [{ FORCE_COLOR: '1' }, false, true],
+    [{ FORCE_COLOR: '' }, false, true],
+    [{ FORCE_COLOR: '3' }, false, true],
+    [{ FORCE_COLOR: '1', TERM: 'dumb' }, false, true],
+    [{ FORCE_COLOR: '1', NODE_DISABLE_COLORS: '1' }, false, true],
+    [{ FORCE_COLOR: '1', NO_COLOR: '1' }, false, true],
+    // ... or off
+    [{ FORCE_COLOR: '0' }, true, false],
+    [{ FORCE_COLOR: 'false' }, true, false],
+    [{ FORCE_COLOR: 'FALSE', TERM: 'xterm' }, true, false]
+  ]
+  for (const [env, tty, expected] of cases)
+    t.is(shouldUseColors(env, () => tty), expected, `${JSON.stringify(env)}, TTY: ${tty}`)
+
+  // the TTY is only looked at when the environment does not decide, and a throwing check means no colours
+  let asked = 0
+  const askTTY = () => { asked++; return true }
+  shouldUseColors({ FORCE_COLOR: '1' }, askTTY)
+  shouldUseColors({ NO_COLOR: '1' }, askTTY)
+  shouldUseColors({ TERM: 'dumb' }, askTTY)
+  t.is(asked, 0)
+  t.false(shouldUseColors({}, () => { throw new Error('no stdout') }))
+})
+
+const withProcessEnvironment = (environment: Record<string, string | undefined>, tty: boolean, run: () => void) => {
+  const names = ['FORCE_COLOR', 'NO_COLOR', 'NODE_DISABLE_COLORS', 'TERM']
+  const saved = names.map(name => [name, process.env[name]] as const)
+  const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+  const set = (name: string, value: string | undefined) => {
+    if (value === undefined) delete process.env[name]
+    else process.env[name] = value
+  }
+  try {
+    for (const name of names) set(name, environment[name])
+    Object.defineProperty(process.stdout, 'isTTY', { value: tty, configurable: true, writable: true })
+    run()
+  } finally {
+    for (const [name, value] of saved) set(name, value)
+    if (ttyDescriptor !== undefined) Object.defineProperty(process.stdout, 'isTTY', ttyDescriptor)
+    else delete (process.stdout as any).isTTY
+  }
+}
+
+test('D24 assertion messages have no ANSI codes with NODE_DISABLE_COLORS or TERM=dumb, unless FORCE_COLOR is set', t => {
+  const messageOf = () => {
+    const calculator = Substitute.for<any>()
+    calculator.add(1, 2)
+    try {
+      calculator.received().add(9, 9)
+    } catch (error) {
+      return (error as Error).message
+    }
+    throw new Error('expected the assertion to fail')
+  }
+  const hasAnsi = (text: string) => /\x1b\[/.test(text)
+
+  withProcessEnvironment({ TERM: 'xterm' }, true, () => t.true(hasAnsi(messageOf()), 'TTY'))
+  withProcessEnvironment({ TERM: 'dumb' }, true, () => t.false(hasAnsi(messageOf()), 'TERM=dumb'))
+  withProcessEnvironment({ NODE_DISABLE_COLORS: '1' }, true, () => t.false(hasAnsi(messageOf()), 'NODE_DISABLE_COLORS=1'))
+  withProcessEnvironment({ NODE_DISABLE_COLORS: '1', FORCE_COLOR: '1' }, true, () => t.true(hasAnsi(messageOf()), 'forced'))
+  withProcessEnvironment({ TERM: 'dumb', FORCE_COLOR: '1' }, false, () => t.true(hasAnsi(messageOf()), 'forced without a TTY'))
 })
