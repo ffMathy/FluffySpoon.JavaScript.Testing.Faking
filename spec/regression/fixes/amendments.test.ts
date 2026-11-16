@@ -1,13 +1,13 @@
 import test from 'ava'
 import * as fakeTimers from '@sinonjs/fake-timers'
 import { EventEmitter } from 'events'
-import { types } from 'util'
+import { inspect, types } from 'util'
 
 import { Substitute, Arg, clearReceivedCalls, configure, mimick, received, returns, throws, resolves, rejects, mimicks } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { shouldUseColors } from '../../../src/internals/utilities/Colors'
 
-// Round 2 amendments of the fix spec (D22-D24, the amended D9 message) and the message hints.
+// Round 2: the amendments of the fix spec (D22-D24, the amended D9 message), the message hints, and fixes from review.
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 const listedLines = (message: string) => plain(message).split('\n').filter(line => line.startsWith('› '))
@@ -299,4 +299,103 @@ test('D9 (amended) the deferred report on a member that was only invoked says it
   const ambiguous = deferredMessageOf(t, () => component.received(1).onChange)
   t.true(ambiguous.includes('Expected to receive 1 property read matching onChange, but received 2.\n'))
   t.false(ambiguous.includes('never read as a property'))
+})
+
+test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which substitution answers a call', t => {
+  const calculator = Substitute.for<any>()
+  // the most specific class wins, then the most recent one (D4)
+  calculator.add(1, 2).returns('literal')
+  calculator.add(Arg.any(), 2).returns('predicate')
+  calculator.add(Arg.all()).returns('wildcard')
+  calculator.add(Arg.any(), Arg.any()).returns('newer predicate')
+  t.is(calculator.add(1, 2), 'literal')
+  t.is(calculator.add(5, 2), 'newer predicate')
+  t.is(calculator.add(5), 'wildcard')
+  calculator[configure]().add(1, 2).returns('newer literal')
+  t.is(calculator.add(1, 2), 'newer literal')
+
+  // values that look alike are still told apart, values that are equal still match
+  const values = Substitute.for<any>()
+  const long = 'x'.repeat(100)
+  const symbol = Symbol('s')
+  const fn = () => 1
+  const other = Substitute.for<any>()
+  values.f(0).returns('0')
+  values[configure]().f(-0).returns('-0')
+  values.f(NaN).returns('NaN')
+  values.f(1).returns('number')
+  values.f('1').returns('string')
+  values.f(BigInt(1)).returns('bigint')
+  values.f(`${long}a`).returns('long a')
+  values.f(`${long}b`).returns('long b')
+  values.f(symbol).returns('symbol')
+  values.f(fn).returns('function')
+  values.f(other).returns('substitute')
+  values.f(undefined).returns('undefined')
+  values.f(null).returns('null')
+  values.f().returns('no arguments')
+  values.f([1, 2]).returns('array')
+  values.f({ a: 1 }).returns('object')
+  values.f(new Date(5)).returns('date')
+  t.deepEqual(
+    [0, -0, NaN, 1, '1', BigInt(1), `${long}a`, `${long}b`, symbol, fn, other, undefined, null].map(value => values.f(value)),
+    ['0', '-0', 'NaN', 'number', 'string', 'bigint', 'long a', 'long b', 'symbol', 'function', 'substitute', 'undefined', 'null']
+  )
+  t.is(values.f(), 'no arguments')
+  t.is(values.f([1, 2]), 'array')
+  t.is(values.f({ a: 1 }), 'object')
+  t.is(values.f(new Date(5)), 'date')
+  t.true(types.isProxy(values.f([2, 1])))
+  t.true(types.isProxy(values.f({ a: 2 })))
+  t.true(types.isProxy(values.f(Symbol('s'))))
+  t.true(types.isProxy(values.f(() => 1)))
+  t.true(types.isProxy(values.f(1, undefined)))
+
+  // literal arguments are compared as they are when the call is made (D15), also after a mutation
+  const repository = Substitute.for<any>()
+  const user = { name: 'a', tags: ['x'] }
+  repository.save(user).returns('saved')
+  user.name = 'b'
+  user.tags.push('y')
+  t.is(repository.save(user), 'saved')
+  t.is(repository.save({ name: 'b', tags: ['x', 'y'] }), 'saved')
+  t.true(types.isProxy(repository.save({ name: 'a', tags: ['x'] })))
+  // ... and the most recent of several matching literal substitutions wins
+  const copy = { name: 'b', tags: ['x', 'y'] }
+  repository.save(copy, 1).returns('older')
+  repository[configure]().save({ name: 'c', tags: [] }, 1).returns('newer')
+  copy.name = 'c'
+  copy.tags.length = 0
+  t.is(repository.save({ name: 'c', tags: [] }, 1), 'newer')
+
+  // re-configuring the same specification replaces the earlier substitution
+  const printed = Substitute.for<any>()
+  printed.f(1).returns('a')
+  printed[configure]().f(1).returns('b')
+  printed.f(Arg.any()).returns('c')
+  printed[configure]().f(Arg.any()).returns('d')
+  t.is(printed.f(1), 'b')
+  t.is(printed.f(2), 'd')
+  t.regex(inspect(printed), /configured:\n {4}f\(1\) => returns\('b'\)\n {4}f\(Arg\.any\{any\}\) => returns\('d'\)\n\}$/)
+})
+
+test('D2 an argument object that is mutated after a call keeps its auto-substitute', t => {
+  const api = Substitute.for<any>()
+  const request: { id: number, headers?: object } = { id: 1 }
+  api.get(request).body.returns('ok')
+  const response = api.get(request)
+  request.headers = { accept: 'json' }
+  t.is(api.get(request), response)
+  t.is(api.get(request).body, 'ok')
+  t.notThrows(() => api.received(3).get(request))
+
+  // a fresh object that is only equal to the arguments as they were gets its own auto-substitute
+  t.not(api.get({ id: 1 }), response)
+
+  // nested assertions through the same object
+  const service = Substitute.for<any>()
+  const query = { page: 1 }
+  service.find(query).log('first')
+  query.page = 2
+  t.notThrows(() => service.find(query).received(1).log('first'))
 })
