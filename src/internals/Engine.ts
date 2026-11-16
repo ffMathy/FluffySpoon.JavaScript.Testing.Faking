@@ -129,10 +129,27 @@ const createFaceProxy = (face: Face): any => new Proxy(newTarget(options => prin
   }
 })
 
+/**
+ * D22: the substitution symbols configure a member or a call. On a substitute itself they cannot mean anything
+ * (and would otherwise silently turn into a member keyed by the symbol), so they are a usage error. The string
+ * names stay ordinary members there (a member called `returns` is allowed, D11).
+ */
+const isSubstitutionSymbol = (property: PropertyKey): boolean =>
+  typeof property === 'symbol' && substitutionMethodOf(property) !== undefined
+
+const substitutionOnSubstituteError = (property: PropertyKey, start: Function) => SubstituteException.generic(
+  `[${substitutionMethodOf(property)}] cannot be used on a substitute itself: it configures a member or a call, ` +
+  `e.g. sub.member[${substitutionMethodOf(property)}](value) or sub.method(1)[${substitutionMethodOf(property)}](value). ` +
+  `If this substitute is the value of a call that is already configured, configure that call again through sub[configure]().`,
+  start
+)
+
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
-  if (face.kind !== 'root') {
+  if (face.kind === 'root') {
+    if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
+  } else {
     const entry = face.entry
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method)
@@ -471,6 +488,7 @@ const createConfigureProxy = (state: SubstituteState): any => {
   return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
+      if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, get)
       return configureMember(state, property)
     },
     set: function set() {
