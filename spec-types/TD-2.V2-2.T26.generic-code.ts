@@ -3,6 +3,9 @@
 //   calls that return the type parameter, as in 2.0.0-beta.4.
 // - `sub.received()` / `sub.didNotReceive()` are offered on SubstituteOf<T> for an unconstrained T: the D11 conflict rule
 //   applies only where it can be decided (concrete types, or a constraint; see T-TY-03.G-RG-3.generic-helpers.ts).
+// - Limitation: a PROPERTY whose type is the type parameter itself (`current: T`) has no setup API on the substitute
+//   (TypeScript cannot tell it apart from a member that can only be null or undefined, see TD-1.T25.null-only-members.ts).
+//   Configure it through the configure view: `repo[configure]().current.returns(value)`.
 import { Substitute, SubstituteOf, Arg, configure, received, didNotReceive, returns, throws } from '../src'
 
 interface Repo<T> {
@@ -29,7 +32,6 @@ export function stubRepo<T>(repo: SubstituteOf<Repo<T>>, value: T) {
   repo.load('a').resolves(value)
   repo.load('a').rejects(new Error())
   repo.items.returns([value])
-  repo.current.returns(value)
   repo[configure]().get('b').returns(value)
   repo[configure]().find(Arg.all()).returns(value)
   repo[configure]().current.returns(value)
@@ -43,6 +45,8 @@ export function stubRepo<T>(repo: SubstituteOf<Repo<T>>, value: T) {
   repo.get('a').returns(1)
   // @ts-expect-error resolves() is only offered for promises
   repo.get('a').resolves(value)
+  // @ts-expect-error limitation: a property typed as the type parameter itself; use repo[configure]().current
+  repo.current.returns(value)
 }
 
 // The G:RG-3 / V2-2 helpers

@@ -16,6 +16,14 @@ type Members<T> = string extends keyof T ? T : Pick<T, keyof T>
 // All views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
 //
+// Members whose type is only `null` and/or `undefined` (`error?: undefined`, `ownerDocument: null`) get no setup API:
+// there is nothing to configure, and an object type intersected with `null` would reduce the whole substitute to
+// `never` (TD-1, T25). They are `unknown` here, so that `SubstituteOf<T>` gives them their plain type from `T`.
+// For a property whose type is an unresolved type parameter (`current: T` in generic code), TypeScript cannot decide
+// this check and only keeps what both branches have, i.e. nothing: such a property has no setup API in generic code.
+// It is configured through `sub[configure]().current`. (Calls are not affected: their results never meet `T`'s own
+// property types, so they keep the setup API in both branches; see `SubstitutionResult`.)
+//
 // Special members (T:TY-16, D20). At runtime a substitute never exposes `then`, so that it is not a thenable
 // (`await sub` resolves to the substitute itself); the typings make `then` `never`. `toJSON` is answered by the
 // substitute itself (it serializes the substitute): it keeps its declared type on the substitute (through `& T`) but
@@ -28,6 +36,7 @@ type SubstituteMembers<T> = {
   [P in keyof T]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? unknown :
+    [NonNullable<T[P]>] extends [never] ? unknown :
     SubstituteMember<T[P]>
 }
 
