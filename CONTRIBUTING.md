@@ -48,9 +48,13 @@ This compiles `src/` into `dist/` with `tsc` (CommonJS plus `.d.ts` typings) and
   build instead of being a second copy, so CommonJS and ESM consumers share one module instance. Tools disagree
   about what a default import of a CommonJS module that sets `__esModule` is: Node.js, webpack and esbuild give
   `module.exports`, while Rollup's commonjs plugin, Vite SSR and vitest with inlined dependencies give
-  `exports.default`. The wrapper therefore imports both the default and the namespace of `dist/index.js`, uses
-  whichever one holds the complete exports, and throws at import time if neither does. A packaging test simulates
-  each of these interop shapes, and the compatibility checks bundle the package with the real tools.
+  `exports.default`, and vitest with inlined dependencies and `deps.interopDefault: false` gives an object
+  without the named exports (with a namespace whose `default` is that object). The wrapper therefore imports
+  both the default and the namespace of `dist/index.js` and uses whichever one holds every named export with the
+  type it has at build time; it throws at import time if neither does. Its own default export is the named export
+  `Substitute` (the default export of `dist/index.js`, found at build time), whatever the `default` of the view it
+  reads from is. A packaging test simulates each of these interop shapes, and the compatibility checks bundle the
+  package with the real tools.
 - `dist/index.d.mts` holds the matching typings for TypeScript's `node16`, `nodenext` and `bundler` resolution.
 
 The `exports` map in `package.json` sends `import` to the ES module entry and everything else (`require`, older
@@ -150,7 +154,8 @@ not against `src/`, and checks two things:
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
-  `test-runners/vitest-inline/exports.test.ts`, which checks the same.
+  `test-runners/vitest-inline/exports.test.ts`, which checks the same, once with `vitest.inline.config.mts` and
+  once with `vitest.inline-no-interop-default.config.mts`, which also sets `deps.interopDefault: false`.
   It also bundles `bundlers/require-entry.mjs`, which imports CommonJS code that `require()`s the package
   (`bundlers/require-helper.cjs`). With `@rollup/plugin-commonjs` on default options and the package kept external,
   that `require()` gets the `Substitute` class instead of the exports object (Vite 7 and older SSR builds do the

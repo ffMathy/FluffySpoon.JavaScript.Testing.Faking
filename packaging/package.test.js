@@ -83,15 +83,21 @@ const commonJsViews = [
   { name: 'the __esModule interop of Rollup\'s commonjs plugin, Vite SSR and vitest inlining (exports.default and the named exports)', defaultExport: 'real.default', namedExports: true }
 ]
 
+/**
+ * Writes a directory where dist/index.mjs imports an index.js that has the given shape. `defaultExport` is the
+ * source of index.js's default export; `namedExports` is false (none), true (the real ones) or 'undefined' (every
+ * named export present, but undefined).
+ */
 const simulateCommonJsView = (directory, cjsEntry, names, { defaultExport, namedExports }) => {
   fs.mkdirSync(directory)
   fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({ type: 'module' }))
   fs.copyFileSync(path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.mjs'), path.join(directory, 'index.mjs'))
+  const namedExportValue = name => namedExports === 'undefined' ? 'undefined' : `real.${name}`
   fs.writeFileSync(path.join(directory, 'index.js'), [
     "import { createRequire } from 'module'",
     `const real = createRequire(import.meta.url)(${JSON.stringify(cjsEntry)})`,
     `export default ${defaultExport}`,
-    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = real.${name}`) : []),
+    ...(namedExports ? names.filter(name => name !== 'default').map(name => `export const ${name} = ${namedExportValue(name)}`) : []),
     ''
   ].join('\n'))
   fs.writeFileSync(path.join(directory, 'check.mjs'), [
@@ -118,11 +124,48 @@ test('F1 the ES module entry gives the real exports whichever CommonJS interop t
   })
 
   // A view that has neither shape fails loudly at import time instead of exporting undefined values.
-  const directory = path.join(state.consumer, 'interop-unusable')
-  simulateCommonJsView(directory, cjsEntry, names, { defaultExport: '{}', namedExports: false })
+  const unusableViews = [
+    { name: 'an empty default import and no named exports', defaultExport: '{}', namedExports: false },
+    { name: 'the Substitute class as the default import and undefined named exports', defaultExport: 'real.default', namedExports: 'undefined' }
+  ]
+  unusableViews.forEach((view, index) => {
+    const directory = path.join(state.consumer, `interop-unusable-${index}`)
+    simulateCommonJsView(directory, cjsEntry, names, view)
+    const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
+    t.not(result.status, 0, view.name)
+    t.regex(result.stderr, /could not read the exports of its CommonJS build/, view.name)
+  })
+})
+
+test('PK4-2 the ES module entry uses the named exports when the default import is an object without them (vitest server.deps.inline with deps.interopDefault: false)', t => {
+  const cjsEntry = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist', 'index.js')
+  const names = Object.keys(require(cjsEntry))
+  // What vitest 3 and 5 hand dist/index.mjs with server.deps.inline and deps.interopDefault: false: the default import
+  // is an object with only some of the exports (SubstituteException and default), and the namespace has every named
+  // export plus that object as its default, not the Substitute class.
+  const directory = path.join(state.consumer, 'interop-vitest-inline-no-interop-default')
+  simulateCommonJsView(directory, cjsEntry, names, {
+    defaultExport: '{ SubstituteException: real.SubstituteException, default: real.default }',
+    namedExports: true
+  })
   const result = spawnSync(process.execPath, ['check.mjs'], { cwd: directory, encoding: 'utf8', env: childEnvironment() })
-  t.not(result.status, 0)
-  t.regex(result.stderr, /could not read the exports of its CommonJS build/)
+  t.is(result.status, 0, result.stdout + result.stderr)
+  t.regex(result.stdout, /^ok$/m)
+
+  // The wrapper's default export is the class that dist/index.js exports as its default, found at build time,
+  // not whatever default the view it reads from has.
+  const wrapper = fs.readFileSync(path.join(path.dirname(cjsEntry), 'index.mjs'), 'utf8')
+  t.regex(wrapper, /^export default cjs\.Substitute;$/m)
+  t.notRegex(wrapper, /\b(?:cjs|value)\.default\b/, 'the wrapper never reads the default export of the view it uses')
+})
+
+test('PK4-2 the compatibility checks run vitest with the package inlined and deps.interopDefault: false', t => {
+  const compatibility = path.join(root, 'compatibility-checks')
+  const config = fs.readFileSync(path.join(compatibility, 'vitest.inline-no-interop-default.config.mts'), 'utf8')
+  t.regex(config, /inline:\s*\['@fluffy-spoon\/substitute'\]/)
+  t.regex(config, /interopDefault:\s*false/)
+  const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
+  t.regex(bundlers, /'vitest\.inline-no-interop-default\.config\.mts'/, 'test/bundlers.ts runs vitest with that config')
 })
 
 test('F1 the compatibility checks bundle the packed package and run vitest with the package inlined', t => {

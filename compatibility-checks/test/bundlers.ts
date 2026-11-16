@@ -155,15 +155,23 @@ test.describe('F1 bundled ES module imports are the real exports', () => {
     })
   }
 
-  test.it('F1 vitest with server.deps.inline: default, named and namespace imports are the real exports', async () => {
-    const vitestPackage = require.resolve('vitest/package.json', { paths: [here] })
-    const vitest = path.join(path.dirname(vitestPackage), require(vitestPackage).bin.vitest)
-    const result = await run(process.execPath, [
-      vitest, 'run', '--config', 'vitest.inline.config.mts', 'test-runners/vitest-inline/exports.test.ts'
-    ], here)
-    assert.strictEqual(result.status, 0, result.output)
-    assert.match(result.output, /Tests\s+2 passed/, result.output)
-  })
+  const vitestInline = [
+    { id: 'F1', name: 'vitest with server.deps.inline', config: 'vitest.inline.config.mts' },
+    // PK4-2: vitest then gives the package's ES module entry a default import without the named exports, and a
+    // namespace whose default is not the Substitute class.
+    { id: 'PK4-2', name: 'vitest with server.deps.inline and deps.interopDefault: false', config: 'vitest.inline-no-interop-default.config.mts' }
+  ]
+  for (const { id, name, config } of vitestInline) {
+    test.it(`${id} ${name}: default, named and namespace imports are the real exports`, async () => {
+      const vitestPackage = require.resolve('vitest/package.json', { paths: [here] })
+      const vitest = path.join(path.dirname(vitestPackage), require(vitestPackage).bin.vitest)
+      const result = await run(process.execPath, [
+        vitest, 'run', '--config', config, 'test-runners/vitest-inline/exports.test.ts'
+      ], here)
+      assert.strictEqual(result.status, 0, result.output)
+      assert.match(result.output, /Tests\s+2 passed/, result.output)
+    })
+  }
 })
 
 // P2 (P29): bundles of bundlers/require-entry.mjs, which imports CommonJS code that require()s the package.
