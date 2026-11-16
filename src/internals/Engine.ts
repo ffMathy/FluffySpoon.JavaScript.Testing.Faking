@@ -230,9 +230,14 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     }
   }
 
-  // D26: call/apply/bind, unless the member with that name is configured as a property
-  if (isFunctionHelperKey(property) && memberStateOf(face)?.propertySubstitution(property) === undefined)
-    return dualHelper(face, property, chainHead())
+  // D26: call/apply/bind, unless the member with that name is configured as a property, or the substitute mimicks
+  // an instance that has no such member (then it reads like on the instance, D12)
+  if (isFunctionHelperKey(property)) {
+    const memberState = memberStateOf(face)
+    const instance = memberState?.mimicked?.instance
+    if (memberState?.propertySubstitution(property) === undefined && (instance === undefined || hasMember(instance, property)))
+      return dualHelper(face, property, chainHead())
+  }
 
   const context = contextMethodOf(property)
   if (context !== undefined) return contextFunction(context, () => faceState(face), chainHead())

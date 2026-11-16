@@ -294,6 +294,11 @@ test('ENG2-4 (D26) members named call/apply/bind keep their member reading', t =
   const property = Substitute.for<any>()
   property[configure]().call.returns('configured')
   t.is(property.call, 'configured')
+  // a substitute that mimicks an object without such a member reads it like the object does (D12)
+  const plainObject = Substitute.for<any>()
+  plainObject[mimick]({ name: 'x' })
+  t.is(plainObject.call, undefined)
+  t.is(plainObject.bind, undefined)
 })
 
 test('ENG2-5 (D27) Arg matchers nested in plain objects and arrays match deeply, and make the call a setup', t => {
