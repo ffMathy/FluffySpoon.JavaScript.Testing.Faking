@@ -1,4 +1,4 @@
-import { StackHolder, captureStack, forgetHandOutFrame, stackText } from './CallSite'
+import { Frame, StackHolder, frameOfStack, stackText } from './CallSite'
 
 export type RecordKind = 'get' | 'set' | 'call'
 
@@ -35,12 +35,13 @@ export class CallRecord {
     public kind: RecordKind,
     public readonly key: PropertyKey,
     public args: any[] | undefined,
-    stackStart: Function,
+    /** The captured call site (CallSite.captureStack), taken by the trap of the operation. */
+    site: StackHolder,
     /** The record of the previous step when this one continues an expression chain (`a.b().c`). */
     public chainPrevious?: CallRecord
   ) {
     this.seq = nextSequence()
-    this._stack = captureStack(stackStart)
+    this._stack = site
   }
 
   /** The call site as a stack trace text, for messages. */
@@ -48,19 +49,22 @@ export class CallRecord {
     return stackText(this._stack)
   }
 
+  /** The first frame outside the library (D25), or null when there is none. Reading it keeps the text (E11). */
+  public get frame(): Frame | null {
+    return frameOfStack(this._stack)
+  }
+
   /**
-   * Turns a property read into an invocation. E1: the invocation is a call made where it is invoked, which is not
+   * Turns a property read into an invocation. E1/E8: the invocation is a call made where it is invoked, which is not
    * always where the method was read (a method reference handed to the code under test, `new Service(api.getUser)`,
-   * is invoked later, elsewhere), so it takes the call site of the invocation, unless the caller knows that the read
-   * and the invocation are the same expression (`sub.method(...)`).
+   * is invoked later, elsewhere, even when the code under test invokes it on the substitute again, as
+   * `Reflect.apply(fetch, api, [id])` does). So it always takes the call site of the invocation: when the read and the
+   * invocation are the same expression (`sub.method(...)`), both are in the same function anyway.
    */
-  public convertToCall(args: any[], stackStart: Function, sameExpressionAsRead = false): void {
+  public convertToCall(args: any[], site: StackHolder): void {
     this.kind = 'call'
     this.args = args
-    if (!sameExpressionAsRead) {
-      this._stack = captureStack(stackStart)
-      forgetHandOutFrame(this)
-    }
+    this._stack = site
     this.seq = nextSequence()
   }
 }

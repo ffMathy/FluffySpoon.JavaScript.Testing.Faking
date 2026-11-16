@@ -1,15 +1,17 @@
 /**
  * Call sites of operations on substitutes: the first stack frame outside the library.
  *
- * Every received call keeps a captured stack trace (only its call site), to show it in assertion messages. Capturing
- * is cheap; it is the formatting into text that costs, so V8 does it lazily, when `stack` is first read, and then
- * formats it like any other stack trace: Error.prepareStackTrace, source maps (node --enable-source-maps, jest,
- * vitest) and stack-trace packages all apply (E4).
+ * Every received call keeps a captured stack trace (only its call site), to show it in assertion messages. V8 formats
+ * it lazily, when `stack` is first read, like any other stack trace: Error.prepareStackTrace, source maps (node
+ * --enable-source-maps, jest, vitest) and stack-trace packages all apply (E4). The text is never put together from
+ * structured call sites.
  *
  * The engine also needs to know, now and then, whether two operations come from the same expression in a test (D25):
- * whether their first frames outside the library are in the same file and the same enclosing function. For that it
- * reads the structured call sites of a SEPARATE capture, with a prepareStackTrace that returns the V8 call sites. That
- * capture is never used for text. Reading it changes Error.prepareStackTrace only for that moment (E5).
+ * whether their first frames outside the library are in the same file and the same enclosing function. It reads that
+ * from the same capture, with a prepareStackTrace that looks at the V8 call sites and then throws: V8 keeps nothing of
+ * a formatting that throws, so the capture still formats normally when its text is read later (verified on Node.js 10
+ * to 26). That saves a second capture per operation, which is what an operation costs most (E11). Reading the call
+ * sites changes Error.prepareStackTrace only for that moment (E5).
  */
 
 type V8CallSite = {
@@ -58,55 +60,6 @@ export const stackText = (holder: StackHolder): string | undefined => {
   }
 }
 
-const PREPARE_STACK_TRACE = 'prepareStackTrace'
-const returnCallSites = (_error: unknown, callSites: unknown) => callSites
-
-/**
- * E5: the descriptor that puts returnCallSites in place of Error.prepareStackTrace for a moment, or undefined when that
- * is not possible without changing the property for good: a non-configurable accessor (as the stack-chain package
- * installs) or a non-configurable, non-writable value, or an Error that cannot be extended.
- */
-const temporaryDescriptor = (original: PropertyDescriptor | undefined): PropertyDescriptor | undefined => {
-  if (original === undefined || original.configurable === true)
-    return { value: returnCallSites, writable: true, configurable: true, enumerable: original?.enumerable === true }
-  if ('value' in original && original.writable === true) return { value: returnCallSites }
-  return undefined
-}
-
-/**
- * Reads the structured call sites of a holder (undefined if it cannot). Error.prepareStackTrace is replaced by a data
- * property only while the holder's stack is formatted, and the exact property descriptor is put back afterwards, so
- * that the process's stack formatting never changes (E5).
- */
-const readCallSites = (holder: StackHolder): V8CallSite[] | undefined => {
-  const errorConstructor = Error as unknown as Record<string, unknown>
-  let original: PropertyDescriptor | undefined
-  try {
-    original = Object.getOwnPropertyDescriptor(errorConstructor, PREPARE_STACK_TRACE)
-  } catch {
-    return undefined
-  }
-  const temporary = temporaryDescriptor(original)
-  if (temporary === undefined) return undefined
-  try {
-    Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, temporary)
-  } catch {
-    return undefined
-  }
-  let value: unknown
-  try {
-    value = holder.stack
-  } catch {
-    value = undefined
-  } finally {
-    try {
-      if (original === undefined) delete errorConstructor[PREPARE_STACK_TRACE]
-      else Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, original)
-    } catch { /* it could be redefined a moment ago */ }
-  }
-  return Array.isArray(value) ? value as V8CallSite[] : undefined
-}
-
 /**
  * The frame of a call site. An async frame is no frame of the operation: V8 appends the async functions that await the
  * current promise job to its stack (async stack traces), so a call made from a promise job, which has no frame of its
@@ -125,48 +78,87 @@ const frameOf = (callSite: V8CallSite | undefined): Frame | null => {
   }
 }
 
-/** The first frame outside the library of a capture made for that purpose, or null when there is none. */
-const frameOfCapture = (holder: StackHolder): Frame | null => {
-  const callSites = readCallSites(holder)
-  return callSites === undefined ? null : frameOf(callSites[0])
+const PREPARE_STACK_TRACE = 'prepareStackTrace'
+/** Thrown by peekFirstFrame, so that V8 does not keep a formatted stack. */
+const PEEKED = Object.freeze({ peeked: true })
+let readFrame: Frame | null = null
+
+/** Reads the first frame, and throws, so that the holder keeps its call sites for its text. */
+const peekFirstFrame = (_error: unknown, callSites: unknown): never => {
+  readFrame = Array.isArray(callSites) ? frameOf(callSites[0]) : null
+  throw PEEKED
 }
 
-/** The first frame outside the library of the current operation (the trap function is the stack start). */
-export const currentFrame = (stackStart: Function): Frame | null => frameOfCapture(captureStack(stackStart))
-
-/*
- * The frame of the operation that last handed out a proxy (or a deferred read). D25 only ever compares the frame of the
- * operation that handed out the proxy that the current operation uses, when that was the most recent operation of all,
- * so one capture is kept, for the latest hand-out only: the received calls do not carry a second stack each (D30).
- */
-const handOut: { owner: object | undefined, capture: StackHolder | undefined, frame: Frame | null | undefined } =
-  { owner: undefined, capture: undefined, frame: undefined }
+/** Reads the first frame, and lets V8 keep the result: for a capture that is never shown (cheaper than a peek). */
+const takeFirstFrame = (_error: unknown, callSites: unknown): null => {
+  readFrame = Array.isArray(callSites) ? frameOf(callSites[0]) : null
+  return null
+}
 
 /**
- * Captures the frame of the current operation, which hands out a proxy for `owner` (a received call). The capture of
- * the same owner is kept: a method read and invoked in one expression (`sub.method(...)`) hands out twice.
+ * Formats a holder's stack with `prepare` in place of Error.prepareStackTrace, and puts the exact property back (E5).
+ * A writable data property (Node.js 21 and later have one, as source-map-support installs one) is assigned and
+ * assigned back, which keeps its attributes. Otherwise the property is redefined for the moment, and its descriptor is
+ * restored or the property deleted. A property that cannot be redefined without changing it for good (a
+ * non-configurable accessor, as the stack-chain package can install, or a non-configurable read-only value) is left
+ * alone: then there is no frame, and adjacency decides (E2).
  */
-export const captureHandOutFrame = (owner: object, stackStart: Function): void => {
-  if (handOut.owner === owner) return
-  handOut.owner = owner
-  handOut.capture = captureStack(stackStart)
-  handOut.frame = undefined
+const readFirstFrame = (holder: StackHolder, prepare: typeof peekFirstFrame | typeof takeFirstFrame): Frame | null => {
+  const errorConstructor = Error as unknown as Record<string, unknown>
+  let original: PropertyDescriptor | undefined
+  try {
+    original = Object.getOwnPropertyDescriptor(errorConstructor, PREPARE_STACK_TRACE)
+  } catch {
+    return null
+  }
+  const assign = original !== undefined && original.writable === true
+  if (!assign && original !== undefined && original.configurable !== true) return null
+  try {
+    if (assign) errorConstructor[PREPARE_STACK_TRACE] = prepare
+    else Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, { value: prepare, writable: true, configurable: true, enumerable: false })
+  } catch {
+    return null
+  }
+  readFrame = null
+  let read = false
+  try {
+    void holder.stack
+    read = prepare === takeFirstFrame
+  } catch (error) {
+    read = error === PEEKED
+  } finally {
+    try {
+      if (assign) errorConstructor[PREPARE_STACK_TRACE] = original!.value
+      else if (original === undefined) delete errorConstructor[PREPARE_STACK_TRACE]
+      else Object.defineProperty(errorConstructor, PREPARE_STACK_TRACE, original)
+    } catch { /* it could be redefined a moment ago */ }
+  }
+  // a stack formatted earlier (its text was read) has no call sites left to look at
+  return read ? readFrame : null
 }
 
-/** Forgets the capture of `owner`: its operation turned out to be another one (a method read invoked elsewhere). */
-export const forgetHandOutFrame = (owner: object): void => {
-  if (handOut.owner !== owner) return
-  handOut.owner = undefined
-  handOut.capture = undefined
-  handOut.frame = undefined
+/*
+ * The frame of the most recent holder that was read. D25 compares the operation that handed out a proxy with the
+ * operation that uses it right after; the latter is the next one to hand out a proxy, so along a chain every frame is
+ * read once. Only the latest is kept: the received calls do not carry a frame each (D30).
+ */
+let lastHolder: StackHolder | undefined
+let lastFrame: Frame | null = null
+
+/** The first frame outside the library of a capture, or null when there is none. The capture keeps its text. */
+export const frameOfStack = (holder: StackHolder): Frame | null => {
+  if (holder !== lastHolder) {
+    lastFrame = readFirstFrame(holder, peekFirstFrame)
+    lastHolder = holder
+  }
+  return lastFrame
 }
 
-/** The frame of the operation that handed out a proxy for `owner`, if it was the latest hand-out; otherwise null. */
-export const handOutFrame = (owner: object): Frame | null => {
-  if (handOut.owner !== owner || handOut.capture === undefined) return null
-  if (handOut.frame === undefined) handOut.frame = frameOfCapture(handOut.capture)
-  return handOut.frame
-}
+/**
+ * The first frame outside the library of the current operation (the trap function is the stack start), for an
+ * operation that records nothing (a setup, an assertion): its capture is read once and never shown.
+ */
+export const currentFrame = (stackStart: Function): Frame | null => readFirstFrame(captureStack(stackStart), takeFirstFrame)
 
 /**
  * D25: whether two operations belong to the same expression: their call sites are in the same file and the same

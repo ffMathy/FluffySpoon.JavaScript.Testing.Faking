@@ -1,7 +1,7 @@
 import { inspect } from 'util'
 
 import { CallRecord, RecordKind, currentSequence } from './CallRecord'
-import { captureHandOutFrame } from './CallSite'
+import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import { hashArguments, identityHashArguments } from './utilities'
@@ -143,11 +143,10 @@ export class AutoEntry {
     return this._state
   }
 
-  /** Notes that the operation of `record` hands out this entry's proxy (`stackStart`: the trap of that operation). */
-  public handOut(record: CallRecord, stackStart: Function): void {
+  /** Notes that the operation of `record` hands out this entry's proxy. */
+  public handOut(record: CallRecord): void {
     this._handedOutBy = record
     this._handedOutAt = currentSequence()
-    captureHandOutFrame(record, stackStart)
   }
 
   /**
@@ -289,8 +288,6 @@ export class SubstituteState {
   private readonly _specificationEntries = new Map<PropertyKey, AutoEntry[]>()
 
   public mimicked?: { instance: any }
-  /** The proxy of a substitute created with Substitute.for() (an auto-substitute's proxy is its owner's). */
-  public proxy?: any
 
   constructor(public readonly owner?: AutoEntry) { }
 
@@ -307,8 +304,9 @@ export class SubstituteState {
 
   // ---- received calls -------------------------------------------------------------------------
 
-  public addRecord(kind: RecordKind, key: PropertyKey, args: any[] | undefined, stackStart: Function): CallRecord {
-    const record = new CallRecord(kind, key, args, stackStart)
+  /** Records an operation; `site` is its call site (CallSite.captureStack), captured by the trap of the operation. */
+  public addRecord(kind: RecordKind, key: PropertyKey, args: any[] | undefined, site: StackHolder): CallRecord {
+    const record = new CallRecord(kind, key, args, site)
     this._records.push(record)
     const forKey = this._recordsByKey.get(key)
     if (forKey === undefined) this._recordsByKey.set(key, [record])
