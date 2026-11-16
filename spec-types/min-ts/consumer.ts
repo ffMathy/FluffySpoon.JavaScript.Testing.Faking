@@ -143,6 +143,61 @@ interface Form { note?: string }
 const form = Substitute.for<Form>()
 form.received().note = undefined
 
+// R3TD-1 / T33: setups and checks through a type parameter's constraint (members that cannot be null or undefined;
+// nullable members need TypeScript 3.9 in generic code)
+interface Counter { add(a: number, b: number): number; total: number; load(): Promise<number> }
+function stubCounter<T extends Counter>(sub: SubstituteOf<T>) {
+  sub.total.returns(1)
+  sub.add(1, 2).returns(3)
+  sub.add(Arg.all()).mimicks((a, b) => a + b)
+  sub.load().resolves(1)
+  sub[configure]().total.returns(2)
+  sub[configure]().add(1, Arg.all()).returns(4)
+  sub.received().add(1, 2)
+  sub.received().total = 1
+  sub[didNotReceive]().add(Arg.any(), 2)
+}
+class CounterFixture<T extends Counter> {
+  sub = Substitute.for<T>()
+  arrange() { this.sub.add(1, 2).returns(3) }
+}
+stubCounter(Substitute.for<Counter>())
+new CounterFixture<Counter>().arrange()
+
+// R3TD-6 / R3-3 / T37: substitutes of function types
+type Listener = (event: string) => string
+const listener = Substitute.for<Listener>()
+listener('saved').returns('ack')
+listener(Arg.all()).mimicks(event => event)
+listener.received(1)('saved')
+listener.didNotReceive()(Arg.any())
+listener[received](1)('saved')
+listener[configure]()('saved').returns('ack')
+const asListener: Listener = listener
+
+// R3TD-4 / T36: unions whose variants declare members as only null
+type QueryResult = { data: string[]; error: null } | { data: null; error: Error }
+const queryResult = Substitute.for<QueryResult>()
+queryResult.data.returns(['a'])
+queryResult.error.returns(null)
+const asQueryResult: QueryResult = queryResult
+
+// R3TD-2 / T34: the ways around the optional-callback limitation
+interface Widget { onChange?: (value: string) => void }
+const widget = Substitute.for<Widget>()
+widget.received().onChange('x')
+;(widget.received() as Widget).onChange = undefined
+widget.received().onChange = Arg.any.not('function')
+
+// R3TD-3 / T35 and R3TD-7 / T38: Arg.any / Arg.is and their .not forms
+interface Finder { find(id?: string): string; count(value: number): number }
+const finder = Substitute.for<Finder>()
+finder.find(Arg.any('undefined')).returns('none')
+finder.count(Arg.any.not('undefined')).returns(0)
+finder.count(Arg.is.not(value => value > 0)).returns(1)
+finder.count(Arg.any.not('number')).returns(2)
+const missing: undefined = Arg.any('undefined')
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
@@ -151,4 +206,4 @@ try {
   }
 }
 
-export { asCalculator, nothing, asOk }
+export { asCalculator, nothing, asOk, asListener, asQueryResult, missing }
