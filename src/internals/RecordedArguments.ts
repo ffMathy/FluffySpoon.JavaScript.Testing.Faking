@@ -77,7 +77,7 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
 const SCAN_BUDGET = 1024
 const MAX_SCAN_DEPTH = 32
 const MAX_SCANNED_ITEMS = 1024
-const SCAN_ITEMS = 4096
+const SCAN_ITEMS = 32768
 
 const tooWideToSearch = new WeakSet<object>()
 

@@ -135,6 +135,12 @@ test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container o
   t.is(repository.save([{ user: { role: 'admin' } }, { user: { role: 'guest' } }]), 'saved')
   t.not(repository.save([{ user: { role: 1 } }, { user: { role: 'guest' } }]), 'saved')
 
+  // in an array of 1,000 objects, each object is searched (README "Matchers inside objects and arrays")
+  const rows = Array.from({ length: 1000 }, (_, index): Record<string, unknown> => ({ id: index, a: 1, b: 2, c: 3, d: 4 }))
+  rows[999] = { ...rows[999], id: Arg.any() }
+  repository.import(rows).returns('imported')
+  t.is(repository.import(rows.map((row, index) => ({ ...row, id: index }))), 'imported')
+
   // a matcher in an object with more than 1024 keys is not looked for (the documented bound): it is a literal value
   const wide = wideObject(2000)
   wide.extra = Arg.any()
