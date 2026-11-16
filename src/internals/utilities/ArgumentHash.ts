@@ -29,8 +29,8 @@ import { isDeepStrictEqual, types } from 'util'
  * - E9, E13: the shallow part of a wide object, Map or Set is computed once (by identity), across calls, however many
  *   values refer to it (rows that share a lookup table) and however often it is passed.
  * No limit depends on the order of keys or of Map and Set entries, as deep strictly equal values may differ in it.
- * Arguments that cannot be read give the constant FALLBACK_HASH: anything that throws while it is read, such as a
- * throwing getter or a revoked proxy.
+ * E14: a value that cannot be read (anything that throws while it is read, such as a throwing getter or a revoked
+ * proxy) is hashed by its identity; only an argument list that cannot be hashed at all gets the constant FALLBACK_HASH.
  *
  * The identity hash counts objects by identity (and is undefined when there are no objects among the arguments, as
  * the structural hash is exact then). It finds the entry recorded for the same objects again after they were mutated.
@@ -73,7 +73,8 @@ const enum Tag {
   NaN = 0x6c078965, String = 0x0bad5eed, BigInt = 0x4cf5ad43, Symbol = 0x1f83d9ab, Function = 0x5be0cd19,
   Array = 0x6a09e667, Object = 0x3c6ef373, Map = 0x510e527f, Set = 0x9b05688c, Date = 0x1f83d9ac,
   RegExp = 0x5be0cd1a, Bytes = 0x428a2f98, Boxed = 0x71374491, Identity = 0x2a5c4e2b, Arguments = 0x0f1bbcdc,
-  Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Family = 0x3a8f05c5, Unsampled = 0x7c3b1d95
+  Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Family = 0x3a8f05c5, Unsampled = 0x7c3b1d95,
+  Unreadable = 0x5f356495
 }
 
 const mix = (hash: number, value: number): number => {
@@ -252,6 +253,7 @@ const hashKey = (key: PropertyKey): number => typeof key === 'symbol' ? hashPrim
  * identity and across calls, so that a wide container passed again (a lookup table passed to every call) is never
  * listed or hashed again. Weak, so that it keeps nothing alive. Mutating an argument after it was passed is not
  * supported (amended D15/D35): its hash stays the one of its first use.
+ * Values that cannot be read are remembered here as well, with their identity hash (E14).
  * The hashes and the refined hashes (without families, see below) are remembered apart. A hash without a family is its
  * refined hash as well, and is remembered as both.
  */
@@ -366,7 +368,15 @@ const hashObject = (object: object, budget: number, depth: number): number => {
       return known
     }
   }
-  return hashReadable(object, budget, depth)
+  try {
+    return hashReadable(object, budget, depth)
+  } catch {
+    // E14: a value that cannot be read (a throwing getter, a revoked proxy) is hashed by its identity, and only read
+    // once: it is deep strictly equal to nothing but itself (Node.js throws when it compares it, which counts as
+    // unequal), so only the same value finds the entries recorded for it, and no comparison reads it again. (A family
+    // hash reads less of an object than its refined hash, which may come to another result.)
+    return remember(object, mix(Tag.Unreadable, idOf(object)), !refining && familyMembers.has(object))
+  }
 }
 
 const hashReadable = (object: object, budget: number, depth: number): number => {

@@ -1,8 +1,11 @@
 import test from 'ava'
-import { Substitute, Arg, configure } from '../../../src'
-import { refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+import { isDeepStrictEqual } from 'util'
 
-// Round 6: the structural hash of wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13). The tests run in order: which wide objects were hashed before matters for how fast a hash is
+import { Substitute, Arg, configure } from '../../../src'
+import { hashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+
+// Round 6: the structural hash of wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13) and of values that cannot
+// be read (R5V-2; E14). The tests run in order: which wide objects were hashed before matters for how fast a hash is
 // (see "families" in ArgumentHash), never for its result. The values are created beforehand: only the calls are timed.
 
 const millisecondsOf = (run: () => void) => {
@@ -158,6 +161,47 @@ test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 1
   t.is(listings, firstListings)
   t.true(firstListings <= 4, `listed ${firstListings} times`)
   t.notThrows(() => lookup.received(1).find(999, table))
+})
+
+test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,000 calls with a throwing getter, with the same results', t => {
+  let getterRuns = 0
+  const unreadable = (): object => Object.defineProperty({}, 'bad', { enumerable: true, get() { getterRuns++; throw new Error('cannot be read') } })
+  const values = Array.from({ length: 4000 }, unreadable)
+  const elapsed = timeCalls(values)
+  t.log(`4,000 calls with distinct objects whose only property is a throwing getter: ${elapsed.toFixed(1)} ms`)
+  // 45facfb: about 65 s, as every such call was compared with every earlier one, running the getter each time
+  t.true(elapsed < 1000, `4,000 calls: ${elapsed} ms`)
+
+  const [first, second] = [unreadable(), unreadable()]
+  const sub = Substitute.for<any>()
+  // the same value finds what was recorded for it, another one does not (deep equality throws for them: no match)
+  t.is(sub.f(first), sub.f(first))
+  t.not(sub.f(first), sub.f(second))
+  // a copy of a container that holds the same value is deep strictly equal to it (the value itself is not compared)
+  t.true(isDeepStrictEqual({ value: first }, { value: first }))
+  t.is(sub.g({ value: first }, 1), sub.g({ value: first }, 1))
+  t.not(sub.g({ value: first }, 1), sub.g({ value: second }, 1))
+  sub.h(first).returns('first')
+  sub.wrap([first]).returns('wrapped')
+  t.is(sub.h(first), 'first')
+  t.not(sub.h(second), 'first')
+  t.is(sub.wrap([first]), 'wrapped')
+  t.not(sub.wrap([second]), 'wrapped')
+  t.notThrows(() => sub.received(3).f(first))
+  t.notThrows(() => sub.received(1).h(first))
+  // once seen, a value is not read again by later calls
+  const runs = getterRuns
+  for (let index = 0; index < 100; index++) sub.f(first)
+  t.is(getterRuns, runs)
+
+  // revoked proxies, also as nested values
+  const { proxy, revoke } = Proxy.revocable({}, {})
+  revoke()
+  t.is(sub.p(proxy), sub.p(proxy))
+  t.is(sub.p([proxy]), sub.p([proxy]))
+  t.not(sub.p(proxy), sub.p(Proxy.revocable({}, {}).proxy))
+  t.is(hashArguments([1, first]), hashArguments([1, first]))
+  t.not(structuralHash(first), structuralHash(second))
 })
 
 test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with same-size objects whose keys differ', t => {

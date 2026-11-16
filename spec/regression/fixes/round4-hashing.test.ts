@@ -280,11 +280,16 @@ test('R3-ADV-2 / R3-1 (E3) cycles, errors, invalid Dates, long strings and key o
   for (let index = 0; index < 40; index++) dag = { a: dag, b: dag }
   t.not(structuralHash(dag), FALLBACK_HASH)
 
-  // only values that cannot be read give FALLBACK_HASH
-  t.is(structuralHash({ get value(): never { throw new Error('getter') } }), FALLBACK_HASH)
+  // values that cannot be read: round 6 (E14) hashes them by their identity (the same value alike, another one not),
+  // where round 4 gave them all FALLBACK_HASH
+  const throwing = { get value(): never { throw new Error('getter') } }
+  t.is(structuralHash(throwing), structuralHash(throwing))
+  t.not(structuralHash(throwing), structuralHash({ get value(): never { throw new Error('getter') } }))
+  t.not(structuralHash(throwing), FALLBACK_HASH)
   const { proxy, revoke } = Proxy.revocable({}, {})
   revoke()
-  t.is(structuralHash(proxy), FALLBACK_HASH)
+  t.is(structuralHash(proxy), structuralHash(proxy))
+  t.not(structuralHash(proxy), FALLBACK_HASH)
 })
 
 const millisecondsOf = (run: () => void) => {

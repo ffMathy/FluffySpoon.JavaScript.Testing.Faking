@@ -190,12 +190,16 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   // Round 4 (E3): cycles end at the depth limit instead of giving FALLBACK_HASH, and both unroll to the same tree.
   t.not(structuralHash(cyclic), FALLBACK_HASH)
   t.is(structuralHash(cyclic), structuralHash(longer))
+  // round 6 (E14): values that cannot be read are hashed by their identity, where they all gave FALLBACK_HASH before
   const throwing = { get value(): never { throw new Error('getter') } }
-  t.is(structuralHash(throwing), FALLBACK_HASH)
-  t.is(hashArguments([1, throwing]), FALLBACK_HASH)
+  t.is(structuralHash(throwing), structuralHash(throwing))
+  t.is(hashArguments([1, throwing]), hashArguments([1, throwing]))
+  t.not(hashArguments([1, throwing]), hashArguments([1, { get value(): never { throw new Error('getter') } }]))
+  t.not(hashArguments([1, throwing]), FALLBACK_HASH)
   const { proxy, revoke } = Proxy.revocable({}, {})
   revoke()
-  t.is(structuralHash(proxy), FALLBACK_HASH)
+  t.is(structuralHash(proxy), structuralHash(proxy))
+  t.not(structuralHash(proxy), FALLBACK_HASH)
   const wide: any[] = []
   for (let index = 0; index < 20; index++) wide.push(wide.length === 0 ? {} : [wide[index - 1], wide[index - 1]])
   // round 4 (E3): more nested objects than the budget (through shared references) are cut, not given FALLBACK_HASH
