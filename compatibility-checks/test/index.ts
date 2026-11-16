@@ -37,6 +37,19 @@ test.describe('Verifies test runner compatibility', () => {
     { name: 'vitest-inline', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest-inline/index.spec.ts' }
   ]
 
+  // P28 (ENG2-7): jest's matchers must compare a substitute like any other value. Unlike the runs above, this suite
+  // (test-runners/jest-matchers) must pass.
+  test.describe('jest matchers', () => {
+    test.it('P28 a non-matching toHaveBeenCalledWith(substitute) and toEqual(substitute) fail with normal assertion errors', () => {
+      try {
+        execSync('npm run validate:jest-matchers', { env: testRunnerEnvironment(), stdio: 'pipe' })
+      } catch (error) {
+        // @ts-expect-error
+        assert.fail(`The jest matcher checks failed:\n${error.stdout.toString()}${error.stderr.toString()}`)
+      }
+    })
+  })
+
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
       test.it('reports the Substitute exception', () => {

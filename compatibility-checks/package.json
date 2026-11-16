@@ -19,6 +19,7 @@
         "install:local": "node scripts/install-local-build.js",
         "validate:ava": "ava test-runners/ava/**.ts",
         "validate:jest": "jest test-runners/jest/**.ts",
+        "validate:jest-matchers": "jest test-runners/jest-matchers/**.ts",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",
@@ -27,6 +28,7 @@
         "test": "node --require tsx/cjs --test test/index.ts test/bundlers.ts"
     },
     "devDependencies": {
+        "@jest/globals": "^30.5.2",
         "@rollup/plugin-commonjs": "^29.0.3",
         "@rollup/plugin-node-resolve": "^16.0.3",
         "@types/mocha": "^10.0.10",

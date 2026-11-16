@@ -140,6 +140,17 @@ test('F1 the compatibility checks bundle the packed package and run vitest with 
   t.regex(fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8'), /name: 'vitest-inline'/)
 })
 
+test('P28 the compatibility checks use substitutes inside jest matchers', t => {
+  const compatibility = JSON.parse(fs.readFileSync(path.join(root, 'compatibility-checks', 'package.json'), 'utf8'))
+  t.is(compatibility.scripts['validate:jest-matchers'], 'jest test-runners/jest-matchers/**.ts')
+  const harness = fs.readFileSync(path.join(root, 'compatibility-checks', 'test', 'index.ts'), 'utf8')
+  t.regex(harness, /execSync\('npm run validate:jest-matchers'/, 'test/index.ts runs the jest matcher suite and expects it to pass')
+  const suite = fs.readFileSync(path.join(root, 'compatibility-checks', 'test-runners', 'jest-matchers', 'index.spec.ts'), 'utf8')
+  t.regex(suite, /expect\(fn\)\.toHaveBeenCalledWith\(logger\)/)
+  t.regex(suite, /expect\(42\)\.toEqual\(logger\)/)
+  t.regex(suite, /Unexpected return from a matcher function/)
+})
+
 const typeScriptConsumer = [
   "import Substitute, { Arg, Substitute as Named } from '@fluffy-spoon/substitute'",
   "import { Arg as DeepArg } from '@fluffy-spoon/substitute/dist/api/Arg'",

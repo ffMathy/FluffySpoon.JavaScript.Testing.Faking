@@ -137,7 +137,10 @@ not against `src/`, and checks two things:
 
 - `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
   inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
-  after the test function has returned.
+  after the test function has returned. It also runs `test-runners/jest-matchers/` (`npm run validate:jest-matchers`),
+  which must pass: substitutes used inside jest matchers compare by identity, so a non-matching
+  `expect(fn).toHaveBeenCalledWith(substitute)` fails and `expect(42).toEqual(substitute)` fails with jest's normal
+  assertion error.
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
@@ -158,6 +161,7 @@ does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
 `mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
+`npm run validate:jest-matchers` is the exception: it is expected to pass.
 
 ## Continuous integration
 
