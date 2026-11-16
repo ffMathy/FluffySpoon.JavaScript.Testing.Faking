@@ -1,4 +1,4 @@
-import { inspect, InspectOptions } from 'util'
+import { inspect, InspectOptions, types } from 'util'
 
 import { isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
@@ -24,17 +24,18 @@ import { formatArguments, formatValue, isPrinting, withPrintGuard } from './util
  */
 
 type Printer = (options?: InspectOptions) => string
-type Face =
-  | { kind: 'root', state: SubstituteState }
-  | { kind: 'member', entry: AutoEntry }   // the result of reading an unconfigured member
-  | { kind: 'result', entry: AutoEntry }   // the result of an unconfigured call
+/**
+ * What a substitute proxy stands for: a substitute itself (its state), the result of reading an unconfigured member
+ * (an AutoEntry of kind 'get', a "member" handle) or the result of an unconfigured call (an AutoEntry of kind 'call').
+ */
+type Face = SubstituteState | AutoEntry
 
 const TAKE_PENDING_READ = Symbol('take pending read')
 type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 
 /**
- * The target of every proxy. util.inspect inspects the target of a proxy (it does not trigger traps),
- * so the target carries the printer as its inspect.custom hook.
+ * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
+ * target of a proxy (it does not trigger traps), so the target carries the printer as its inspect.custom hook.
  */
 const newTarget = (print: Printer): any => {
   const target = function () { }
@@ -79,11 +80,9 @@ const printState = (state: SubstituteState, colors: boolean): string => {
 }
 
 const printFace = (face: Face, colors: boolean): string => {
-  switch (face.kind) {
-    case 'root': return printState(face.state, colors)
-    case 'member': return `property<${memberLabel(face.entry.key)}>: `
-    case 'result': return withPrintGuard(() => `method<${memberLabel(face.entry.key)}>: ${formatArguments(face.entry.args?.value, colors)}`)
-  }
+  if (!(face instanceof AutoEntry)) return printState(face, colors)
+  if (face.kind === 'get') return `property<${memberLabel(face.key)}>: `
+  return withPrintGuard(() => `method<${memberLabel(face.key)}>: ${formatArguments(face.args?.value, colors)}`)
 }
 
 const special = (property: SpecialProperty, print: Printer, internal: unknown): any => {
@@ -105,29 +104,64 @@ const colorsOf = (options?: InspectOptions) => options?.colors === true
 
 // ---- substitutes and auto-substitutes ---------------------------------------------------------
 
-export const createSubstitute = (): any => createFaceProxy({ kind: 'root', state: new SubstituteState() })
+export const createSubstitute = (): any => createFaceProxy(new SubstituteState())
 
 const entryProxy = (entry: AutoEntry): any => {
-  if (entry.proxy === undefined)
-    entry.proxy = createFaceProxy(entry.kind === 'get' ? { kind: 'member', entry } : { kind: 'result', entry })
+  if (entry.proxy === undefined) entry.proxy = createFaceProxy(entry)
   return entry.proxy
 }
 
-const faceState = (face: Face): SubstituteState => face.kind === 'root' ? face.state : face.entry.state
-const faceChainHead = (face: Face): CallRecord | undefined => face.kind === 'root' ? undefined : face.entry.chainHead()
+const faceState = (face: Face): SubstituteState => face instanceof AutoEntry ? face.state : face
+const faceChainHead = (face: Face): CallRecord | undefined => face instanceof AutoEntry ? face.chainHead() : undefined
 
-const createFaceProxy = (face: Face): any => new Proxy(newTarget(options => printFace(face, colorsOf(options))), {
-  get: function get(_target: unknown, property: PropertyKey) {
-    return faceGet(face, property, get)
-  },
-  set: function set(_target: unknown, property: PropertyKey, value: unknown) {
-    faceSet(face, property, value, set)
-    return true
-  },
-  apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-    return faceApply(face, args, apply)
+/*
+ * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
+ * all of them share one handler, and the target of each one is a function that returns its face. util.inspect looks
+ * at the target of a proxy without triggering traps, so the printer is inherited from a shared prototype.
+ */
+type FaceTarget = () => Face
+
+const faceOfInspected = (value: any): Face | undefined => {
+  try {
+    return typeof value === 'function' && !types.isProxy(value) ? value() : value[INTERNAL]
+  } catch {
+    return undefined
+  }
+}
+
+const faceTargetPrototype = Object.create(Function.prototype, {
+  [inspect.custom]: {
+    value: function (this: unknown, _depth: number, options?: InspectOptions) {
+      const face = faceOfInspected(this)
+      return face === undefined ? '' : printFace(face, colorsOf(options))
+    },
+    configurable: true
   }
 })
+
+const faceHandler: ProxyHandler<FaceTarget> = {
+  get: function get(target: FaceTarget, property: PropertyKey) {
+    return faceGet(target(), property, get)
+  },
+  set: function set(target: FaceTarget, property: PropertyKey, value: unknown) {
+    faceSet(target(), property, value, set)
+    return true
+  },
+  apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
+    return faceApply(target(), thisArg, args, apply)
+  },
+  // like constructing the plain function the target used to be: an empty object, nothing recorded
+  construct: () => ({})
+}
+
+// bound to the face: a bound function is smaller than a closure and its context
+const returnThis = function (this: Face): Face { return this }
+
+const createFaceProxy = (face: Face): any => {
+  const target: FaceTarget = returnThis.bind(face)
+  Object.setPrototypeOf(target, faceTargetPrototype)
+  return new Proxy(target, faceHandler)
+}
 
 /**
  * D22: the substitution symbols configure a member or a call. On a substitute itself they cannot mean anything
@@ -147,18 +181,18 @@ const substitutionOnSubstituteError = (property: PropertyKey, start: Function) =
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
-  if (face.kind === 'root') {
+  if (!(face instanceof AutoEntry)) {
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
-    const entry = face.entry
+    const entry = face
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method)
 
-    if (face.kind === 'member' && isFunctionHelperKey(property))
+    if (entry.kind === 'get' && isFunctionHelperKey(property))
       return functionHelper(property, (args, start) => invoke(entry.parent, entry.key, args, start, TAKE_PENDING_READ))
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
-    if (face.kind === 'result' && isStringAssertionKey(entry.key)) {
+    if (entry.kind === 'call' && isStringAssertionKey(entry.key)) {
       const assertion = resolveStringAssertion(entry, stackStart)
       return assertionMember(assertion.state, property, assertion.count, stackStart)
     }
@@ -172,8 +206,8 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
 }
 
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
-  if (face.kind === 'result' && isStringAssertionKey(face.entry.key)) {
-    const assertion = resolveStringAssertion(face.entry, stackStart)
+  if (face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key)) {
+    const assertion = resolveStringAssertion(face, stackStart)
     assertSet(assertion.state, property, value, assertion.count, stackStart)
     return
   }
@@ -181,17 +215,10 @@ const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: 
   realSet(faceState(face), property, value, chainHead, stackStart)
 }
 
-const faceApply = (face: Face, args: any[], stackStart: Function): any => {
-  switch (face.kind) {
-    case 'root':
-      return invoke(face.state, SELF, args, stackStart, undefined)
-    case 'member':
-      return invoke(face.entry.parent, face.entry.key, args, stackStart, TAKE_PENDING_READ)
-    case 'result': {
-      const chainHead = face.entry.chainHead()
-      return invoke(face.entry.state, SELF, args, stackStart, undefined, chainHead)
-    }
-  }
+const faceApply = (face: Face, _thisArg: unknown, args: any[], stackStart: Function): any => {
+  if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined)
+  if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ)
+  return invoke(face.state, SELF, args, stackStart, undefined, face.chainHead())
 }
 
 /** `.call`, `.apply` and `.bind` on a member behave like invoking the member (D7). */

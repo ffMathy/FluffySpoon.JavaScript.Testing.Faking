@@ -1,4 +1,6 @@
 import test from 'ava'
+import { spawnSync } from 'child_process'
+import * as path from 'path'
 import { inspect, isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg, configure } from '../../../src'
@@ -204,6 +206,52 @@ test('ENG2-2 (D35) the structural hash: special values, and values that cannot b
   const object = { a: 1 }
   t.is(identityHashArguments([object]), identityHashArguments([object]))
   t.not(identityHashArguments([object]), identityHashArguments([{ a: 1 }]))
+})
+
+/** Runs a script with the library in a child process with --expose-gc, and returns what it prints as JSON. */
+const measure = (script: string): any => {
+  const library = path.resolve(__dirname, '../../../src/index.js')
+  const result = spawnSync(process.execPath, ['--expose-gc', '-e', `
+    const { Substitute, Arg } = require(${JSON.stringify(library)})
+    const heap = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed }
+    ${script}
+  `], { encoding: 'utf8' })
+  if (result.status !== 0) throw new Error(result.stderr)
+  return JSON.parse(result.stdout)
+}
+
+test('ENG2-9 (D30) an unconfigured call with distinct arguments costs little memory beyond its record', t => {
+  const { unconfigured, configured } = measure(`
+    const bytesPerCall = configure => {
+      const calls = 50000
+      const before = heap()
+      const logger = Substitute.for()
+      if (configure) logger.log(Arg.any()).returns(undefined)
+      for (let index = 0; index < calls; index++) logger.log(index)
+      const bytes = (heap() - before) / calls
+      if (logger.log(1) === null) console.log('keeps the substitute alive until here')
+      return Math.round(bytes)
+    }
+    console.log(JSON.stringify({ configured: bytesPerCall(true), unconfigured: bytesPerCall(false) }))
+  `)
+  t.log(`bytes per call: ${unconfigured} unconfigured (an auto-substitute each), ${configured} configured (the record only)`)
+  // before D30 the auto-substitute cost about 1 KB more than the record (Node 22: 1309 against 279 bytes)
+  t.true(unconfigured - configured < 450, `${unconfigured} - ${configured} bytes per call`)
+})
+
+test('ENG2-10 (D30) hashing does not keep symbols alive after the substitute that saw them is gone', t => {
+  const { retained } = measure(`
+    const before = heap()
+    const run = () => {
+      const emitter = Substitute.for()
+      emitter.emit(0).returns(1)
+      for (let index = 0; index < 100000; index++) emitter.emit(Symbol('event-' + index))
+    }
+    run()
+    console.log(JSON.stringify({ retained: (heap() - before) / 1048576 }))
+  `)
+  t.log(`${retained.toFixed(2)} MB retained`)
+  t.true(retained < 2, `${retained} MB retained`)
 })
 
 const millisecondsOf = (run: () => void) => {

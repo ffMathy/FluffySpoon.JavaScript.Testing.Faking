@@ -98,17 +98,35 @@ export class Substitution {
  * with matching arguments gets the same entry, so nested setups and assertions find each other.
  */
 export class AutoEntry {
-  private _state?: SubstituteState
-  public proxy: any
-  /** The record of the operation that last handed out this entry's proxy, with the sequence number at that time. */
-  public handedOutBy?: { record: CallRecord, seq: number }
+  // D30: the state (records, configuration, nested auto-substitutes) is only allocated when it is needed
+  private _state?: SubstituteState = undefined
+  public proxy: any = undefined
+  /** The record of the operation that last handed out this entry's proxy, and the sequence number at that time. */
+  private _handedOutBy?: CallRecord = undefined
+  private _handedOutAt = 0
 
   constructor(
     public readonly kind: 'get' | 'call',
     public readonly parent: SubstituteState,
     public readonly key: PropertyKey,
-    public readonly args?: RecordedArguments
+    /** The arguments of a call entry: a specification, or (D30: wrapped only when needed) the actual arguments. */
+    private _args?: RecordedArguments | readonly unknown[]
   ) { }
+
+  public get args(): RecordedArguments | undefined {
+    const args = this._args
+    if (!Array.isArray(args)) return args as RecordedArguments | undefined
+    const wrapped = RecordedArguments.from(args)
+    this._args = wrapped
+    return wrapped
+  }
+
+  /** Whether the arguments of this call entry match a call with these actual arguments. */
+  public matchesCall(actualArguments: readonly unknown[]): boolean {
+    const args = this._args
+    if (args === undefined) return false
+    return Array.isArray(args) ? RecordedArguments.literalsEqual(args, actualArguments) : (args as RecordedArguments).matches(actualArguments)
+  }
 
   public get state(): SubstituteState {
     if (this._state === undefined) this._state = new SubstituteState(this)
@@ -120,7 +138,8 @@ export class AutoEntry {
   }
 
   public handOut(record: CallRecord): void {
-    this.handedOutBy = { record, seq: currentSequence() }
+    this._handedOutBy = record
+    this._handedOutAt = currentSequence()
   }
 
   /**
@@ -129,8 +148,7 @@ export class AutoEntry {
    * later on in the chain retract it.
    */
   public chainHead(): CallRecord | undefined {
-    const handedOutBy = this.handedOutBy
-    return handedOutBy !== undefined && handedOutBy.seq === currentSequence() ? handedOutBy.record : undefined
+    return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
   }
 }
 
@@ -394,14 +412,14 @@ export class SubstituteState {
     }
     const identity = actual.identity
     if (identity !== undefined && index.byIdentity !== undefined) {
-      const known = bucketItems(index.byIdentity, identity)?.find(entry => entry.args!.matches(actualArguments))
+      const known = bucketItems(index.byIdentity, identity)?.find(entry => entry.matchesCall(actualArguments))
       if (known !== undefined) return known
     }
 
     const hash = actual.structural
-    let entry = bucketItems(index.byHash, hash)?.find(candidate => candidate.args!.matches(actualArguments))
+    let entry = bucketItems(index.byHash, hash)?.find(candidate => candidate.matchesCall(actualArguments))
     if (entry === undefined) {
-      entry = new AutoEntry('call', this, key, RecordedArguments.from(actualArguments as any[]))
+      entry = new AutoEntry('call', this, key, actualArguments)
       bucketAdd(index.byHash, hash, entry)
     }
     if (identity !== undefined) {

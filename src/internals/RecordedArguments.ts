@@ -69,6 +69,13 @@ export class RecordedArguments {
     return new this(rawArguments)
   }
 
+  /** Whether two lists of actual (matcher-free) arguments are equal, argument by argument. */
+  static literalsEqual(expected: readonly unknown[], actual: readonly unknown[]): boolean {
+    if (expected.length !== actual.length) return false
+    for (let index = 0; index < expected.length; index++) if (!literalEquals(expected[index], actual[index])) return false
+    return true
+  }
+
   static containsMatchers(rawArguments: readonly unknown[]): boolean {
     for (const argument of rawArguments) if (isArgumentMatcher(argument)) return true
     return false
