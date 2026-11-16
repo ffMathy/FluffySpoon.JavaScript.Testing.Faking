@@ -16,14 +16,14 @@ export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
  * object type with the same members, so that primitives (`Substitute.for<string>()`) and arrays are mapped member by
  * member too (a homomorphic mapping would return a primitive unchanged and only map the elements of an array), and so
  * that a union (`Cat | Dog`) is mapped as one object type with the members its variants have in common.
- * The member types are read from `T` itself (`Member<T, P>`), not from this object type: in generic code `T['total']`
- * accepts the values of the constraint's member type, `Pick<T, keyof T>['total']` does not (T33).
+ * In generic code it is the type parameter itself: there `T['total']` accepts the values of the constraint's member type
+ * (`sub.total.returns(1)` with `T extends Calculator`, T33), and `Pick<T, keyof T>['total']` does not. The choice is an
+ * indexed access whose key is `any` for the plain object type: an object type indexed with `any` gives its string index
+ * signature, and in generic code, where `MembersKind` cannot be decided, TypeScript leaves out its `any` branch and
+ * takes `T`. (`MembersKind` is not distributive, so a union is not split.)
  */
-type Members<T> = { indexed: T, plain: Pick<T, keyof T> }[IndexKind<T>]
-
-// `Extract`, not `P & keyof T`: intersecting a key with a large key union (lib.dom's Document has hundreds of members)
-// distributes over the whole union each time a member type is computed.
-type Member<T, P> = T[Extract<P, keyof T>]
+type Members<T> = { indexed: T, [plain: string]: Pick<T, keyof T> }[MembersKind<T>]
+type MembersKind<T> = string extends keyof T ? 'indexed' : any
 
 // The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
@@ -47,15 +47,15 @@ type SubstituteMember<TValue> = FunctionSubstitute<NonNullable<TValue>, 'substit
 // is `unknown`.
 type SubstituteMemberOf<TKind, TValue> = TKind extends 'value' ? SubstituteMember<TValue> : unknown
 
-type SubstituteMembers<TMembers, T> = {
+type SubstituteMembers<TMembers> = {
   [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? unknown :
-    SubstituteMemberOf<ValueKind<Member<T, P>>, Member<T, P>>
+    SubstituteMemberOf<ValueKind<TMembers[P]>, TMembers[P]>
 }
 
 /** The members of a substitute (without the assertion and configuration methods), each with its setup API. */
-export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>, T>
+export type ObjectSubstituteTransformation<T> = SubstituteMembers<Members<T>>
 
 // Unions whose variants declare a member as only null/undefined (T36, R3TD-4):
 //   { data: string[]; error: null } | { data: null; error: Error }
@@ -123,11 +123,11 @@ export type TerminatingObject<T> =
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>
 
-type ConfigurationMembers<TMembers, T> = {
+type ConfigurationMembers<TMembers> = {
   [P in keyof TMembers]-?:
     P extends 'then' ? never :
     P extends 'toJSON' ? never :
-    ConfigurationMember<Member<T, P>>
+    ConfigurationMember<TMembers[P]>
 }
 
 /**
@@ -136,4 +136,4 @@ type ConfigurationMembers<TMembers, T> = {
  * returned from this view, so there is nothing for them to conflict with. A substitute of a function type is callable
  * here as well (`listener[configure]()('saved').returns('ack')`, T37).
  */
-export type ConfigureView<T> = ConfigurationMembers<Members<T>, T> & FunctionSubstitute<NonNullable<T>, 'configure'>
+export type ConfigureView<T> = ConfigurationMembers<Members<T>> & FunctionSubstitute<NonNullable<T>, 'configure'>
