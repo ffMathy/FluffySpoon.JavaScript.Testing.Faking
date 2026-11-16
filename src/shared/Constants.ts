@@ -81,3 +81,17 @@ const contextTypes = {
 export const constants = {
   CONTEXT: contextTypes
 }
+
+// Every proxy handed out by the library answers `true` for this registered symbol, without recording anything.
+const substituteMarker: unique symbol = Symbol.for(symbolFor('substitute'))
+export { substituteMarker }
+
+/** True when the value is a substitute or one of its auto-substitutes (from any copy of this package). */
+export const isSubstituteProxy = (value: unknown): boolean => {
+  if (typeof value !== 'function') return false
+  try {
+    return (value as any)[substituteMarker] === true
+  } catch {
+    return false
+  }
+}

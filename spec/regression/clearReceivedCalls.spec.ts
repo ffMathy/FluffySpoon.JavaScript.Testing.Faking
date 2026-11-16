@@ -1,7 +1,6 @@
 import test from 'ava'
 
-import { Substitute, SubstituteOf, clearReceivedCalls } from '../../src'
-import { SubstituteNode, instance } from '../../src/internals/SubstituteNode'
+import { Substitute, clearReceivedCalls } from '../../src'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -10,19 +9,13 @@ interface Calculator {
   isEnabled: boolean
 }
 
-type InstanceReturningSubstitute<T> = SubstituteOf<T> & {
-  [instance]: SubstituteNode
-}
-
 test('clears received calls on a substitute', t => {
-  const calculator = Substitute.for<Calculator>() as InstanceReturningSubstitute<Calculator>
+  const calculator = Substitute.for<Calculator>()
   calculator.add(1, 1)
   calculator.add(1, 1).returns(2)
   calculator[clearReceivedCalls]();
 
-  t.is(calculator[instance].recorder.records.size, 2)
-  t.is(calculator[instance].recorder.indexedRecords.size, 2)
-
+  t.notThrows(() => calculator.didNotReceive().add(1, 1))
   t.throws(() => calculator.received().add(1, 1))
   t.is(2, calculator.add(1, 1))
 })
