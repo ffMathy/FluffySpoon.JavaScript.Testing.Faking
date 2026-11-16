@@ -252,6 +252,14 @@ test('D9 a failing property-style assertion is deferred only in the ambiguous ca
   const error = t.throws(() => calculator.received(2).add(1, 2), { instanceOf: SubstituteException })
   t.regex(plain(error.message), /Expected to receive 2 method calls matching add\(1, 2\), but received 1\./)
   doesNotThrowLater(() => calculator.received(1).add(1, 2), t)
+  // ... so a property-style assertion on it that is never invoked is reported later
+  throwsUncaughtException(() => calculator.received(2).add, t, { instanceOf: SubstituteException })
+
+  // a member that was never invoked is a property: decided now
+  const handler = Substitute.for<any>()
+  void handler.onClick
+  t.throws(() => handler.didNotReceive().onClick, { instanceOf: SubstituteException })
+  t.throws(() => handler.received(2).onClick, { instanceOf: SubstituteException })
 })
 
 test('D16 Arg.any types', t => {
