@@ -269,14 +269,15 @@ const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: 
   realSet(faceState(face), property, value, candidate, captureStack(stackStart))
 }
 
-/**
- * A direct invocation of a substitute (the proxy apply trap). D26: the `this` of the invocation is passed on to a
- * mimicked function and to mimicks(), so that `obj.add = fnSubstitute; obj.add(1)` runs with `this === obj`.
- * (A mimicked instance's own method keeps running on the instance, D12.)
- */
 /** Whether invoking the face is an invocation to record, rather than a string assertion (`sub.received(1)(...)`). */
 const recordsInvocation = (face: Face): boolean => !(face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key))
 
+/**
+ * A direct invocation of a substitute (the proxy apply trap; `site`: its call site, captured by the trap). D26: the
+ * `this` of the invocation is passed on to a mimicked function and to mimicks(), so that
+ * `obj.add = fnSubstitute; obj.add(1)` runs with `this === obj`. (A mimicked instance's own method keeps running on
+ * the instance, D12.)
+ */
 const faceApply = (face: Face, thisArg: unknown, args: any[], stackStart: Function, site?: StackHolder): any => {
   const self = { thisArg, explicit: false }
   if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, undefined, self, site)
