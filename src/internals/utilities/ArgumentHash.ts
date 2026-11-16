@@ -90,8 +90,19 @@ const sampledPosition = (length: number, samples: number, index: number): number
   const edge = samples >>> 2
   if (index < edge) return index
   if (index >= samples - edge) return length - (samples - index)
-  const strided = samples - 2 * edge
-  return edge + Math.floor((index - edge + 0.5) * (length - 2 * edge) / strided)
+  return edge + Math.floor((index - edge + 0.5) * (length - 2 * edge) / (samples - 2 * edge))
+}
+
+/** hashString for a string longer than SAMPLED_UNITS: the positions of sampledPosition, in three loops. */
+const hashSampledString = (text: string, h: number): number => {
+  const length = text.length
+  const edge = SAMPLED_UNITS >>> 2
+  const strided = SAMPLED_UNITS - 2 * edge
+  const span = length - 2 * edge
+  for (let index = 0; index < edge; index++) h = Math.imul(h ^ text.charCodeAt(index), 0x01000193)
+  for (let index = 0; index < strided; index++) h = Math.imul(h ^ text.charCodeAt(edge + Math.floor((index + 0.5) * span / strided)), 0x01000193)
+  for (let index = length - edge; index < length; index++) h = Math.imul(h ^ text.charCodeAt(index), 0x01000193)
+  return h
 }
 
 const hashString = (text: string, seed: number): number => {
@@ -99,10 +110,7 @@ const hashString = (text: string, seed: number): number => {
   let h = mix(seed, length)
   if (length <= SAMPLED_UNITS) {
     for (let index = 0; index < length; index++) h = Math.imul(h ^ text.charCodeAt(index), 0x01000193)
-  } else {
-    for (let index = 0; index < SAMPLED_UNITS; index++)
-      h = Math.imul(h ^ text.charCodeAt(sampledPosition(length, SAMPLED_UNITS, index)), 0x01000193)
-  }
+  } else h = hashSampledString(text, h)
   return mix(h, 0)
 }
 
