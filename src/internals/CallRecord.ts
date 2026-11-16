@@ -21,6 +21,15 @@ export class CallRecord {
   public retracted = false
   /** The captured stack, wrapped in a CallSite (D30: only when it is needed). */
   private _site: StackHolder | CallSite
+  /**
+   * D26: an invocation through `x.call(...)` / `x.apply(...)` is recorded once, with two readings: a call of x's
+   * member `call` / `apply` with the raw arguments, and a direct call of x. Each reading is a record of its own
+   * substitute and member, so that assertions match either one, and each one points to the other. Retracting one
+   * retracts both. (Left undeclared on ordinary records, which then do not carry the fields.)
+   */
+  public twin?: CallRecord
+  /** True on the direct-call reading of such an invocation. */
+  public directReading?: boolean
 
   constructor(
     public kind: RecordKind,
@@ -74,9 +83,20 @@ export class CallRecord {
  * expression turned out to be a setup or an assertion rather than a real use.
  */
 export const retract = (record: CallRecord | undefined): void => {
-  let current = record
-  while (current !== undefined && !current.retracted) {
-    current.retracted = true
-    current = current.chainPrevious
+  const pending: CallRecord[] = record === undefined ? [] : [record]
+  while (pending.length > 0) {
+    let current: CallRecord | undefined = pending.pop()
+    while (current !== undefined && !current.retracted) {
+      current.retracted = true
+      if (current.twin !== undefined && !current.twin.retracted) pending.push(current.twin)
+      current = current.chainPrevious
+    }
   }
+}
+
+/** D26: makes two records the member reading and the direct-call reading of one invocation. */
+export const pairReadings = (memberReading: CallRecord, directReading: CallRecord): void => {
+  memberReading.twin = directReading
+  directReading.twin = memberReading
+  directReading.directReading = true
 }

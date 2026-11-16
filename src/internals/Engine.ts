@@ -2,7 +2,7 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
-import { CallRecord, currentSequence, retract } from './CallRecord'
+import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { CallSite, Frame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException } from './SubstituteException'
@@ -11,7 +11,7 @@ import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
   contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
-import { formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
+import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
 /*
  * The proxies handed out by the library are thin translators onto SubstituteState.
@@ -56,12 +56,15 @@ const printState = (state: SubstituteState, colors: boolean): string => {
   return withPrintGuard(() => {
     const lines: string[] = []
     const records = state.records
-    if (records.length > 0) {
+    // D26: an invocation through call/apply is shown once, as its direct-call reading
+    const directReadings = new Set(records.filter(record => record.directReading === true))
+    const shown = records.filter(record => record.twin === undefined || record.directReading === true || !directReadings.has(record.twin))
+    if (shown.length > 0) {
       lines.push('  received:')
-      for (const record of records) {
+      for (const record of shown) {
         const name = record.key === SELF ? '' : keyToString(record.key)
         const suffix = record.kind === 'call'
-          ? formatArguments(record.args, colors)
+          ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
           : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
         lines.push(`    ${name}${suffix}`)
       }
@@ -220,15 +223,16 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method, chainHead())
 
-    if (entry.kind === 'get' && isFunctionHelperKey(property))
-      return functionHelper(property, (args, start) => invoke(entry.parent, entry.key, args, start, TAKE_PENDING_READ))
-
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
     if (entry.kind === 'call' && isStringAssertionKey(entry.key)) {
       const assertion = resolveStringAssertion(entry, chainHead(), stackStart)
       return assertionMember(assertion.state, property, assertion.count, stackStart)
     }
   }
+
+  // D26: call/apply/bind, unless the member with that name is configured as a property
+  if (isFunctionHelperKey(property) && memberStateOf(face)?.propertySubstitution(property) === undefined)
+    return dualHelper(face, property, chainHead())
 
   const context = contextMethodOf(property)
   if (context !== undefined) return contextFunction(context, () => faceState(face), chainHead())
@@ -246,13 +250,170 @@ const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: 
   realSet(faceState(face), property, value, candidate, stackStart)
 }
 
-const faceApply = (face: Face, _thisArg: unknown, args: any[], stackStart: Function): any => {
-  if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined)
-  if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ)
-  return invoke(face.state, SELF, args, stackStart, undefined, face.adjacentHandOut())
+/**
+ * A direct invocation of a substitute (the proxy apply trap). D26: the `this` of the invocation is passed on to a
+ * mimicked function and to mimicks(), so that `obj.add = fnSubstitute; obj.add(1)` runs with `this === obj`.
+ * (A mimicked instance's own method keeps running on the instance, D12.)
+ */
+const faceApply = (face: Face, thisArg: unknown, args: any[], stackStart: Function): any => {
+  const self = { thisArg, explicit: false }
+  if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, undefined, self)
+  if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self)
+  return invoke(face.state, SELF, args, stackStart, undefined, face.adjacentHandOut(), self)
 }
 
-/** `.call`, `.apply` and `.bind` on a member behave like invoking the member (D7). */
+// ---- D26: call, apply and bind ----------------------------------------------------------------
+
+/** The substitute whose members `x.call` and friends are under the member reading (undefined: not created yet). */
+const memberStateOf = (face: Face): SubstituteState | undefined => face instanceof AutoEntry ? face.materializedState : face
+
+/** Where a direct call of the substitute is recorded and resolved: `fn(...)`, `sub.method(...)` or `sub.f()(...)`. */
+type DirectReading = { state: SubstituteState, key: PropertyKey, readSource: ReadSource }
+const directReadingOf = (face: Face): DirectReading => {
+  if (!(face instanceof AutoEntry)) return { state: face, key: SELF, readSource: undefined }
+  if (face.kind === 'get') return { state: face.parent, key: face.key, readSource: TAKE_PENDING_READ }
+  return { state: face.state, key: SELF, readSource: undefined }
+}
+
+const NOT_CONFIGURED: unique symbol = Symbol('not configured')
+
+/**
+ * The member reading answers when a substitution configured on the member named call/apply/bind matches the raw
+ * arguments, or when a mimicked instance has such a member of its own (a function's call/apply/bind inherited from
+ * Function.prototype is the direct reading itself, recorded as such).
+ */
+const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, rawArgs: any[], hashes: ArgumentHashes, record: CallRecord, thisArg: unknown): any => {
+  const substitution = state.findCallSubstitution(helper, hashes)
+  if (substitution !== undefined) {
+    if (substitution.method === 'auto') substitution.entry!.handOut(record)
+    return execute(substitution, rawArgs, thisArg)
+  }
+  const instance = state.mimicked?.instance
+  if (instance !== undefined && hasMember(instance, helper)) {
+    const member = instance[helper]
+    if (typeof member === 'function' && member !== (Function.prototype as any)[helper]) return Reflect.apply(member, instance, rawArgs)
+  }
+  return NOT_CONFIGURED
+}
+
+/** The arguments `x.apply(thisArg, list)` passes to x, or undefined when the list is not array-like. */
+const applyArguments = (list: unknown): any[] | undefined => {
+  if (list === undefined || list === null) return []
+  if (typeof list !== 'object' && typeof list !== 'function') return undefined
+  try {
+    return Array.from(list as ArrayLike<unknown>)
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * `x.call` / `x.apply` / `x.bind` on any function-like substitute value (D26). Invoking the helper:
+ * (a) answers with a substitution configured on x's member of that name, when one matches the raw arguments;
+ * (b) otherwise behaves like Function.prototype.call/apply/bind on x: the configured value of x(...arguments) (a
+ *     mimicked function or mimicks() receives the thisArg).
+ * The invocation is recorded once, with both readings (see CallRecord.twin), so that `x.received().call(t, 1)` and
+ * `x.received()(1)` both count it. Setups written through the helper (`.returns` on its result, or arguments with
+ * matchers) configure the member reading. For bind, the bind call is only a call of the member `bind`; invoking the
+ * bound function is a direct call of x with the bound arguments first.
+ */
+const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord | undefined): Function => {
+  const invokeHelper = (rawArgs: any[], thisArg: unknown, directArgs: any[] | undefined, stackStart: Function): any => {
+    const direct = directReadingOf(face)
+    const read = direct.readSource === TAKE_PENDING_READ ? direct.state.takePendingRead(direct.key) : undefined
+    const memberState = faceState(face)
+
+    if (RecordedArguments.containsMatchers(rawArgs)) {
+      const specification = RecordedArguments.forSpecification(rawArgs)
+      retract(read)
+      retract(chainHead)
+      return configureCall(memberState, helper, specification)
+    }
+
+    // the direct reading takes over the read of the member (`sub.method.call(...)`), as a direct call would
+    let directRecord: CallRecord | undefined
+    if (directArgs !== undefined) {
+      if (read !== undefined && read.kind === 'get' && !read.retracted) {
+        read.convertToCall(directArgs, stackStart)
+        directRecord = read
+      } else {
+        directRecord = direct.state.addRecord('call', direct.key, directArgs, stackStart)
+        directRecord.chainPrevious = chainHead
+      }
+    }
+    const memberRecord = memberState.addRecord('call', helper, rawArgs, stackStart)
+    memberRecord.chainPrevious = directRecord ?? read ?? chainHead
+    if (directRecord !== undefined) pairReadings(memberRecord, directRecord)
+
+    const hashes = new ArgumentHashes(rawArgs)
+    const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
+    if (answer !== NOT_CONFIGURED) return answer
+    if (directRecord !== undefined) {
+      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, new ArgumentHashes(directArgs!), directRecord, { thisArg, explicit: true })
+      if (directAnswer !== NOT_CONFIGURED) return directAnswer
+    }
+    const entry = memberState.callEntry(helper, hashes)
+    entry.handOut(memberRecord)
+    return entryProxy(entry)
+  }
+
+  switch (helper) {
+    case 'call':
+      return function call(thisArg: unknown, ...args: any[]) {
+        return invokeHelper([thisArg, ...args], thisArg, args, call)
+      }
+    case 'apply':
+      return function apply(thisArg: unknown, list?: unknown) {
+        return invokeHelper(arguments.length < 2 ? [thisArg] : [thisArg, list], thisArg, applyArguments(list), apply)
+      }
+    case 'bind':
+      return function bind(thisArg: unknown, ...boundArgs: any[]) {
+        const rawArgs = [thisArg, ...boundArgs]
+        const memberState = faceState(face)
+        if (RecordedArguments.containsMatchers(rawArgs)) {
+          const specification = RecordedArguments.forSpecification(rawArgs)
+          retract(chainHead)
+          return configureCall(memberState, 'bind', specification)
+        }
+        const memberRecord = memberState.addRecord('call', 'bind', rawArgs, bind)
+        memberRecord.chainPrevious = chainHead
+        const hashes = new ArgumentHashes(rawArgs)
+        const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, memberRecord, thisArg)
+        if (answer !== NOT_CONFIGURED) return answer
+        const entry = memberState.callEntry('bind', hashes)
+        entry.handOut(memberRecord)
+        return createBoundProxy(face, entry, thisArg, boundArgs)
+      }
+  }
+}
+
+/**
+ * The function `x.bind(thisArg, ...boundArgs)` returns (D26). Invoking it is a direct call of x with the bound
+ * arguments first and thisArg as `this`. Anything else on it is the result of the call of x's member `bind`:
+ * `.returns(...)` configures that call (the member reading), other members are those of its auto-substitute.
+ */
+const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, boundArgs: any[]): any => {
+  const print: Printer = options => printFace(bindEntry, colorsOf(options))
+  const proxy: any = new Proxy(newTarget(print), {
+    get: function get(_target: unknown, property: PropertyKey) {
+      if (isSpecialProperty(property)) return special(property, print, bindEntry)
+      // a bound function ignores the `this` it is called with
+      if (isFunctionHelperKey(property)) return (Function.prototype as any)[property].bind(proxy)
+      return faceGet(bindEntry, property, get)
+    },
+    set: function set(_target: unknown, property: PropertyKey, value: unknown) {
+      faceSet(bindEntry, property, value, set)
+      return true
+    },
+    apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      const direct = directReadingOf(face)
+      return invoke(direct.state, direct.key, [...boundArgs, ...args], apply, direct.readSource, undefined, { thisArg, explicit: true })
+    }
+  })
+  return proxy
+}
+
+/** `.call`, `.apply` and `.bind` on assertions and deferred reads behave like invoking the member (D7). */
 const functionHelper = (property: FunctionHelperKey, invokeWith: (args: any[], stackStart: Function) => any): Function => {
   switch (property) {
     case 'call':
@@ -276,7 +437,7 @@ const functionHelper = (property: FunctionHelperKey, invokeWith: (args: any[], s
 const hasMember = (instance: any, key: PropertyKey): boolean =>
   ((typeof instance === 'object' && instance !== null) || typeof instance === 'function') && key in instance
 
-const execute = (substitution: Substitution, args?: any[]): any => {
+const execute = (substitution: Substitution, args?: any[], thisArg?: unknown): any => {
   const value = substitution.nextValue()
   switch (substitution.method) {
     case 'returns':
@@ -288,7 +449,7 @@ const execute = (substitution: Substitution, args?: any[]): any => {
     case 'rejects':
       return Promise.reject(value)
     case 'mimicks':
-      return args === undefined ? value() : value(...args)
+      return Reflect.apply(value, thisArg, args ?? [])
     case 'auto':
       return entryProxy(substitution.entry!)
   }
@@ -344,7 +505,7 @@ const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chain
  * substitution runs. Otherwise it is a real call: it is recorded (taking over the property read of the
  * method, if there is one) and resolved.
  */
-const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStart: Function, readSource: ReadSource, chainCandidate?: CallRecord): any => {
+const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStart: Function, readSource: ReadSource, chainCandidate?: CallRecord, self: Self = NO_SELF): any => {
   const read = readSource === TAKE_PENDING_READ ? state.takePendingRead(key) : readSource
 
   if (RecordedArguments.containsMatchers(args)) {
@@ -360,28 +521,41 @@ const invoke = (state: SubstituteState, key: PropertyKey, args: any[], stackStar
     record = read
   } else record = linkChain(state.addRecord('call', key, args, stackStart), chainCandidate)
 
-  return resolveCall(state, key, args, record)
+  return resolveCall(state, key, args, record, self)
 }
 
-const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord): any => {
-  const hashes = new ArgumentHashes(args)
+/**
+ * The `this` of an invocation. `explicit` when it was given through call/apply/bind: then a mimicked instance's
+ * method runs with it as well, instead of with the instance.
+ */
+type Self = { thisArg: unknown, explicit: boolean }
+const NO_SELF: Self = { thisArg: undefined, explicit: false }
+
+/** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
+const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord, self: Self): any => {
   const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
-    return execute(substitution, args)
+    return execute(substitution, args, self.thisArg)
   }
 
   const mimicked = state.mimicked
   if (mimicked !== undefined) {
     const instance = mimicked.instance
     if (key === SELF) {
-      if (typeof instance === 'function') return Reflect.apply(instance, undefined, args)
+      if (typeof instance === 'function') return Reflect.apply(instance, self.thisArg, args)
     } else {
       const member = instance[key]
-      if (typeof member === 'function') return Reflect.apply(member, instance, args)
+      if (typeof member === 'function') return Reflect.apply(member, self.explicit ? self.thisArg : instance, args)
     }
   }
+  return NOT_CONFIGURED
+}
 
+const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord, self: Self): any => {
+  const hashes = new ArgumentHashes(args)
+  const answer = configuredAnswer(state, key, args, hashes, record, self)
+  if (answer !== NOT_CONFIGURED) return answer
   const entry = state.callEntry(key, hashes)
   entry.handOut(record)
   return entryProxy(entry)
@@ -582,8 +756,7 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       if (method !== undefined) return function substitution(...values: any[]) {
         state.setPropertySubstitution(key, method, values)
       }
-      if (isFunctionHelperKey(property))
-        return functionHelper(property, args => configureCall(state, key, RecordedArguments.forSpecification(args)))
+      // D26: call/apply/bind are members here like any other: setups through them configure the member reading
       return configureMember(state.propertyEntry(key).state, property)
     },
     set: function set() {

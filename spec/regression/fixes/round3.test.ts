@@ -180,6 +180,113 @@ test('ENG2-1 (D25) without stack frames (Error.stackTraceLimit = 0) adjacency al
   }
 })
 
+test('ENG2-3 (D26) call/apply/bind on a function substitute or a call result behave like a direct call', t => {
+  // a once()-style helper forwards with fn.apply(this, args)
+  const once = (fn: any) => {
+    let done = false
+    let result: unknown
+    return function (this: unknown, ...args: unknown[]) {
+      if (!done) {
+        done = true
+        result = fn.apply(this, args)
+      }
+      return result
+    }
+  }
+  const listener = Substitute.for<any>()
+  listener('saved').returns('ack')
+  t.is(once(listener)('saved'), 'ack')
+  t.throws(() => listener[didNotReceive]()(Arg.all()), { instanceOf: SubstituteException })
+  t.notThrows(() => listener[received](1)('saved'))
+  t.notThrows(() => listener[received](1).apply(undefined, ['saved']), 'the member reading counts it too')
+  t.is(inspect(listener).split('\n')[2], "    ('saved') via .apply(undefined, [ 'saved' ])", 'shown once')
+
+  const callback = Substitute.for<any>()
+  callback(1).returns(5)
+  t.is(callback.call(null, 1), 5)
+  t.is(callback.apply(null, [1]), 5)
+  t.is(callback.bind(null)(1), 5)
+  t.is(callback.bind(null, 1)(), 5)
+  t.notThrows(() => callback[received](4)(1))
+  t.notThrows(() => callback[received](1).bind(null, 1), 'the bind call itself only counts as a call of the member bind')
+  t.true(types.isProxy(callback.call(null, 9)))
+
+  // call results and nested auto-substitutes
+  const factory = Substitute.for<any>()
+  factory.create()(2).returns('two')
+  t.is(factory.create().call(null, 2), 'two')
+  t.is(factory.create().apply(null, [2]), 'two')
+  factory.handlers.onSave('x').returns('saved')
+  t.is(factory.handlers.onSave.call(null, 'x'), 'saved')
+  t.notThrows(() => factory.handlers.received(1).onSave('x'))
+
+  // the thisArg reaches a mimicked function and mimicks(), also through the proxy apply trap
+  const add = Substitute.for<any>()
+  add[mimick](function (this: any, value: number) { return this.base + value })
+  const calculator = { base: 5, add }
+  t.is(calculator.add(1), 6)
+  t.is(add.call({ base: 10 }, 1), 11)
+  t.is(add.apply({ base: 20 }, [1]), 21)
+  t.is(add.bind({ base: 30 })(1), 31)
+  t.notThrows(() => add[received](4)(1))
+  const scale = Substitute.for<any>()
+  scale(Arg.any()).mimicks(function (this: any, value: number) { return this.factor * value })
+  t.is(scale.call({ factor: 3 }, 2), 6)
+  const scaler = { factor: 4, scale }
+  t.is(scaler.scale(2), 8)
+  const service = Substitute.for<any>()
+  service[mimick]({ base: 1, plus(this: any, value: number) { return this.base + value } })
+  t.is(service.plus(1), 2, 'a mimicked instance method still runs on the instance (D12)')
+  t.is(service.plus.call({ base: 100 }, 1), 101, 'unless a thisArg is given')
+})
+
+test('ENG2-4 (D26) members named call/apply/bind keep their member reading', t => {
+  const shop = Substitute.for<any>()
+  const cart = { total: 10 }
+  shop.discount.apply(cart)
+  shop.socket.bind(8080)
+  shop.rpc.call('getUser', 1)
+  t.notThrows(() => shop.discount.received().apply(cart))
+  t.notThrows(() => shop.socket.received().bind(8080))
+  t.notThrows(() => shop.rpc.received().call('getUser', 1))
+  t.notThrows(() => shop.rpc.received(1).call('getUser', Arg.any()))
+  t.throws(() => shop.rpc.received().call('deleteUser', 1), { instanceOf: SubstituteException })
+  // ... and the direct reading counts them as well (bind only when the bound function is invoked)
+  t.notThrows(() => shop.received(1).rpc(1))
+  t.notThrows(() => shop.received(1).discount())
+  t.notThrows(() => shop.received(1).socket, 'socket was only read: the bind call is a call of its member bind')
+  t.is(inspect(shop), "@Substitute {\n  received:\n    discount() via .apply({ total: 10 })\n    socket\n    rpc(1) via .call('getUser', 1)\n}")
+  const message = messageOf(() => shop.received(2).rpc(1))
+  t.true(message.includes("› ✔ @Substitute.rpc(1) via .call('getUser', 1)"))
+
+  // setups through call configure the member reading
+  const app = Substitute.for<any>()
+  app.rpc.call('getUser', 1).returns({ name: 'ann' })
+  t.deepEqual(app.rpc.call('getUser', 1), { name: 'ann' })
+  t.true(types.isProxy(app.rpc.call('deleteUser', 1)))
+  t.true(types.isProxy(app.rpc(1)), 'the direct reading is not configured by it')
+  app[configure]().rpc.call('list').returns(['a'])
+  t.deepEqual(app.rpc.call('list'), ['a'])
+  app.rpc.apply(Arg.any(), Arg.is((list: unknown[]) => list.length === 0)).returns('empty')
+  t.is(app.rpc.apply(null, []), 'empty')
+  app.bus.bind('topic').returns('subscription')
+  t.is(app.bus.bind('topic'), 'subscription')
+  t.true(types.isProxy(app.bus.bind('other')))
+  t.is(inspect(app).includes('received:'), true)
+  t.notThrows(() => app.rpc.received(1).call('getUser', 1))
+
+  // a mimicked instance with a member named call answers under the member reading
+  const client = Substitute.for<any>()
+  client[mimick]({ call: (method: string, id: number) => `${method}:${id}` })
+  t.is(client.call('getUser', 1), 'getUser:1')
+  t.notThrows(() => client.received(1).call('getUser', 1))
+
+  // a member named call configured as a property answers as a property
+  const property = Substitute.for<any>()
+  property[configure]().call.returns('configured')
+  t.is(property.call, 'configured')
+})
+
 test('ENG2-5 (D27) Arg matchers nested in plain objects and arrays match deeply, and make the call a setup', t => {
   const repository = Substitute.for<any>()
   repository.save({ id: Arg.any(), name: 'bob' }).returns('saved')
