@@ -1,4 +1,4 @@
-import { InspectOptions, inspect } from 'node:util'
+import { InspectOptions, inspect } from 'util'
 import { RecordedArguments } from '../RecordedArguments'
 import { SubstituteNodeModel } from '../Types'
 import { TextBuilder, TextPart } from './TextBuilder'

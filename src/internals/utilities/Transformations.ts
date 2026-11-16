@@ -9,6 +9,7 @@ export const rawSymbolContextMap: Record<B, C> = {
   [sharedConstants.CONTEXT.didNotReceive.raw]: sharedConstants.CONTEXT.didNotReceive.symbol,
   [sharedConstants.CONTEXT.clearReceivedCalls.raw]: sharedConstants.CONTEXT.clearReceivedCalls.symbol,
   [sharedConstants.CONTEXT.mimick.raw]: sharedConstants.CONTEXT.mimick.symbol,
+  [sharedConstants.CONTEXT.configure.raw]: sharedConstants.CONTEXT.configure.symbol,
   [sharedConstants.CONTEXT.mimicks.raw]: sharedConstants.CONTEXT.mimicks.symbol,
   [sharedConstants.CONTEXT.throws.raw]: sharedConstants.CONTEXT.throws.symbol,
   [sharedConstants.CONTEXT.returns.raw]: sharedConstants.CONTEXT.returns.symbol,

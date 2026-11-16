@@ -9,6 +9,7 @@ export type ContextReceived = Unfold<ContextMap['received']>
 export type ContextDidNotReceive = Unfold<ContextMap['didNotReceive']>
 export type ContextClearReceivedCalls = Unfold<ContextMap['clearReceivedCalls']>
 export type ContextMimick = Unfold<ContextMap['mimick']>
+export type ContextConfigure = Unfold<ContextMap['configure']>
 export type ContextMimicks = Unfold<ContextMap['mimicks']>
 export type ContextThrows = Unfold<ContextMap['throws']>
 export type ContextReturns = Unfold<ContextMap['returns']>
@@ -16,7 +17,7 @@ export type ContextResolves = Unfold<ContextMap['resolves']>
 export type ContextRejects = Unfold<ContextMap['rejects']>
 
 export type AssertionMethod = ContextReceived | ContextDidNotReceive
-export type ConfigurationMethod = ContextClearReceivedCalls | ContextMimick
+export type ConfigurationMethod = ContextClearReceivedCalls | ContextMimick | ContextConfigure
 export type SubstitutionMethod = ContextMimicks | ContextThrows | ContextReturns | ContextResolves | ContextRejects
 export type ContextNone = Unfold<ContextMap['none']>
 

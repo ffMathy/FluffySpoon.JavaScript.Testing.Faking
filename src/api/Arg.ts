@@ -1,4 +1,4 @@
-import { Argument, AllArguments, type ArgumentOptions, type PredicateFunction } from '../shared'
+import { Argument, AllArguments, ArgumentOptions, PredicateFunction } from '../shared'
 
 type Inversable<T> = T & { not: T }
 type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T

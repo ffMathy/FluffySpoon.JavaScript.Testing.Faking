@@ -13,7 +13,8 @@ import { constants as sharedConstants } from '../shared/Constants'
 export const instance = Symbol('Substitute:Instance')
 
 type SpecialProperty = typeof instance | typeof inspect.custom | typeof Symbol.toPrimitive | 'then' | 'toJSON'
-type TT = Exclude<keyof typeof sharedConstants.CONTEXT, 'none' | 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'>
+// TODO(configure): runtime support for the configure context is not implemented yet
+type TT = Exclude<keyof typeof sharedConstants.CONTEXT, 'none' | 'configure' | 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'>
 type ObjectSubstitute<T> = {
   [P in typeof sharedConstants.CONTEXT[TT]['raw'] | typeof sharedConstants.CONTEXT[TT]['symbol']]: 
     (...args: any[]) => T | void | Promise<T> | Promise<void>
@@ -161,6 +162,11 @@ export class SubstituteNode extends SubstituteNodeBase implements ObjectSubstitu
 
   public [sharedConstants.CONTEXT.mimick.symbol](_instance: unknown) {
     throw new Error('Mimick is not implemented yet')
+  }
+
+  public [sharedConstants.CONTEXT.configure.symbol](): SubstituteNode {
+    // TODO(configure): placeholder until the configure context is implemented
+    throw SubstituteException.generic('configure is not implemented yet')
   }
 
   public [sharedConstants.CONTEXT.clearReceivedCalls.symbol](): void {

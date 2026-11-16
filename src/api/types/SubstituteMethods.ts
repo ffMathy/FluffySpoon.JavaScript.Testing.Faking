@@ -15,6 +15,7 @@ export const received: typeof constants.CONTEXT.received.symbol = constants.CONT
 export const didNotReceive: typeof constants.CONTEXT.didNotReceive.symbol = constants.CONTEXT.didNotReceive.symbol
 export const mimick: typeof constants.CONTEXT.mimick.symbol = constants.CONTEXT.mimick.symbol
 export const clearReceivedCalls: typeof constants.CONTEXT.clearReceivedCalls.symbol = constants.CONTEXT.clearReceivedCalls.symbol
+export const configure: typeof constants.CONTEXT.configure.symbol = constants.CONTEXT.configure.symbol
 
 export type ObjectSubstituteMethods<T> = 
   (T extends { received: any } ? 

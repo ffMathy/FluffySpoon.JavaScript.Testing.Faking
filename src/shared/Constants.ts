@@ -1,7 +1,7 @@
 type ValueToMap<T extends string> = { [key in T as Uncapitalize<key>]: key }
 
 export type AssertionMethodRaw = 'received' | 'didNotReceive'
-export type ConfigurationMethodRaw = 'clearReceivedCalls' | 'mimick'
+export type ConfigurationMethodRaw = 'clearReceivedCalls' | 'mimick' | 'configure'
 export type SubstitutionMethodRaw = 'mimicks' | 'throws' | 'returns' | 'resolves' | 'rejects'
 
 const contextMethodTypes: ValueToMap<AssertionMethodRaw | ConfigurationMethodRaw | SubstitutionMethodRaw> = {
@@ -9,6 +9,7 @@ const contextMethodTypes: ValueToMap<AssertionMethodRaw | ConfigurationMethodRaw
   didNotReceive: 'didNotReceive',
   clearReceivedCalls: 'clearReceivedCalls',
   mimick: 'mimick',
+  configure: 'configure',
   mimicks: 'mimicks',
   throws: 'throws',
   returns: 'returns',
@@ -16,16 +17,19 @@ const contextMethodTypes: ValueToMap<AssertionMethodRaw | ConfigurationMethodRaw
   rejects: 'rejects'
 }
 
-const received = Symbol(contextMethodTypes.received)
-const didNotReceive = Symbol(contextMethodTypes.didNotReceive)
-const clearReceivedCalls = Symbol(contextMethodTypes.clearReceivedCalls)
-const mimick = Symbol(contextMethodTypes.mimick)
-const mimicks = Symbol(contextMethodTypes.mimicks)
-const throws = Symbol(contextMethodTypes.throws)
-const returns = Symbol(contextMethodTypes.returns)
-const resolves = Symbol(contextMethodTypes.resolves)
-const rejects = Symbol(contextMethodTypes.rejects)
-const none = Symbol('none')
+// Registered symbols (Symbol.for) so that duplicate copies of the package interoperate.
+const symbolFor = (name: string) => `@fluffy-spoon/substitute:${name}`
+const received: unique symbol = Symbol.for(symbolFor(contextMethodTypes.received))
+const didNotReceive: unique symbol = Symbol.for(symbolFor(contextMethodTypes.didNotReceive))
+const clearReceivedCalls: unique symbol = Symbol.for(symbolFor(contextMethodTypes.clearReceivedCalls))
+const mimick: unique symbol = Symbol.for(symbolFor(contextMethodTypes.mimick))
+const configure: unique symbol = Symbol.for(symbolFor(contextMethodTypes.configure))
+const mimicks: unique symbol = Symbol.for(symbolFor(contextMethodTypes.mimicks))
+const throws: unique symbol = Symbol.for(symbolFor(contextMethodTypes.throws))
+const returns: unique symbol = Symbol.for(symbolFor(contextMethodTypes.returns))
+const resolves: unique symbol = Symbol.for(symbolFor(contextMethodTypes.resolves))
+const rejects: unique symbol = Symbol.for(symbolFor(contextMethodTypes.rejects))
+const none: unique symbol = Symbol.for(symbolFor('none'))
 
 const contextTypes = {
   none: {
@@ -47,6 +51,10 @@ const contextTypes = {
   mimick: {
     raw: contextMethodTypes.mimick,
     symbol: mimick
+  },
+  configure: {
+    raw: contextMethodTypes.configure,
+    symbol: configure
   },
   mimicks: {
     raw: contextMethodTypes.mimicks,
