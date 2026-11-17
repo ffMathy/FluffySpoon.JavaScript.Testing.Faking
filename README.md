@@ -16,7 +16,7 @@
 - [Re-configuring a call](#re-configuring-a-call-configure) · [Partial mocks](#partial-mocks) · [Auto-substitutes](#auto-substitutes-and-nested-members) and [which calls lead to a setup](#which-calls-lead-to-a-setup-or-a-check)
 - [Verifying calls](#verifying-calls): [counts](#received-and-didnotreceive), [properties](#properties), [what counts as a call](#what-counts-as-a-call), [clearing](#clearing-received-calls), [SubstituteException](#substituteexception), [deferred failures](#assertions-that-fail-later)
 - [Names that conflict with the library](#names-that-conflict-with-the-library), [`call`, `apply` and `bind`](#call-apply-and-bind) and [the symbol API](#the-symbol-api)
-- [Special members](#special-members) · [Typing limitations](#typing-limitations) · [Test runners](#test-runners) and [debuggers](#debuggers) · [Performance](#performance)
+- [Special members](#special-members): [printing](#printing-a-substitute), [freezing and `in`](#freezing-defined-properties-and-in) · [Typing limitations](#typing-limitations) · [Test runners](#test-runners) and [debuggers](#debuggers) · [Performance](#performance)
 
 # Installing
 ```sh
@@ -146,6 +146,36 @@ listener[received](1)('deleted')
 listener.didNotReceive()('created')
 ```
 
+A class, or any other type that can be constructed, works the same way: `new` on a substitute, or on a member of it, is a call. It is recorded, and setups and checks written as calls apply to it: `sdk.Client(Arg.any()).returns(client)` answers `new sdk.Client('https://api')`, and `sdk.received(1).Client('https://api')` checks it. `new` returns the configured value when that is an object or a function (a setup with `throws()` throws), and otherwise the [auto-substitute](#auto-substitutes-and-nested-members) of that call, the same one that the call `sdk.Client('https://api')` returns. This holds for `new` on the substitute itself (`Substitute.for<new (baseUrl: string) => ApiClient>()`, configured as `Client('https://api').returns(client)` and checked as `Client.received(1)('https://api')`), and for `Reflect.construct()` and `new` on a function made with `bind()`, too. `String()` and failure messages show such a call as `new Client('https://api')`.
+
+```typescript
+import { Substitute, Arg } from '@fluffy-spoon/substitute'
+
+interface ApiClient { get(path: string): Promise<string> }
+interface Sdk { Client: new (baseUrl: string) => ApiClient }
+
+// the code under test
+class UserService {
+  private readonly client: ApiClient
+  constructor(sdk: Sdk) { this.client = new sdk.Client('https://api') }
+  name(id: number) { return this.client.get(`/users/${id}/name`) }
+}
+
+const sdk = Substitute.for<Sdk>()
+const client = Substitute.for<ApiClient>()
+sdk.Client(Arg.any()).returns(client)
+client.get('/users/1/name').resolves('ann')
+
+new UserService(sdk).name(1).then(name => console.log(name)) // prints ann
+sdk.received(1).Client('https://api')
+sdk.didNotReceive().Client('https://staging')
+
+const Client = Substitute.for<new (baseUrl: string) => ApiClient>()
+Client('https://api').returns(client)
+console.log(new Client('https://api') === client) // prints true
+Client.received(1)('https://api')
+```
+
 ## Setting return values
 Make the call with the arguments you want to configure, then call `.returns()` on it. The same syntax works for properties.
 
@@ -232,6 +262,23 @@ console.log(calculator.isEnabled) // prints true
 
 The function is called with the `this` of the call, like a method: the substitute for `calculator.add(2, 3)`, the first argument of `.call()` and `.apply()`, and `undefined` for a property read or a call through a destructured reference. If the implementation needs `this` to be something else, for example the real instance of a method you pass in, pass an arrow function or a bound method (`realCalculator.add.bind(realCalculator)`).
 
+`mimicks()` must be given functions. Anything else, or nothing, throws a `TypeError` right away, at the setup, and the message names the member. When the code under test calls the member with [`new`](#creating-a-substitute), the function is called with `new` if it can be: a class, an ordinary `function` or a substitute. Other functions, such as arrow functions and methods, are called as usual.
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const repository = Substitute.for()
+repository.find(Arg.any()).mimicks({ id: 1 }) // throws TypeError: mimicks() expects a function to call for @Substitute.find(Arg.any{any}), but received { id: 1 }.
+
+class User {
+  constructor(name) { this.name = name }
+}
+const models = Substitute.for()
+models.User(Arg.any()).mimicks(User)
+const ann = new models.User('ann')
+console.log(ann instanceof User, ann.name) // prints true ann
+```
+
 ## Members used as a property and as a method
 A member can be configured both as a method and as a property, for example a member of a callable interface. Calls are answered by the method setups and reads by the property setup. Configure the method first. Once the property answers with a value, `stats.size(...)` is a call of that value, so configure the method through [`configure`](#re-configuring-a-call-configure) then: `stats[configure]().size(Arg.any()).returns(10)`.
 
@@ -288,7 +335,7 @@ console.log(calculator.divide(-4, -2)) // prints 1
 | `type` | Matches |
 |---|---|
 | `'any'` (the default) | any value, including `undefined` and `null` |
-| `'string'`, `'number'`, `'boolean'`, `'symbol'`, `'undefined'` | values with that `typeof` |
+| `'string'`, `'number'`, `'boolean'`, `'symbol'`, `'bigint'`, `'undefined'` | values with that `typeof` |
 | `'object'` | objects, arrays and substitutes, but not `null` |
 | `'function'` | functions (and classes) and substitutes |
 | `'array'` | arrays (`Array.isArray`) |
@@ -315,19 +362,32 @@ printer.print(null)
 printer.received(2).print(Arg.any('object'))
 ```
 
-In TypeScript, a type matcher must fit the parameter: `Arg.any('string')` only fits a parameter that accepts strings, and `Arg.any('undefined')` only one that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)).
+Any other type name, for example a typo or another case such as `'String'`, throws a `TypeError` right away, in `Arg.any()` and in `Arg.any.not()` (TypeScript does not compile it in the first place): `Arg.any expects one of 'any', 'string', 'number', 'boolean', 'symbol', 'undefined', 'object', 'function', 'array', 'bigint' (or no argument for 'any'), but received 'strnig'.`
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const printer = Substitute.for()
+printer.print(Arg.any('bigint')).returns('a bigint')
+console.log(printer.print(10n)) // prints a bigint
+
+Arg.any.not('strnig') // throws TypeError: Arg.any.not expects one of
+```
+
+In TypeScript, a type matcher must fit the parameter: `Arg.any('string')` only fits a parameter that accepts strings, and `Arg.any('undefined')` only one that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)). `Arg.any('undefined')` also matches an argument that the call leaves out (see [How arguments are compared](#how-arguments-are-compared)).
 
 ```typescript
 import { Substitute, Arg } from '@fluffy-spoon/substitute'
 
 interface Users {
-  find(name: string | undefined): string
+  find(name?: string): string
   count(limit: number): number
 }
 
 const users = Substitute.for<Users>()
 users.find(Arg.any('undefined')).returns('all users')
 console.log(users.find(undefined)) // prints all users
+console.log(users.find()) // prints all users
 
 // @ts-expect-error a number parameter does not accept undefined
 users.count(Arg.any('undefined'))
@@ -410,11 +470,38 @@ repository.didNotReceive().save({ id: Arg.any(), name: 'bob', roles: [] })
 
 * `Arg.all()` as the last item of an array matches the remaining items, also none: `['level', Arg.all()]` matches `['level']` and `['level', 1, 2]`. Anywhere else in an array it is a `SubstituteException`. As the value of a key, `Arg.all()` matches any value, but the key must be there. (In TypeScript, `Arg.all()` inside an object or array does not type-check; use `Arg.any()` for a single value.)
 * Only plain objects (created with `{ }` or `Object.create(null)`) and arrays are searched for matchers, and an object with matchers only matches an argument with the same prototype: `{ id: Arg.any() }` does not match a class instance. A matcher inside a class instance, a `Map` or a `Set` is not looked for: it is compared as a value, so such a setup never matches, and the call is an ordinary call. Matchers behind getters are not looked for either. Use `Arg.is()` for the whole argument in these cases.
-* The search for matchers is bounded, so that large arguments stay fast. An array with more than 1,024 items and an object with more than 1,024 keys are not searched, and neither are arrays and objects more than 32 levels below the argument. Each argument also has a budget of 1,024 arrays and objects, which each of them shares evenly among its items: in an array of 1,000 objects, each object is searched, but the objects inside them are not. An item of a searched array or object that is itself a matcher is always found. An array or object that several values of one argument refer to is searched once, and an argument looks at 32,768 items and keys in all at most: a matcher in an array or object beyond that is not found. An array or object with more than 256 items or keys that holds no matcher within these limits is searched only the first time it is passed: it is remembered (weakly, so this keeps nothing alive), and so is an object with more than 1,024 keys, whose keys are not listed again. So a lookup table passed to every call costs nothing after the first one. A matcher put into such an array or object later is not found, even if items or keys were deleted (see [How arguments are compared](#how-arguments-are-compared)). A matcher that is not found is compared as a value, as above. Setups like `save({ user: { id: Arg.any(), roles: [Arg.any('string'), 'admin'] } })`, or an object with a few hundred keys and a matcher, are far from these limits.
+* The search for matchers is bounded, so that large arguments stay fast. An array with more than 1,024 items and an object with more than 1,024 keys are not searched, and neither are arrays and objects more than 32 levels below the argument. Each argument also has a budget of 1,024 arrays and objects, which each of them shares evenly among its items: in an array of 1,000 objects, each object is searched, but the objects inside them are not. An item of a searched array or object that is itself a matcher is always found. An array or object that several values of one argument refer to is searched once, and an argument looks at 32,768 items and keys in all at most: a matcher in an array or object beyond that is not found. An array or object with more than 256 items or keys that holds no matcher within these limits is remembered (weakly, so this keeps nothing alive), and so is an object with more than 1,024 keys, whose keys are not listed again. If the search looked at everything inside it, it is not searched again. If the limits left arrays or objects inside it out, the second time it is passed it is searched within the limits again, and then once more without the budget (but still at most 32 levels deep and 32,768 items and keys): if that finds no matcher either, it is not searched again, and otherwise it is searched within the limits every time. So a lookup table passed to every call costs nothing after the first two calls, and a new batch of records passed to each call is searched once, within the limits. A matcher put into such an array or object after it is no longer searched is not found, even if items or keys were deleted (see [How arguments are compared](#how-arguments-are-compared)). A matcher that is not found is compared as a value, as above. Setups like `save({ user: { id: Arg.any(), roles: [Arg.any('string'), 'admin'] } })`, or an object with a few hundred keys and a matcher, are far from these limits.
 * `String(sub)` shows nested matchers, for example `save({ id: Arg.any{any}, name: 'bob' }) => returns('saved')`.
 
 ## How arguments are compared
 Arguments that are not matchers are compared with deep strict equality, the rule of `assert.deepStrictEqual` (`util.isDeepStrictEqual`). Objects and arrays are equal when they have the same prototype and their own enumerable properties (with string or symbol keys) are equal. `NaN` equals `NaN`, but `0` and `-0` are different. Where Node.js changed the rule, the library follows the running version: two invalid `Date`s are different up to Node.js 22 and equal from Node.js 24 on, and two cyclic objects whose cycles have a different shape are equal up to Node.js 22 and different from Node.js 24 on. Substitutes are compared by identity and never member by member.
+
+Arguments are compared position by position, up to the longer of the two argument lists. An argument that one side leaves out at the end counts as `undefined` there: it matches only a literal `undefined` or a matcher that accepts `undefined`, such as `Arg.any()`, `Arg.any('undefined')`, `Arg.is(value => value === undefined)` or `Arg.any.not('number')`. A predicate that throws for `undefined` (`Arg.is(name => name.length > 0)`) does not match, as always. So `f(1)` and `f(1, undefined)` are the same call: they match the same setups and checks, return the same [auto-substitute](#auto-substitutes-and-nested-members), and are one setup in the [`configure`](#re-configuring-a-call-configure) view, where a setup of one replaces a setup of the other. Arguments with values still count: `f(1)` and `f(1, 2)` are different calls, either way round. This applies to the arguments themselves only. Inside an array or an object, deep strict equality decides, so `[1]` and `[1, undefined]` are different, and so are `{ id: 1 }` and `{ id: 1, name: undefined }`. Failure messages show each call as it was made.
+
+```typescript
+import { Substitute, Arg } from '@fluffy-spoon/substitute'
+
+interface Cache {
+  get(key: string, options?: { fresh: boolean }): string
+}
+
+const cache = Substitute.for<Cache>()
+cache.get('a', Arg.any()).returns('any options')
+cache.get('b', undefined).returns('no options')
+cache.get('c', Arg.any('object')).returns('with options')
+
+// the code under test leaves the options out
+console.log(cache.get('a')) // prints any options
+console.log(cache.get('b')) // prints no options
+// Arg.any('object') does not accept undefined
+console.log(cache.get('c') === 'with options') // prints false
+
+cache.received(1).get('b', undefined)
+cache.received(3).get(Arg.any(), Arg.any())
+cache.didNotReceive().get(Arg.any(), Arg.any('object'))
+```
+
+So a check like `didNotReceive().get('a', Arg.any())` fails after `get('a')`, and a matcher setup that accepts `undefined` answers calls that leave the argument out, which matters when you [re-configure such a call](#re-configuring-a-call-configure).
 
 Errors follow Node.js' rule, too. An object that inherits from `Error.prototype` and has the `Symbol.toStringTag` `'Error'` is compared like an error (its `name` and `message` count), so it can be equal to a native error with the same message. Objects that `Object.prototype.toString` shows as `[object Object]` are compared by their keys alone: error-like objects without that tag, and native errors whose `Symbol.toStringTag` is `'Object'`. On Node.js 24 and newer, Node.js still compares a native error with that tag as an error when it is the first argument of `isDeepStrictEqual`, so there the result can depend on the order. The library then passes the value of the setup or the check first, and for [auto-substitutes](#auto-substitutes-and-nested-members) the value of the earlier call.
 
@@ -458,7 +545,7 @@ console.log(checkedBank.pay(new Money(5)) === 'paid') // prints false
 console.log(checkedBank.pay(new Money(100))) // prints paid
 ```
 
-A value that cannot be read, such as an object with a getter that throws or a revoked proxy, is equal only to itself: Node.js' deep equality throws when it has to read such a value, which counts as unequal, and it does not read a value that it compares with itself. So the same value matches, and so does a new array or object that holds that same value, but another such value never does. The library reads each such value only once.
+A value that cannot be read, such as an object with a getter that throws or a revoked proxy, is equal only to itself: Node.js' deep equality throws when it has to read such a value, which counts as unequal, and it does not read a value that it compares with itself. So the same value matches, and so does a new array or object that holds that same value, but another such value never does. This is decided again for each call, setup and check: once the value can be read, it is compared by its contents, like any other value, so it matches a setup made with an equal object. (A setup made while the value could not be read keeps matching that value itself, like a setup whose argument changed afterwards; see below.) A call or a setup reads such a value at most once, and a check reads it at most about once for each received call that it compares it with (Node.js' deep equality stops at the first getter that throws).
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -472,6 +559,14 @@ cache.store([user]).returns('stored')
 
 console.log(cache.store([user])) // prints stored
 console.log(cache.store([unloaded()]) === 'stored') // prints false
+
+// once the record can be read, it is compared by its contents
+let loaded = false
+const record = Object.defineProperty({}, 'name', { enumerable: true, get() { if (loaded) return 'ann'; throw new Error('not loaded') } })
+cache.load(record) // the code under test passes the record before it is loaded
+loaded = true
+cache.load({ name: 'ann' }).returns('loaded')
+console.log(cache.load(record)) // prints loaded
 ```
 
 Changing an object after you used it as an argument of a setup is not supported. The setup still matches when the code under test passes that same object again, but not a new object that equals it, before or after the change:
@@ -489,11 +584,29 @@ console.log(repository.save({ name: 'bob' }) === 'saved') // prints false
 console.log(repository.save({ name: 'ann' }) === 'saved') // prints false
 ```
 
-For an object with more than 256 keys, and a `Map` or `Set` with more than 256 entries, this already starts the first time it is passed, also in a call that is not a setup: the library computes its hash then and keeps it (weakly, with the object). So a setup that you make after such an object changed is not matched by a copy of the changed object. In the same way, a [matcher](#matchers-inside-objects-and-arrays) that you put into an object or array with more than 256 keys or items after it was first passed is not recognised. Passing the same object again always finds what was recorded for it. Objects with up to 256 keys and arrays with up to 256 items are hashed and searched for matchers again on every call; longer arrays are hashed again, but not searched again.
+The library remembers the hash of an object with more than 256 keys, and of a `Map` or `Set` with more than 256 entries, from the first time that it is passed to any substitute (weakly, with the object), so that later calls with it need not list it again. This never changes a result. When such an object has changed since, a call with it still matches a setup made with an equal object, whether the setup was made before or after the change, and it gets the same auto-substitute as an equal copy. So a setup arranged before the code under test runs works for an object that the code under test builds, also when it passes the object to another substitute on the way:
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
 
+// the code under test builds an index, and logs it on the way
+function buildIndex(words, logger, search) {
+  const index = {}
+  for (const word of words) {
+    index[word] = true
+    if (Object.keys(index).length === 300) logger.debug('index', index)
+  }
+  return search.load(index)
+}
+
+const words = Array.from({ length: 500 }, (_, i) => `word${i}`)
+const logger = Substitute.for()
+const search = Substitute.for()
+search.load(Object.fromEntries(words.map(word => [word, true]))).returns(42)
+
+console.log(buildIndex(words, logger, search)) // prints 42
+
+// a setup made after a wide table changed is matched by copies of it, too
 const translations = {}
 for (let i = 0; i < 300; i++) translations[`key${i}`] = `text ${i}`
 
@@ -503,9 +616,10 @@ translations.key0 = 'changed'
 i18n.load(translations).returns('loaded')
 
 console.log(i18n.load(translations)) // prints loaded
-// the table has more than 256 keys, so it keeps the hash of its first use
-console.log(i18n.load({ ...translations }) === 'loaded') // prints false
+console.log(i18n.load({ ...translations }) === 'loaded') // prints true
 ```
+
+What stays unsupported is changing an argument after the call or setup that it was passed to, as above. That also holds for the auto-substitute that a call returned: once its argument has changed, a later call with a copy of the argument's new state can get the auto-substitute of that call (for an object with more than 256 keys whose hash was remembered), or a new one (for a smaller object). And a [matcher](#matchers-inside-objects-and-arrays) that you put into an object or array with more than 256 keys or items after it was first passed is not recognised once the search for matchers has remembered it (see [Matchers inside objects and arrays](#matchers-inside-objects-and-arrays)). Passing the same object again always finds what was recorded for it.
 
 Received calls keep the argument objects themselves, so a check compares an argument as it is at the time of the check. If the code under test changes an object after passing it, check its new value.
 
@@ -542,6 +656,8 @@ Outside of a setup, a call whose literal arguments match an existing setup is a 
 * A substitute that you created with `Substitute.for()` has a member called `returns`, like every other name. `.returns(x)` is recorded as a call of that member, and nothing is configured. Nothing fails, and TypeScript does not catch it either.
 * An auto-substitute (an unconfigured member of a substitute) is configured itself: `.returns(x)` configures that member, not the call.
 
+This also happens when a matcher setup answers a call that leaves out an argument that the matcher accepts as `undefined` (see [How arguments are compared](#how-arguments-are-compared)): after `calculator.multiply(1, Arg.any()).returns(10)`, `calculator.multiply(1)` returns 10, so `calculator.multiply(1).returns(1)` throws a `TypeError`. Likewise, `f()` is the call `f(undefined)`, so `f(undefined).returns(a)` followed by `f().returns(b)` is one call written twice. Make the literal setup first, or use `configure`.
+
 Use `sub[configure]()` instead. It gives a view of the substitute in which every call and property read is a setup: it never runs an existing setup and is never recorded as a received call.
 
 <!-- docs-check: uses=calculator -->
@@ -560,6 +676,19 @@ console.log(calculator.add(5, 2)) // prints 10
 calculator.isEnabled.returns(true)
 calculator[configure]().isEnabled.returns(false)
 console.log(calculator.isEnabled) // prints false
+```
+
+```js
+const { Substitute, Arg, configure } = require('@fluffy-spoon/substitute')
+
+const calculator = Substitute.for()
+calculator.multiply(1, Arg.any()).returns(10)
+// multiply(1) leaves out the second argument, which Arg.any() accepts
+calculator.multiply(1).returns(1) // throws TypeError: calculator.multiply(...).returns is not a function
+
+calculator[configure]().multiply(1).returns(1)
+console.log(calculator.multiply(1)) // prints 1
+console.log(calculator.multiply(1, 5)) // prints 10
 ```
 
 Calls with argument matchers are always setups (see [What counts as a call](#what-counts-as-a-call)), so a catch-all setup *after* a specific one needs no `configure`. In TypeScript, the `configure` view only offers the setup methods.
@@ -670,7 +799,7 @@ app.logger.received().info('started')
 app.logger.didNotReceive().info('stopped')
 ```
 
-Setups and calls never leak between members: `app.add(1, 2).returns(99)` does not configure `app.getCalculator().add(1, 2)`, and the other way round.
+Setups and calls never leak between members: `app.add(1, 2).returns(99)` does not configure `app.getCalculator().add(1, 2)`, and the other way round. `String(app.logger)` and `console.log(app.logger)` show the path of an auto-substitute, `@Substitute.logger`, and what it received and how it is configured (see [Printing a substitute](#printing-a-substitute)).
 
 **Typing limitation:** in TypeScript, nested auto-substitutes are typed as plain values, not as substitutes, so `app.getCalculator().add(1, 2).returns(99)` and `app.logger.received()` do not compile. They do work at runtime (in JavaScript, or through a cast). In TypeScript, configure the member to return a substitute you create yourself; that is fully typed:
 
@@ -725,7 +854,7 @@ The library tells the two apart by where they happen: the reads and calls before
 * Calls that the code under test makes in its own functions are kept. That includes calls through a method that the test hands to it, like `new UserService(api.getUser)` or `openWith(driver.connect)`: the call is made where the code under test invokes the method, and its `called at` line in failure messages names that place, not the line of the test that read `api.getUser`. (For a direct call like `api.getUser(1)`, the read and the call are the same place.) This holds also when the code under test invokes the method with the substitute as `this`, like `Reflect.apply(this.fetch, this.client, [id])`, `fetch.call(api, id)` or a wrapper such as `(...args) => Reflect.apply(method, client, args)`: whether a read and a call belong to one expression depends on where they happen, as described here, and `this` plays no part.
 * `Reflect.apply()` and a function's `call`, `apply` and `bind` have no stack frame of their own, so in a test, `Reflect.apply(app.getUser, app, [2]).name.returns('bob')` is one setup, like `app.getUser(2).name.returns('bob')`. A method that a built-in function calls itself, like `getUser` in `[1, 2].map(api.getUser)`, is called by that function, not by the test: those calls are kept, also when the test then configures their results, and their `called at` line reads `called at Array.map (<anonymous>)`. (`map` passes the index and the array as well, so these calls are `getUser(1, 0, [1, 2])` and `getUser(2, 1, [1, 2])`.)
 * Calls that the code under test makes from a promise job, like `Promise.resolve(id).then(getUser)`, are kept too. Such a call has no stack frame outside the library (the library ignores the `async` frames that V8 adds for the functions awaiting the promise), and a call without a frame is never part of a setup or check that has one.
-* Only when neither the call nor the setup or check has a stack frame outside the library does position alone decide: a setup or check right after the call that returned its value, with no other use of a substitute in between, leaves that call out. That happens with `Error.stackTraceLimit = 0` (or a limit that V8 cannot use, see below), or when `Error.prepareStackTrace` cannot be replaced for a moment (see below).
+* Only when neither the call nor the setup or check has a stack frame outside the library does position alone decide: a setup or check right after the call that returned its value, with no other use of a substitute in between, leaves that call out. That happens when V8 collects no stack frames, as with `Error.stackTraceLimit = 0` or a limit that V8 cannot use, and when the library cannot read them because `Error.prepareStackTrace` cannot be replaced for a moment, for example when `Error` is frozen (see below).
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -801,9 +930,13 @@ async function test() {
 test()
 ```
 
-To read the stack frames, the library replaces `Error.prepareStackTrace` for a moment and then restores the exact property it found, so formatters such as `source-map-support` and `stack-chain` stay installed, and `Error.stack` stays a string. If the property cannot be replaced, the library reads no frames, and position alone decides, as above. That is the case for a non-configurable, non-writable value, and for a non-configurable accessor, which `stack-chain` defines when `Error.prepareStackTrace` is not already an own configurable property of `Error` when `stack-chain` loads (for example on Node.js 18; on Node.js 20.20, 22, 24 and 26 it is one, so the library reads frames there).
+To read the stack frames, the library replaces `Error.prepareStackTrace` for a moment and then restores the exact property it found, so formatters such as `source-map-support` and `stack-chain` stay installed, and `Error.stack` stays a string. If the property cannot be replaced, the library reads no frames, and position alone decides, as above, although failure messages still have their `called at` lines. That is the case for:
 
-While it captures a stack, the library also lowers `Error.stackTraceLimit` to 1 for a moment, where it can, and then restores it. It works, and leaves the property exactly as it found it, also when the property is read-only, an accessor or missing, or when `Error` is frozen (`Object.freeze(Error)`); when there was no property, it creates none. With a read-only limit or a frozen `Error`, each operation captures as many frames as the limit says, which is a little slower. With an accessor (with or without a setter), and with a limit that was deleted before `Error` was frozen, V8 collects no stack frames for any error: failure messages then have no `called at` lines, and position alone decides, as with `Error.stackTraceLimit = 0`.
+* a non-configurable, non-writable value. `Object.freeze(Error)` makes one on Node.js 20.20 and newer, where `Error` has an own `prepareStackTrace` (Node.js' own formatter);
+* a missing property that cannot be added. On Node.js before 20.20, `Error` has no own `prepareStackTrace` unless a formatter installed one, so there `Object.freeze(Error)`, `Object.seal(Error)` and `Object.preventExtensions(Error)` all keep the library from reading frames. (On Node.js 20.20 and newer, a sealed or non-extensible `Error` keeps its writable `prepareStackTrace`, so the library reads frames.);
+* a non-configurable accessor, which `stack-chain` defines when `Error.prepareStackTrace` is not already an own configurable property of `Error` when `stack-chain` loads (for example on Node.js 18; on Node.js 20.20, 22, 24 and 26 it is one, so the library reads frames there).
+
+While it captures a stack, the library also lowers `Error.stackTraceLimit` to 1 for a moment, where it can, and then restores it. It never defines or deletes the property, and leaves it as it found it. When the limit is a number of at least 1 that cannot be lowered, because the property is read-only or `Error` is frozen, each operation captures as many frames as the limit says, which is a little slower. When V8 collects no stack frames for any error, the library captures none either: with a limit that is an accessor (with or without a setter), that is missing (deleted), that is not a number (for example a string), or that is below 1, as with `Error.stackTraceLimit = 0`. Failure messages then have no `called at` lines, and position alone decides.
 
 ```js
 // for example in a hardened environment
@@ -815,6 +948,17 @@ calculator.add(1, 2).returns(3)
 console.log(calculator.add(1, 2)) // prints 3
 calculator.received(2).add(1, 2) // throws SubstituteException
 console.log(Error.stackTraceLimit) // prints 10
+
+// the library cannot read frames, so position decides: the setup right after
+// openConnection() leaves the call out (see the example at the top of this section)
+function openConnection(driver) {
+  return driver.connect('db://test')
+}
+const driver = Substitute.for()
+const connection = openConnection(driver)
+connection.isOpen.returns(true)
+driver.didNotReceive().connect('db://test')
+driver.received(1).connect('db://test') // throws SubstituteException
 ```
 
 # Verifying calls
@@ -907,6 +1051,8 @@ In TypeScript, assigning a property on the substitute itself (`calculator.isEnab
 
 ## What counts as a call
 * Every invocation is a call of its own, also through a stored or destructured reference or a callback.
+* `new` is a call, too: `new sdk.Client('https://api')` counts as a call `Client('https://api')` (see [Creating a substitute](#creating-a-substitute)).
+* A call that leaves out arguments at the end is a call with `undefined` there: `f(1)` and `f(1, undefined)` count as the same call (see [How arguments are compared](#how-arguments-are-compared)).
 * `.call()`, `.apply()` and `.bind()` work on a method, a function substitute and every other substitute value as on a function: `calculator.subtract.call(undefined, 5, 1)` returns what `calculator.subtract(5, 1)` is configured to return, and counts as a call `subtract(5, 1)`. It counts as a call of a member called `call` as well; see [`call`, `apply` and `bind`](#call-apply-and-bind).
 * Reading a method without calling it, for example to register it as an event handler that never fires, is not a call. Method checks (`received().subtract(...)`, also with `Arg.all()`) only count invocations.
 * A call with an argument matcher (`Arg.any()`, `Arg.is()`, `Arg.all()`, also with `.not`, also [inside an object or array](#matchers-inside-objects-and-arrays)) is a setup or a check, never a received call. It does not run an existing setup either.
@@ -1083,7 +1229,7 @@ console.log(users.get('1')) // prints ann
 receivedOnce(users).get('1')
 ```
 
-With a constrained type parameter, such as in a helper or a test fixture written for every `T extends Calculator`, setups, checks and the `configure` view work through the constraint, also for keys that exist only through the constraint's string index signature, and the values they take are checked against the constraint's member types. [Typing limitations](#typing-limitations) lists the exceptions: optional and nullable members on TypeScript older than 4.8, methods whose return type differs between the variants of a union constraint, and checks of sets of keys that exist only through an index signature.
+With a constrained type parameter, such as in a helper or a test fixture written for every `T extends Calculator`, setups, checks and the `configure` view work through the constraint, also for keys that exist only through the constraint's string index signature, and the values they take are checked against the constraint's member types. [Typing limitations](#typing-limitations) lists the exceptions: optional and nullable members on TypeScript older than 4.8, methods whose return type differs between the variants of a union constraint (and, on TypeScript 5.4 and newer, methods that they declare with different parameter lists), and checks of sets of keys that exist only through an index signature.
 
 ```typescript
 import { Substitute, SubstituteOf, Arg, configure } from '@fluffy-spoon/substitute'
@@ -1201,8 +1347,8 @@ The symbols are registered with `Symbol.for()`, so they also work when two copie
 A few members are handled by the substitute itself and cannot be configured or checked:
 
 * `then` is always `undefined`, so a substitute is not a thenable. You can return it from an `async` function or `await` it, and you get the substitute back. In TypeScript, a member called `then` is typed `never`.
-* `toJSON`: `JSON.stringify(sub)` gives a short description of the substitute.
-* `Symbol.toPrimitive` and `util.inspect.custom`: `String(sub)`, template strings and `console.log(sub)` show the substitute's setups and received calls.
+* `toJSON`: `JSON.stringify(sub)` gives the same text as `String(sub)`.
+* `Symbol.toPrimitive` and `util.inspect.custom`: `String(sub)`, template strings and `console.log(sub)` show the substitute's setups and received calls (see [Printing a substitute](#printing-a-substitute)).
 
 ```typescript
 import { Substitute } from '@fluffy-spoon/substitute'
@@ -1218,9 +1364,10 @@ JavaScript, Node.js and test libraries read some members to find out what a valu
 
 * `Symbol.iterator`, `Symbol.asyncIterator`, `Symbol.hasInstance`, `Symbol.isConcatSpreadable`, `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, `Symbol.split`, `Symbol.species`, `Symbol.toStringTag` and `Symbol.unscopables`,
 * `util.promisify.custom`: both `Symbol.for('nodejs.util.promisify.custom')` and the running Node.js' own `require('util').promisify.custom`, which is a different symbol on Node.js 10.0 to 12.16.1 and 13.0 to 13.11,
-* `asymmetricMatch`, which jest reads to find asymmetric matchers.
+* `asymmetricMatch`, which jest reads to find asymmetric matchers,
+* `__esModule`, which code compiled from ES modules reads to find out whether a CommonJS module is an ES module (TypeScript with `esModuleInterop`, Babel and esbuild).
 
-So `[].concat(sub)` keeps the substitute as one element, `value instanceof sub.SomeClass` is `false`, `'text'.startsWith(sub.prefix)` works, `util.promisify(sub.readFile)` calls the substitute on every supported Node.js version (so a `mimicks()` setup that calls the callback works), `Object.prototype.toString.call(sub)` is `'[object Function]'`, and jest's `toEqual(sub)` and `toHaveBeenCalledWith(sub)` compare a substitute by identity, like any other function. A substitute is not iterable: `[...sub]`, `for...of`, `for await...of` and `Promise.all(sub)` throw a `TypeError`.
+So `[].concat(sub)` keeps the substitute as one element, `value instanceof sub.SomeClass` is `false`, `'text'.startsWith(sub.prefix)` works, `util.promisify(sub.readFile)` calls the substitute on every supported Node.js version (so a `mimicks()` setup that calls the callback works), `Object.prototype.toString.call(sub)` is `'[object Function]'`, and jest's `toEqual(sub)` and `toHaveBeenCalledWith(sub)` compare a substitute by identity, like any other function. A substitute is not iterable: `[...sub]`, `for...of`, `for await...of` and `Promise.all(sub)` throw a `TypeError`. A substitute that stands in for a whole module, for example one that a `jest.mock()` factory returns for a CommonJS module, is its own default export: `import mailer from './mailer'` gives the substitute itself, so the setups made on it answer the code under test.
 
 Unlike `then`, these members can be configured, through the `configure` view or by mimicking an instance that has them. The plain `sub[Symbol.iterator]().returns(...)` does not work, because the read gives `undefined`.
 
@@ -1243,6 +1390,98 @@ console.log([...letters]) // prints [ 'a', 'b' ]
 const tagged = Substitute.for()
 tagged[configure]()[Symbol.toStringTag].returns('Tagged')
 console.log(Object.prototype.toString.call(tagged)) // prints [object Tagged]
+
+// what TypeScript (with esModuleInterop) makes of `import mailer from './mailer'`
+const importDefault = mod => (mod && mod.__esModule) ? mod : { default: mod }
+const mailerModule = Substitute.for()
+console.log(importDefault(mailerModule).default === mailerModule) // prints true
+```
+
+## Printing a substitute
+`String(sub)`, template strings, `util.inspect(sub)`, `console.log(sub)` and `JSON.stringify(sub)` show the received calls and the setups of a substitute. An auto-substitute shows its path, such as `@Substitute.logger`, `@Substitute.getUser(1)` or `@Substitute.a.b('x').c`, followed by its own received calls and setups, if it has any. A substitute also lists those of its auto-substitutes, under their paths: the calls in the order they were made, the setups in the order they were configured. A read of a member, like `logger` before `logger.info('started')`, is a received call of its own, so it is listed, too. In a failure message, in the printout of another substitute and in a path, an auto-substitute shows only its path, as in `emit('created', @Substitute.child)`. A call made with `new` shows as `new Client('https://api')`.
+
+```js
+const { Substitute } = require('@fluffy-spoon/substitute')
+
+const app = Substitute.for()
+
+// the code under test
+app.logger.info('started')
+app.save({ id: 1 })
+
+app.logger.level.returns(3)
+app.getUser(1).name.returns('ann')
+
+const printedApp = [
+  '@Substitute {',
+  '  received:',
+  '    logger',
+  "    logger.info('started')",
+  '    save({ id: 1 })',
+  '  configured:',
+  '    logger.level => returns(3)',
+  "    getUser(1).name => returns('ann')",
+  '}'
+]
+console.log(String(app) === printedApp.join('\n')) // prints true
+
+const logger = app.logger
+const printedLogger = [
+  '@Substitute.logger {',
+  '  received:',
+  "    info('started')",
+  '  configured:',
+  '    level => returns(3)',
+  '}'
+]
+console.log(String(logger) === printedLogger.join('\n')) // prints true
+
+console.log(`${app.getUser(2)}`) // prints @Substitute.getUser(2)
+console.log(JSON.stringify({ user: app.getUser(2) })) // prints {"user":"@Substitute.getUser(2)"}
+```
+
+jest and vitest print a function, and so a substitute, with its `name` member, which is a member of the substitute like any other: `expect(...)` failure messages show `app.logger` as `[Function @Substitute.logger.name]` (or as the value that `name` is configured to return). Printing a substitute for such a message reads `name` (vitest also reads `constructor`), and these reads are recorded.
+
+## Freezing, defined properties and `in`
+`Object.freeze()`, `Object.seal()` and `Object.preventExtensions()` work on a substitute and on an auto-substitute, and it keeps working afterwards: reads, calls, `new`, setups, checks and printing work as before, and `Object.isFrozen()`, `Object.isSealed()` and `Object.isExtensible()` say what was done. So code under test that freezes what it is given, like `this.options = Object.freeze(options)`, works with a substitute.
+
+`Object.defineProperty(sub, key, descriptor)` defines a real property of the substitute. Reads return its value (a getter runs with the substitute as `this`), assignments write it (or fail, if it is not writable), and `delete` removes it (if it is configurable), after which the key is an ordinary member again. Reads and assignments of such a property are not recorded, and the property has no setup API. Without such properties, a substitute has no own properties: `Object.keys(sub)`, `Reflect.ownKeys(sub)` and `{ ...sub }` are empty, `Object.getOwnPropertyDescriptor(sub, 'name')` is `undefined`, and `delete sub.member` changes nothing.
+
+The values that the library hands out for checks and setups (`sub[received]()`, `sub[configure]()` and members of them), a function returned by `x.bind(...)` and a member configured both as a property and as a method cannot be frozen, sealed or given properties: `Object.freeze()`, `Object.seal()`, `Object.preventExtensions()` and `Object.defineProperty()` throw a `SubstituteException` that says so. `Object.setPrototypeOf(sub, prototype)` is not supported: it replaces the prototype of the library's internal function, after which `util.inspect(sub)` no longer shows the printout (setups and checks keep working).
+
+`key in sub`, and `Reflect.has(sub, key)`, is `true` when the key has a setup on the substitute: a property setup, a call setup, or a setup further down, like `sub.config.port.returns(80)` for `'config'`. It is also `true` when the substitute mimicks an instance that has the key (`key in instance`, so inherited members count), and for a property defined with `Object.defineProperty()`. Otherwise it is `false`: for members that the code under test used but that are not configured, for the members every function has (`call`, `apply`, `bind`, `name`, `length`, ...), for `then`, `toJSON` and the protocol members above (unless they are configured), and for the library's own methods. `in` records nothing. So code under test that checks whether an optional member exists, like `if ('destroy' in stream)`, takes the branch that the test configured.
+
+```js
+const { Substitute, configure } = require('@fluffy-spoon/substitute')
+
+// the code under test freezes its options, and checks for an optional member
+class Service {
+  constructor(options, stream) {
+    this.options = Object.freeze(options)
+    this.stream = stream
+  }
+  get name() { return this.options.name }
+  close() { return 'destroy' in this.stream ? this.stream.destroy() : this.stream.end() }
+}
+
+const options = Substitute.for()
+options.name.returns('billing')
+const stream = Substitute.for()
+stream.destroy().returns('destroyed')
+
+const service = new Service(options, stream)
+console.log(service.name) // prints billing
+console.log(Object.isFrozen(options)) // prints true
+console.log(service.close()) // prints destroyed
+console.log('end' in stream) // prints false
+
+const versioned = Substitute.for()
+Object.defineProperty(versioned, 'version', { value: 2, enumerable: true, configurable: true })
+console.log(versioned.version, Object.keys(versioned)) // prints 2 [ 'version' ]
+versioned.didNotReceive().version
+console.log(Reflect.ownKeys(Substitute.for())) // prints []
+
+Object.freeze(versioned[configure]()) // throws SubstituteException: cannot be used on
 ```
 
 # Typing limitations
@@ -1251,16 +1490,22 @@ TypeScript cannot express a few things about substitutes:
 * **Assigning a property on the substitute** (`calculator.isEnabled = true`) does not compile, because the property's type also carries the setup API (`.returns()` and so on). Assign through the interface type, as the code under test does, and check with `calculator.received().isEnabled = true`.
 * **`null` and `undefined`** are not part of the type of a call or property under `strictNullChecks`, although `.returns(null)` is accepted. Assign the value to the declared type, or give explicit type arguments (`t.is<string | null>(repository.find(1), null)`).
 * **A generic method called with explicit type arguments** (`store.get<number>('answer')`) has no setup API. Call it without type arguments.
+* **Generic methods** (`get<K extends keyof Config>(key: K): Config[K]`, a typed event emitter's `emit<E extends keyof Events>(event: E, ...args: Parameters<Events[E]>)`, or Node.js' `EventEmitter<Events>` with a `@types/node` version that types the events, which needs TypeScript 4.8 or newer) have the setup API, the checks and the `configure` view, with their type parameters replaced by their constraints. So the arguments are checked against the constraints only, and the configured value against what the method returns for them. With `Config` being `{ port: number; host: string }`, `config.get('port').returns('eighty')` compiles, because `Config[keyof Config]` is `number | string`, and `emitter.emit('failed', 'id1')` compiles although `'failed'` takes an `Error`, because the event and its arguments are not matched up. A value that the method can never return is rejected (`config.get('port').returns(Symbol('80'))`). On TypeScript 4.1 and older, a setup whose arguments are all `Arg.any()` takes any value.
 * **Overloads whose parameters have literal types** (`on(event: 'data', ...)`) resolve to the interface's own declaration when you call them directly. Configure them with `sub[configure]().on('data', ...)`.
 * **More than 8 overloads:** only the last 8 have the setup API.
 * **A property typed `never`** cannot be configured. On a method that returns `never`, `.returns()` only accepts `never`; use `.throws()`.
 * **Members typed only `null` or `undefined`** (`error?: undefined`, `ownerDocument: null`) keep their plain type and have no setup API. Configure them through `sub[configure]()`.
 * **Generic code:** the result of a call on the substitute (`box.get('a')`) is not assignable to `T`; read it through the plain interface type, or cast it. Checking a set of a property whose type is the type parameter itself (`holder.received().current = value`, with `current: T`) may not compile; write `(holder.received() as Holder<T>).current = value`. Setups of such a property (`box.current.returns(value)`, and from TypeScript 3.9 on also with `maybe?: T` or `orNull: T | null`), of properties of types like `T[]` or `Promise<T>`, and of calls that return `T` are fine.
 * **Generic code on TypeScript older than 4.8:** on TypeScript 3.6 to 4.7, with a constrained type parameter (`<T extends Calculator>`), calls of optional methods and of members typed as a function or `undefined` have no setup API: `sub.reset().returns()` with `reset?(): void`, `sub.find('a').returns('b')` with `find?(id: string): string | undefined`, `sub.maybeAdd(1).returns(2)` with `maybeAdd: ((a: number) => number) | undefined`, and every method of `T extends Partial<Calculator>` (TypeScript reports "This expression is not callable"). On TypeScript 3.6 to 3.8, in addition, properties whose type includes `null` or `undefined` have no setup API: with a constrained type parameter (`name: string | null`, `limit?: number`, every property of `T extends Partial<Calculator>`), and also in an interface instantiated with any type parameter, constrained or not (`maybe?: T` and `orNull: T | null` in `SubstituteOf<Box<T>>`). Configure them through the `configure` view, which works on every version: `sub[configure]().reset().returns()`, `sub[configure]().limit.returns(10)`, `box[configure]().maybe.returns(value)`. Checks work as well (`sub.received().reset()`, `sub.received().name = null`). Calls of optional methods in an instantiated interface (`load?(): T` in `Box<T>`) work on every version. TypeScript 4.8 and newer have none of these limitations.
-* **Generic code with a union constraint** whose variants' methods return different types: in `function stubPet<T extends Cat | Dog>(pet: SubstituteOf<T>)`, where `speak()` returns `'meow'` or `'woof'`, `.returns()` and the `configure` view take `never` (`pet.speak().returns('meow')` does not compile). Members whose signature is the same in every variant (`pet.age().returns(3)`) and properties (`pet.kind.returns('cat')`) work. Cast to the constraint: `(pet as SubstituteOf<Cat | Dog>).speak().returns('meow')`. A concrete union, as in `Substitute.for<Cat | Dog>()`, takes the union of the return types: `pet.speak().returns('meow')` compiles there, and so does `pet.speak().returns('woof')`, also when the variants declare the method with different parameter lists (see the next item).
-* **A method that the variants of a concrete union declare with different parameter lists** (an extra optional parameter, other parameter types or other overloads, such as `read(path): string` and `read(path, encoding?): Uint8Array` in `Substitute.for<ReaderA | ReaderB>()`) has the setup API, and `.returns()` takes the return types of the variants whose overloads the call can reach. A call resolves to one parameter list of one variant. Each variant then counts with its overload that has the same parameter list, if it has one, and otherwise with every overload whose possible numbers of arguments overlap with it and where one of the two parameter lists, with every parameter made optional, accepts the other. If every overload of every variant returns the same type, or one of them returns `any`, `.returns()` takes that type. Two consequences can surprise. The values of the arguments do not count, so parameter types that only overlap do not either: with `letter(x: 'a' | 'b'): 'lower'` in one variant and `letter(x: 'b' | 'c'): 'upper'` in the other, `letters.letter('b').returns('upper')` does not compile. And the signatures are tried in the order of the number of arguments they require, most first (TypeScript 5.3 and older need that order), so a call that an earlier overload with optional parameters accepts as well resolves to a later overload with more required parameters: with `draw(x, y?, z?): 'flat'` and `draw(x, y, z): 'solid'` in one variant, `drawing.draw(1, 2, 3).returns('flat')` does not compile. In both cases, cast to the variant: `(drawing as SubstituteOf<Plot>).draw(1, 2, 3).returns('flat')`. Editors and error messages show the parameters of such a method without their names (`AllArguments<[string, (string | undefined)?]>`).
+* **Generic code with a union constraint** whose variants' methods return different types: in `function stubPet<T extends Cat | Dog>(pet: SubstituteOf<T>)`, where `speak()` returns `'meow'` or `'woof'`, `.returns()` and the `configure` view take `never` (`pet.speak().returns('meow')` does not compile). Members whose signature is the same in every variant (`pet.age().returns(3)`) and properties (`pet.kind.returns('cat')`) work. Cast to the constraint: `(pet as SubstituteOf<Cat | Dog>).speak().returns('meow')`. On TypeScript 5.4 and newer, a method that the variants of a union constraint declare with different parameter lists has no setup API at all, even when every variant returns the same type: with `log(message: string): void` in `LogA` and `log(message: string, level?: number): void` in `LogB`, `sub.log('x').returns()` does not compile in `function stubLog<T extends LogA | LogB>(sub: SubstituteOf<T>)` (TypeScript 5.0 and older compile it). The `configure` view (`sub[configure]().log('x').returns()`), checks (`sub.received().log('x')`) and the cast to the constraint work there on every version. A concrete union, as in `Substitute.for<Cat | Dog>()`, takes the union of the return types: `pet.speak().returns('meow')` compiles there, and so does `pet.speak().returns('woof')`, also when the variants have a string index signature, and when they declare the method with different parameter lists (see the next item).
+* **A method that the variants of a concrete union declare with different parameter lists** (an extra optional parameter, other parameter types or other overloads, such as `read(path): string` and `read(path, encoding?): Uint8Array` in `Substitute.for<ReaderA | ReaderB>()`) has the setup API, and `.returns()` takes the return types of the variants that the call can reach. Which those are depends on the number of arguments that the call passes. A call that leaves out an optional parameter in which the variants differ takes what every variant that accepts the call returns: with `get(key: string, options?: OptionsV1): number` in one variant and `get(key: string, options?: OptionsV2): string` in the other, `api.get('k').returns(1)` and `api.get('k').returns('s')` both compile, while `api.get('k', { retries: 1 }).returns('s')`, with `OptionsV1` options, does not. A single `Arg.all()` takes the return types of every variant, and a variant with a rest parameter counts for calls with any number of arguments. If every overload of every variant returns the same type, or one of them returns `any`, `.returns()` takes that type. Three cases can surprise:
+  * The values of the arguments do not count, so parameter types that only overlap do not either: with `letter(x: 'a' | 'b'): 'lower'` in one variant and `letter(x: 'b' | 'c'): 'upper'` in the other, `letters.letter('b').returns('upper')` does not compile.
+  * `Arg.any()`, and an `Arg.is()` predicate without a parameter type, resolve to the first variant's overload that takes that many arguments. When the variants' parameter types differ, such a call takes only the return types of the variants that accept that overload's parameters: with `m(x: string): 'A'` in `MatchA` and `m(x: number): 'B'` in `MatchB`, `matched.m(Arg.any()).returns('B')` does not compile. Use `Arg.all()`, or a typed matcher such as `Arg.any('number')`.
+  * A call that resolves to an overload with optional parameters also counts the variants whose parameter lists overlap with that overload's whole list: with `read(path): string` and `read(path, encoding?): Uint8Array`, `reader.read('p', 'utf8').returns('text')` compiles, although only the second variant takes an encoding.
+
+  In these cases, cast to the variant: `(letters as SubstituteOf<Upper>).letter('b').returns('upper')`. Editors and error messages show the parameters of such a method without their names (`AllArguments<[string, (string | undefined)?]>`).
+* **Untyped callbacks in large unions whose variants return the same type**, such as the union of all HTML element types (`HTMLElementTagNameMap[keyof HTMLElementTagNameMap]`): a callback argument whose parameters have no type annotation gets no type from the method when the variants' callback types differ in more than their `this` type, so `anyElement.addEventListener('click', event => event.preventDefault())` reports that `event` implicitly has an `any` type (under `noImplicitAny`). Annotate the parameter: `(event: Event) => event.preventDefault()`. This keeps type-checking such unions fast.
 * **Checking a set of an index-signature key in generic code:** with `T extends Settings`, where `Settings` is `{ [key: string]: number; port: number }`, keys that exist only through the index signature can be configured (`sub.timeout.returns(5)`) and read in a check (`sub.received().timeout`). A check of a set, `sub.received().timeout = 5` (also with `[received]()`, `didNotReceive()` or `received(1)`), does not compile, because TypeScript does not resolve a write through an index signature of a type parameter. Write `(sub.received() as Settings).timeout = 5`, or `(sub as SubstituteOf<Settings>).received().timeout = 5`.
-* **A rest parameter typed as a union of tuples** (`log(...args: [string] | [string, number]): boolean`) has no setup API on calls, in the `configure` view neither: `logger.log('a').returns(true)` does not compile. Checks of such calls (`logger.received().log('a')`) work. Configure the calls through a type that declares the method with overloads instead: `(logger as unknown as SubstituteOf<LoggerSetup>).log('a').returns(true)`, with `interface LoggerSetup { log(message: string): boolean; log(message: string, code: number): boolean }`.
 * **A union with `null` or `undefined`** (`Substitute.for<Calculator | undefined>()`) has no setup API. Substitute `Calculator`: the substitute can be passed where a `Calculator | undefined` is expected.
 * **`Arg.all()` after other arguments** type-checks after up to 6 of them. It does not type-check with arguments after it (which is an error at runtime, too), after the last parameter of a fixed parameter list (`add(1, 2, Arg.all())`), or inside an object or array. Editors show the signatures that accept it with parameters named `arg0`, `arg1`, and so on.
 * **`Arg.any('object')`** is typed `any`, like `Arg.any()`, so the compiler does not check it against the parameter. `Arg.any('function')` is typed as any function or class.
@@ -1410,23 +1655,41 @@ const setTimeoutTo10 = (s: Settings) => { s.timeout = 10 }
 setTimeoutTo10(settings)
 checkTimeoutSet<Settings>(settings)
 
-interface Logger {
-  log(...args: [string] | [string, number]): boolean
+// a union constraint whose variants declare the method with different parameter lists
+interface LogA { kind: 'a'; log(message: string): void }
+interface LogB { kind: 'b'; log(message: string, level?: number): void }
+function stubLog<T extends LogA | LogB>(log: SubstituteOf<T>) {
+  // @ts-expect-error no setup API on TypeScript 5.4 and newer
+  log.log('x').throws(new Error('full'))
+  log[configure]().log('y').throws(new Error('full'))
 }
-interface LoggerSetup {
-  log(message: string): boolean
-  log(message: string, code: number): boolean
-}
-const logger = Substitute.for<Logger>()
-// @ts-expect-error a rest parameter typed as a union of tuples has no setup API
-logger.log('a').returns(true)
-;(logger as unknown as SubstituteOf<LoggerSetup>).log('b').returns(true)
-console.log(logger.log('b')) // prints true
-logger.received(1).log('b')
+const log = Substitute.for<LogA | LogB>()
+stubLog<LogA | LogB>(log)
+log.log('y') // throws Error: full
+
+// generic methods: the type parameters are replaced by their constraints
+interface Config { port: number; host: string }
+interface ConfigService { get<K extends keyof Config>(key: K): Config[K] }
+const config = Substitute.for<ConfigService>()
+config.get('host').returns('localhost')
+console.log(config.get('host')) // prints localhost
+// Config[keyof Config] is number | string, so this compiles, too
+config.get('port').returns('eighty')
+// @ts-expect-error no member of Config is a symbol
+config[configure]().get('port').returns(Symbol('80'))
+
+interface Events { saved: (id: string) => void; failed: (error: Error) => void }
+interface Emitter { emit<E extends keyof Events>(event: E, ...args: Parameters<Events[E]>): boolean }
+const emitter = Substitute.for<Emitter>()
+emitter.emit('saved', 'id1').returns(true)
+console.log(emitter.emit('saved', 'id1')) // prints true
+emitter.received(1).emit('saved', 'id1')
+// the event and its arguments are not matched up, so this compiles, too
+emitter.didNotReceive().emit('failed', 'id1')
 ```
 
 ```typescript
-import { Substitute, SubstituteOf, configure } from '@fluffy-spoon/substitute'
+import { Substitute, SubstituteOf, Arg, configure } from '@fluffy-spoon/substitute'
 
 // the variants declare the method with different parameter lists
 interface ClientV1 { version: 1; fetch(url: string): Promise<string> }
@@ -1454,20 +1717,32 @@ const letters = Substitute.for<Lower | Upper>()
 ;(letters as SubstituteOf<Upper>).letter('b').returns('upper')
 console.log(letters.letter('b')) // prints upper
 
-// the overload with more required parameters is tried first
-interface Plot { kind: 'plot'; draw(x: number, y?: number, z?: number): 'flat'; draw(x: number, y: number, z: number): 'solid' }
-interface Sketch { kind: 'sketch'; draw(x: number): 'line' }
-// @ts-expect-error the call resolves to draw(x, y, z), which returns 'solid'
-Substitute.for<Plot | Sketch>().draw(1, 2, 3).returns('flat')
-const drawing = Substitute.for<Plot | Sketch>()
-;(drawing as SubstituteOf<Plot>).draw(1, 2, 3).returns('flat')
-console.log(drawing.draw(1, 2, 3)) // prints flat
+// a call that leaves out the options can reach both variants
+interface ApiV1 { version: 1; get(key: string, options?: { retries: number }): number }
+interface ApiV2 { version: 2; get(key: string, options?: { timeoutMs: number }): string }
+const api = Substitute.for<ApiV1 | ApiV2>()
+api.get('count').returns(1)
+api.get('name').returns('ann')
+console.log(api.get('count'), api.get('name')) // prints 1 ann
+// @ts-expect-error only ApiV1 takes { retries }, and its get() returns a number
+api.get('name', { retries: 1 }).returns('ann')
+
+// Arg.any() resolves to the first variant's m(x: string)
+interface MatchA { kind: 'a'; m(x: string): 'A' }
+interface MatchB { kind: 'b'; m(x: number): 'B' }
+const matched = Substitute.for<MatchA | MatchB>()
+// @ts-expect-error the call resolves to m(x: string), which only MatchA declares
+matched.m(Arg.any()).returns('B')
+const typed = Substitute.for<MatchA | MatchB>()
+typed.m(Arg.any('number')).returns('B')
+typed.m(Arg.all()).returns('A')
+console.log(typed.m(2), typed.m('x')) // prints B A
 ```
 
 # Test runners
 Checks throw a `SubstituteException`, so they work with any test runner: a failed check fails the test, and you can expect one with your runner's `throws` assertion. ava, jest, mocha, node:test and vitest (also with the package inlined through `server.deps.inline`) are tested on every change, including a check that [fails later](#assertions-that-fail-later). Each of them fails the run for it, but not all in the same way: jest reports it as the failure of the running test (jest 30 on Node.js 22 as a failure of the test file), vitest and node:test run every test and fail the run or the file, mocha stops the run after that test, so the remaining tests and files do not run, and ava ends the worker of that test file, so its unfinished tests are not reported. In jest and vitest, the `called at` lines of failure messages name the lines of the TypeScript source. Fake timers that a test installs do not hold back such a report; see [Assertions that fail later](#assertions-that-fail-later) for how each runner reports it, and for fake timers that are installed before the library is loaded.
 
-Substitutes can be passed to your runner's own assertions: jest's `toEqual(sub)`, `toContainEqual(sub)` and `toHaveBeenCalledWith(sub)` compare substitutes by identity: a substitute only equals itself (see [Special members](#special-members)).
+Substitutes can be passed to your runner's own assertions: jest's `toEqual(sub)`, `toContainEqual(sub)` and `toHaveBeenCalledWith(sub)` compare substitutes by identity: a substitute only equals itself (see [Special members](#special-members)). In their failure messages, jest and vitest show a substitute by its `name` member, for example `[Function @Substitute.logger.name]` (see [Printing a substitute](#printing-a-substitute)).
 
 ```typescript
 import { test } from 'node:test'
@@ -1508,32 +1783,37 @@ With "pause on caught exceptions" turned on (VS Code's "Caught Exceptions", Chro
 
 Where `Error.prepareStackTrace` is not a function, the library throws and catches an exception for each step of a chain like `app.repo.users.find(1)`, to read where that step was made, and the debugger stops twice for each, in `dist/internals/CallSite.js` (in `peekFirstFrame` and `readFirstFrame`): 40 times for a test of two setups, a call of the code under test and two checks, all through such chains. That happens on Node.js 18 and other versions before 20.20 without an installed formatter, when `Error.prepareStackTrace` was deleted, and in `vm` contexts: jest 30's test environment, vitest's `vmThreads` and `vmForks` pools, and `node:vm`. To skip these stops, add `**/node_modules/@fluffy-spoon/substitute/**` to the debugger's `skipFiles` (in VS Code's `launch.json`) or to its ignore list (in Chrome DevTools).
 
-# Performance
-A call or property read with small arguments takes a few microseconds. Measured on Node.js 22, 10,000 calls `sub.f(i)` take about 40 to 55 milliseconds, and 10,000 calls `app.a.b.c.d(i)` (four property reads and a call each) about 0.15 seconds.
+A getter of your own that throws, in an argument that cannot be read yet (see [How arguments are compared](#how-arguments-are-compared)), stops the debugger whenever the library reads it: at most once for each call or setup that passes the value (only the first of several calls with the same object, unless the member has setups with literal arguments), and up to once for each received call that a check compares the value with.
 
-Finding the setup and the auto-substitute for a call does not scan earlier calls. It looks the arguments up by a hash whose cost is bounded, whatever their size or shape: nested objects, objects with cycles (such as a child that refers back to its parent), errors, long arrays, `Buffer`s and typed arrays, long strings, `Map`s, `Set`s or `Date`s. Measured on Node.js 22, each of these takes about 0.06 to 0.2 seconds: 10,000 calls with nested-object arguments, 4,000 setups with object arguments plus 4,000 matching calls, 10,000 calls with a different `Error` each, 10,000 calls with objects that refer back to their parent, 200 calls with different 1 MB strings, and 20 calls with arrays of 150,000 objects.
+# Performance
+A call or property read with small arguments takes a few microseconds. Measured on Node.js 22, 10,000 calls `sub.f(i)` take about 80 milliseconds, and 10,000 calls `app.a.b.c.d(i)` (four property reads and a call each) about 0.23 seconds. Much of that time goes into capturing where each call was made (see [Which calls lead to a setup or a check](#which-calls-lead-to-a-setup-or-a-check)); where V8 captures no stack frames, for example with `Error.stackTraceLimit` deleted, the same calls take about 40 and 55 milliseconds.
+
+Finding the setup and the auto-substitute for a call does not scan earlier calls. It looks the arguments up by a hash whose cost is bounded, whatever their size or shape: nested objects, objects with cycles (such as a child that refers back to its parent), errors, long arrays, `Buffer`s and typed arrays, long strings, `Map`s, `Set`s or `Date`s. Measured on Node.js 22, each of these takes about 0.1 to 0.25 seconds: 10,000 calls with nested-object arguments, 4,000 setups with object arguments plus 4,000 matching calls, 10,000 calls with a different `Error` each, 10,000 calls with objects that refer back to their parent, 200 calls with different 1 MB strings, and 20 calls with arrays of 150,000 objects.
 
 The hash reads only a bounded part of each argument:
 
 * at most 1,024 nested arrays and objects, which each of them shares evenly among its items, and at most 32 levels;
 * of an array with more than 256 items, 256 of them: the first 64, the last 64 and 128 at a fixed stride;
 * of a string or a byte array with more than 4,096 characters or bytes, 4,096 of them: the first 1,024, the last 1,024 and 2,048 at a fixed stride;
-* of an object with more than 256 keys, and of a `Map` or `Set` with more than 256 entries (a wide one), every key and every value. An object among the values, a `Set` member that is an object, and a `Map` key that is an object count with a budget of 4 objects of their own, which they share among their values like any other object: enough for a small record and the objects right inside it. A wide object, `Map` or `Set` inside them counts only as such. Above 65,536 keys or entries, every key counts, but only about 256 of the values, chosen by their keys; the members of a `Set` that large, and the entries with object keys of a `Map` that large, count only shallowly.
+* of an object with more than 256 keys, and of a `Map` or `Set` with more than 256 entries (a wide one), every key and every value. An object among the values, a `Set` member that is an object, and a `Map` key that is an object count with a budget of 4 objects of their own, which they share among their values like any other object: enough for a small record and the objects right inside it. A wide object, `Map` or `Set` inside them counts only as such, and one that several of them share, or the container itself when they refer back to it, is listed at most once per call. Above 65,536 keys or entries, every key counts, but only about 256 of the values, chosen by their keys; the members of a `Set` that large, and the entries with object keys of a `Map` that large, count only shallowly.
 
-Objects with many keys in common, such as snapshots of a state or translation tables per locale, need not have their keys listed, which is what costs most about them: the first object with at least 1,025 string keys gives a list of 1,025 of its keys, and a later object that has all the keys of that list is hashed by the values of those keys alone. The library makes up to 16 such lists per process, each from the first object with at least 1,025 string keys that does not have all the keys of an earlier list. Any other wide object has its keys listed once. The hash of a wide object, `Map` or `Set` is computed the first time it is passed, and remembered with it (weakly) for later calls; see [How arguments are compared](#how-arguments-are-compared) for what that means for objects that change.
+Objects with many keys in common, such as snapshots of a state or translation tables per locale, need not have their keys listed, which is what costs most about them: the first object with at least 1,025 string keys gives a list of 1,025 of its keys, and a later object that has all the keys of that list is hashed by the values of those keys alone. The library makes up to 16 such lists per process, each from the first object with at least 1,025 string keys that does not have all the keys of an earlier list. An object is looked up in a list only when it has the two keys of the list with the lowest and the highest hash, so small objects that happen to share a key with such a list (such as `id`) cost nothing extra, and items of arrays and values inside a wide object, `Map` or `Set` are not looked up at all. Any other wide object has its keys listed once. The hash of a wide object, `Map` or `Set` is computed the first time it is passed, and remembered with it (weakly) for later calls; this never changes a result (see [How arguments are compared](#how-arguments-are-compared)).
 
 Arguments that a setup or an earlier call already used are found by identity first, so a large object that is passed again and again costs little. And a call is looked up among the setups with literal arguments only when one of them could match it: a call whose primitive arguments (numbers, strings and so on) are those of no such setup skips that lookup. Measured on Node.js 22:
 
-* 10,000 calls that each pass one shared table with 300 to 10,000 keys, with a different first argument each time, take about 60 milliseconds, whatever the size of the table, and 2,000 calls with the same object with 10,000 keys about 15 milliseconds;
-* 10 calls with 256 rows that share one object with 5,000 keys take about 10 milliseconds, 10 calls with 300 rows that share one `Map` with 10,000 entries about 15 milliseconds, and a setup with an object with 10,000 keys plus 2,000 calls with that object about 20 milliseconds;
-* 200 calls with different objects with 5,000 keys each take about 25 milliseconds, and 100 calls with different objects with 70,000 keys each about 35 milliseconds;
-* 50 calls with a normalized state whose `byId` holds 5,000 records take about 90 milliseconds, and 100 calls with different tables of 5,000 records, `Set`s of 5,000 records or `Map`s with 5,000 object keys and record values about 50 to 130 milliseconds.
+* 10,000 calls that each pass one shared table with 300 to 10,000 keys, with a different first argument each time, take about 0.1 to 0.13 seconds, whatever the size of the table, and 2,000 calls with the same object with 10,000 keys about 25 milliseconds;
+* 10 calls with 256 rows that share one object with 5,000 keys take about 20 milliseconds, 10 calls with 300 rows that share one `Map` with 10,000 entries about 25 milliseconds, and a setup with an object with 10,000 keys plus 2,000 calls with that object about 20 milliseconds;
+* 10 calls with a `Map` of 2,000 records that share one object with 5,000 keys take about 25 milliseconds, 10 calls with tables of 300 such records about 15 milliseconds, and 10 calls with tables of 1,000 records that refer back to their table about 30 milliseconds;
+* 200 calls with different objects with 5,000 keys each take about 30 milliseconds, and 100 calls with different objects with 70,000 keys each about 45 milliseconds;
+* 50 calls with a normalized state whose `byId` holds 5,000 records take about 0.14 seconds, and 100 calls with different tables of 5,000 records, `Set`s of 5,000 records or `Map`s with 5,000 object keys and record values about 70 to 210 milliseconds;
+* 1,000 calls that each pass a new array of 256 to 300 records with nested objects take about 0.25 to 0.3 seconds, the same per record for 257 records as for 256, and with 1,000 records each about 0.7 seconds;
+* with 16 of the lists of keys above whose first key is `id`, 2,000 calls with arrays of 100 small records with an `id` take about 0.19 seconds, as without such lists.
 
-Arguments with the same hash are told apart by comparing them in full, with `util.isDeepStrictEqual`, so a copy of an object only matches a setup or an earlier call after that comparison. For wide objects, it costs about 1 millisecond per 5,000 keys: 200 setups with different objects with 5,000 keys plus 200 calls with copies of them take about 0.25 seconds, of which about 0.2 seconds is that comparison.
+Arguments with the same hash are told apart by comparing them in full, with `util.isDeepStrictEqual`, so a copy of an object only matches a setup or an earlier call after that comparison. For wide objects, it costs about 1.3 milliseconds per 5,000 keys: 200 setups with different objects with 5,000 keys plus 200 calls with copies of them take about 0.37 seconds, of which about 0.27 seconds is that comparison.
 
-Arguments that differ only outside the parts that the hash reads get the same hash. They are still told apart correctly, but each new call is compared with every earlier call with that hash, so many such calls get slow: 200 calls with 1 MB strings that differ only in a few characters in the middle take about 0.65 seconds. The same applies to symbols with the same description (`Symbol('id')`), because a symbol is hashed by its description: 4,000 calls with such symbols take about 0.16 seconds. A value that cannot be read, such as an object with a getter that throws, is matched by its identity (see [How arguments are compared](#how-arguments-are-compared)) and read only once: 4,000 calls with different such objects take about 50 to 70 milliseconds.
+Arguments that differ only outside the parts that the hash reads get the same hash. They are still told apart correctly, but each new call is compared with every earlier call with that hash, so many such calls get slow: 200 calls with 1 MB strings that differ only in a few characters in the middle take about 1.2 seconds. The same applies to symbols with the same description (`Symbol('id')`), because a symbol is hashed by its description: 4,000 calls with such symbols take about 0.24 seconds. A value that cannot be read, such as an object with a getter that throws, is matched by its identity (see [How arguments are compared](#how-arguments-are-compared)) and read at most once per call: 4,000 calls with different such objects take about 0.1 seconds.
 
-Setups with matchers cannot be looked up by a hash: a call tries the matcher setups of its member one by one. So many matcher setups on the same member slow down each call of it: 4,000 setups with `Arg.is()` plus 4,000 calls take about 0.8 seconds, and with a matcher inside an object (`find({ id: i, name: Arg.any() })`) about 7.5 seconds. A check goes through the received calls of the member that it checks.
+Setups with matchers cannot be looked up by a hash: a call tries the matcher setups of its member one by one. So many matcher setups on the same member slow down each call of it: 4,000 setups with `Arg.is()` plus 4,000 calls take about 1 second, and with a matcher inside an object (`find({ id: i, name: Arg.any() })`) about 11 seconds. A check goes through the received calls of the member that it checks.
 
 Each received call is kept until [`[clearReceivedCalls]()`](#clearing-received-calls), at about 300 bytes per call (measured on Node.js 22, 64-bit). A distinct unconfigured call also keeps its auto-substitute, about 200 bytes more, for as long as the substitute lives, so that the same call always returns the same auto-substitute; `[clearReceivedCalls]()` keeps those. A call through a chain of property reads keeps a record of each read as well: `app.a.b.c.d(i)` with a different `i` each time keeps about 1,350 bytes per call. Symbols passed as arguments are not kept alive by the library once the substitute is gone.
 

@@ -7,7 +7,7 @@ Each section says which versions it applies to. Code marked "Before" is for the 
 - [Requirements](#requirements)
 - [Removed APIs](#removed-apis): [`Substitute.disableFor`](#substitutedisablefor), [`clearSubstitute` and `ClearType`](#clearsubstitute-and-cleartype), [string `mimick(instance)`](#the-string-mimickinstance)
 - [Names that conflict with the library: the symbol API](#names-that-conflict-with-the-library-the-symbol-api)
-- [Behaviour changes](#behaviour-changes): [sequences](#sequences-repeat-the-last-value), [auto-substitutes](#auto-substitutes-and-nested-checks), [matcher calls](#calls-with-argument-matchers-are-setups), [match order](#match-order), [re-configuring](#re-configuring-a-call), [what counts as a call](#what-counts-as-a-call), [checks](#checks-never-run-setups), [`received(count)`](#receivedcount-is-validated), [checks that fail later](#checks-that-fail-later), [matchers](#matchers), [argument comparison](#how-arguments-are-compared), [`this` in `mimicks()`](#this-in-mimicks), [protocol members](#protocol-members-read-as-undefined), [messages](#messages)
+- [Behaviour changes](#behaviour-changes): [sequences](#sequences-repeat-the-last-value), [auto-substitutes](#auto-substitutes-and-nested-checks), [matcher calls](#calls-with-argument-matchers-are-setups), [match order](#match-order), [re-configuring](#re-configuring-a-call), [what counts as a call](#what-counts-as-a-call), [`new`](#new-is-a-call), [checks](#checks-never-run-setups), [`received(count)`](#receivedcount-is-validated), [checks that fail later](#checks-that-fail-later), [matchers](#matchers), [argument comparison](#how-arguments-are-compared), [omitted arguments](#omitted-arguments), [`this` in `mimicks()`](#this-in-mimicks), [protocol members](#protocol-members-read-as-undefined), [freezing and `in`](#freezing-defined-properties-and-in), [messages](#messages), [printing](#printing)
 - [Imports and packaging](#imports-and-packaging)
 - [TypeScript](#typescript)
 
@@ -285,6 +285,24 @@ const handler = calculator.subtract
 calculator.received().subtract(Arg.all()) // throws SubstituteException
 ```
 
+### `new` is a call
+*Applies to: 1.x and the betas.*
+
+`new` on a substitute or on a member of it (`new sdk.Client('https://api')`, also through `Reflect.construct()`) is a call. It is recorded, setups written as calls answer it (`sdk.Client(Arg.any()).returns(client)`), and checks written as calls count it (`sdk.received(1).Client('https://api')`). Without a setup, or with a setup that returns a primitive, `new` returns the auto-substitute of that call. In 1.x, `new` on a substitute threw a `TypeError` (a proxy invariant about `prototype`). In the betas, it returned an object made from the library's internal function, whatever was configured, and only the read of the member was recorded. In TypeScript, setups and checks written as calls compile for constructor types and members, as in `Client('https://api').returns(client)` for `Substitute.for<new (baseUrl: string) => ApiClient>()`; see [Creating a substitute](README.md#creating-a-substitute).
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+// the code under test
+const connect = sdk => new sdk.Client({ baseUrl: 'https://api' })
+
+const sdk = Substitute.for()
+const client = { name: 'client' }
+sdk.Client(Arg.any()).returns(client)
+console.log(connect(sdk) === client) // prints true
+sdk.received(1).Client({ baseUrl: 'https://api' })
+```
+
 ### Checks never run setups
 *Applies to: the betas.*
 
@@ -323,13 +341,15 @@ Checks that fail later (this one, and a property-style `sub.received(2).member` 
 * `Arg.any('object')` no longer matches `null`, and now matches substitutes. `Arg.any('function')` matches substitutes, and `Arg.any('array')` uses `Array.isArray`.
 * `Arg.is()` with something other than a function throws a `TypeError` right away. A predicate that throws counts as a non-match instead of crashing the code under test.
 * Substitutes passed as arguments are compared by identity, and are never compared or printed member by member. In the betas, a failed check overflowed the stack when substitutes referred to each other through their arguments.
+* **JavaScript:** `Arg.any(type)` and `Arg.any.not(type)` throw a `TypeError` right away for a type name that they do not know, such as a typo (`'strnig'`) or another case (`'String'`). Before, `Arg.any('strnig')` silently matched nothing, and `Arg.any.not('strnig')` matched every value. `'bigint'` is a documented type name now (it already matched `bigint` values).
+* **JavaScript:** `mimicks()` with something other than a function (or with nothing) throws a `TypeError` at the setup, and the message names the member. Before, the setup was accepted, and the call failed later, in the code under test (`TypeError: substitutionValue is not a function`; in 1.x, `mockValue.apply is not a function`).
 
 ### How arguments are compared
 *Applies to: 1.x and the betas.*
 
 Literal arguments are compared with deep strict equality (`util.isDeepStrictEqual`), as before: own enumerable properties and prototypes. `#private` fields and other internal state are invisible to it, so all instances of a class that keeps its state only in `#private` fields are equal to each other. Use the same instance, or `Arg.is()`, for such classes (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
-What changed: an argument object that you change after using it in a setup only matches that setup when the same object is passed again. Before, a new object equal to the changed one matched as well. Create the setup with the object as the code under test will pass it, or with a matcher. For an object with more than 256 keys, and a `Map` or `Set` with more than 256 entries, this already starts the first time it is passed, also in a call that is not a setup: a setup made after such an object changed is not matched by a copy of the changed object (see [How arguments are compared](README.md#how-arguments-are-compared)).
+What changed: an argument object that you change after using it in a setup only matches that setup when the same object is passed again. Before, a new object equal to the changed one matched as well. Create the setup with the object as the code under test will pass it, or with a matcher. Objects that change after they were passed in a call that is not a setup are not affected: the library remembers the hash of a large object (with more than 256 keys or entries) from the first time it is passed, but that never changes a result, so such an object still matches a setup made with an equal object, before or after the change (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -346,6 +366,28 @@ console.log(repository.save(user)) // prints saved
 console.log(repository.save({ name: 'bob' }) === 'saved') // prints false
 ```
 
+### Omitted arguments
+*Applies to: the betas. 1.x compared omitted arguments in the same way.*
+
+An argument that a call leaves out at the end counts as `undefined`: it matches a literal `undefined` and matchers that accept `undefined`, such as `Arg.any()` and `Arg.any('undefined')`, and `f(1)` and `f(1, undefined)` are the same call. In the betas, an omitted argument matched nothing, so `f(1)` and `f(1, undefined)` were different calls. See [How arguments are compared](README.md#how-arguments-are-compared). So:
+
+* `users.find(Arg.any('undefined')).returns(...)` and `users.find(Arg.any()).returns(...)` now answer `users.find()`, and `received(1).find(Arg.any())` counts it.
+* **`didNotReceive().f(Arg.any())` now fails after `f()`**, and `received(count).log(Arg.any(), Arg.all())` counts `log()` as well.
+* A matcher setup that accepts `undefined` now answers calls with fewer arguments, and it is more specific than `Arg.all()`: after `add(Arg.any(), Arg.any()).returns('p')` and `add(Arg.all()).returns('w')`, `add(5)` returns `'p'`.
+* **A literal setup after a matcher setup that already answers it needs `configure` now:** after `calculator.multiply(1, Arg.any()).returns(10)`, `calculator.multiply(1).returns(1)` throws `TypeError: calculator.multiply(...).returns is not a function`, because `multiply(1)` returns 10. Write `calculator[configure]().multiply(1).returns(1)`, or make the literal setup first. In the same way, `f(undefined).returns(a)` followed by `f().returns(b)` configures one call twice.
+* Only the arguments themselves count: inside arrays and objects, deep strict equality still applies, so `[1]` and `[1, undefined]` are different.
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const logger = Substitute.for()
+logger.log('started')
+
+logger.received(1).log('started', undefined)
+logger.received(1).log('started', Arg.any())
+logger.didNotReceive().log('started', Arg.any()) // throws SubstituteException
+```
+
 ### `this` in `mimicks()`
 *Applies to: 1.x and the betas.*
 
@@ -354,9 +396,10 @@ A `mimicks()` function is called with the `this` of the call, like a method: the
 ### Protocol members read as `undefined`
 *Applies to: 1.x and the betas.*
 
-`Symbol.iterator`, `Symbol.asyncIterator`, `Symbol.hasInstance`, `Symbol.isConcatSpreadable`, `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, `Symbol.split`, `Symbol.species`, `Symbol.toStringTag`, `Symbol.unscopables`, `util.promisify.custom` and `asymmetricMatch` read as `undefined` on a substitute unless they are configured, and the reads are not recorded (see [Special members](README.md#special-members)). Before, they returned auto-substitutes. So:
+`Symbol.iterator`, `Symbol.asyncIterator`, `Symbol.hasInstance`, `Symbol.isConcatSpreadable`, `Symbol.match`, `Symbol.matchAll`, `Symbol.replace`, `Symbol.search`, `Symbol.split`, `Symbol.species`, `Symbol.toStringTag`, `Symbol.unscopables`, `util.promisify.custom`, `asymmetricMatch` and `__esModule` read as `undefined` on a substitute unless they are configured, and the reads are not recorded (see [Special members](README.md#special-members)). Before, they returned auto-substitutes. So:
 
 * `[].concat(sub)` keeps the substitute as one element (it was dropped), `value instanceof sub.SomeClass` is `false` (it was `true`), `'text'.startsWith(sub.prefix)` no longer throws, and `util.promisify(sub.readFile)` calls the substitute, on every supported Node.js version (the running Node.js' own `util.promisify.custom` is handled too; on Node.js 10.0 to 12.16.1 and 13.0 to 13.11 it is not `Symbol.for('nodejs.util.promisify.custom')`).
+* A substitute that stands in for a whole module, for example one that a `jest.mock()` factory returns for a CommonJS module, is its own default export: with TypeScript's `esModuleInterop`, Babel or esbuild, `import mailer from './mailer'` gives the substitute itself, so setups made on it answer the code under test. Before, `__esModule` read as an auto-substitute, which counts as `true`, so the default import was the auto-substitute `mailer.default` instead.
 * jest no longer takes a substitute for an asymmetric matcher. Before, `expect(fn).toHaveBeenCalledWith(sub)` and `expect(list).toContainEqual(sub)` passed whatever the arguments or items were, and a failing `expect(value).toEqual(sub)` threw jest's internal "Unexpected return from a matcher function" error. Now they compare the substitute by identity, so tests that passed only because of this fail.
 * **A substitute is not iterable.** `[...sub]`, `for...of`, `for await...of` and `Promise.all(sub)` on a substitute that is not configured throw a `TypeError`. In the betas they treated it as empty; in 1.x they threw a different `TypeError`. Configure the iterator, or mimick an array:
 
@@ -372,12 +415,35 @@ list[mimick](['a', 'b'])
 console.log(list.length) // prints 2
 ```
 
+### Freezing, defined properties and `in`
+*Applies to: 1.x and the betas.*
+
+* `Object.freeze()`, `Object.seal()` and `Object.preventExtensions()` work on a substitute and on an auto-substitute, and it keeps working afterwards. Before, the reads and setups after them threw a `TypeError` (in the betas, "Cannot add property _child, object is not extensible"; in 1.x, a proxy invariant error).
+* `Object.defineProperty(sub, key, descriptor)` defines a real property, which reads return without recording them. Before, it threw a `TypeError`.
+* A substitute has no own properties: `Object.keys(sub)` and `Reflect.ownKeys(sub)` are empty. In the betas, `Object.keys(sub)` listed internal fields such as `_key` and `_recorder`, and in 1.x and the betas, `Reflect.ownKeys(sub)` listed `length`, `name` and `prototype` of the library's internal function.
+* `key in sub` is `true` for a key with a setup, a key of a mimicked instance and a property defined with `Object.defineProperty()`, and `false` otherwise. Before, it answered for the library's internal function: `true` for `call`, `length` and the other members of functions, and `false` for configured members. Code under test that checks for an optional member with `in` now takes the branch that the test configured.
+
+See [Freezing, defined properties and `in`](README.md#freezing-defined-properties-and-in).
+
 ### Messages
 *Applies to: 1.x and the betas.*
 
 The wording of `SubstituteException` messages changed, for example "Expected to receive 2 method calls matching add(1, 2), but received 1.", followed by the calls that were received (at most 50). Tests that compare message texts need updating. When the kind of call is not known, messages say "property reads or method calls" instead of "property calls". A check of a member that was never used at all fails when it reads the member, so its message cannot name the expected arguments ("... matching add, but received none."); once the method has been called, the message names them. Messages contain ANSI colours only when the output is a terminal (`NO_COLOR`, `NODE_DISABLE_COLORS`, `TERM=dumb` and `FORCE_COLOR` are honoured). In the betas, messages always contained them; 1.x messages had no colours.
 
 `SubstituteException` is now exported from the package root: `import { SubstituteException } from '@fluffy-spoon/substitute'`.
+
+### Printing
+*Applies to: 1.x and the betas.*
+
+`String()`, template strings, `util.inspect()`, `console.log()` and `JSON.stringify()` of an auto-substitute give its path, such as `@Substitute.someProperty` or `@Substitute.getUser(1)`, followed by its received calls and setups, if it has any. Before, they gave a label such as `property<someProperty>: ` or `method<getUser>: (1)` (in 1.x, `[class SubstituteJS] -> someProperty`). The printout of a substitute now also lists the calls and setups of its auto-substitutes, under their paths. Tests that compare such texts need updating, and so do names derived from them, such as the `jit_@Substitute.__anonymousType` that Angular's TestBed makes for a substitute (it was `jit_property<__anonymousType>: `). See [Printing a substitute](README.md#printing-a-substitute).
+
+```js
+const { Substitute } = require('@fluffy-spoon/substitute')
+
+const app = Substitute.for()
+console.log(`${app.someProperty}`) // prints @Substitute.someProperty
+console.log(JSON.stringify({ user: app.getUser(1) })) // prints {"user":"@Substitute.getUser(1)"}
+```
 
 ## Imports and packaging
 *Applies to: 1.x and the betas.*
@@ -434,9 +500,12 @@ The typings were reworked. Most code compiles unchanged, but:
 * With a constrained type parameter (`function stub<T extends Calculator>(sub: SubstituteOf<T>)`, or a fixture class `Fixture<T extends Calculator>` with `sub = Substitute.for<T>()`), setups, checks and the `configure` view work through the constraint: `sub.total.returns(1)`, `sub.add(1, 2).returns(3)`, `sub.received().total = 1` and `sub[configure]().add(1, 2).returns(3)` compile, and the values are checked against the constraint's member types. With 2.0.0-beta.4, only property setups and checks of calls compiled there. Keys that exist only through the constraint's string index signature (`T extends { [key: string]: number; port: number }`, `sub.timeout.returns(5)`) can be configured, too, with values of the index signature's type. The exceptions (see [Typing limitations](README.md#typing-limitations)):
   * On older TypeScript versions only: on 3.6 to 4.7, calls of optional methods (and of members typed `fn | undefined`) have no setup API in such code; on 3.6 to 3.8, members whose type includes `null` or `undefined` have none either, and neither do `maybe?: T` or `orNull: T | null` of any type parameter, constrained or not, in an interface such as `Box<T>`. Configure them through `sub[configure]()`, which works on every version.
   * A union constraint whose variants' methods return different types (`T extends Cat | Dog`, with `speak(): 'meow'` and `speak(): 'woof'`): `.returns()` takes `never` there. Cast to the constraint: `(pet as SubstituteOf<Cat | Dog>).speak().returns('meow')`.
+  * On TypeScript 5.4 and newer, a method that the variants of a union constraint declare with different parameter lists (`T extends LogA | LogB`, with `log(message: string): void` and `log(message: string, level?: number): void`) has no setup API, even when every variant returns the same type. Use the `configure` view (`sub[configure]().log('x').returns()`) or cast to the constraint. Checks work.
   * A set of a key that exists only through the index signature cannot be checked (`sub.received().timeout = 5`). Write `(sub.received() as Settings).timeout = 5`.
 * A member whose type is a union of function types with different return types (`onResult: ((r: string) => number) | ((r: string) => string)`), and a method whose return type differs between the variants of a union (`Substitute.for<Cat | Dog>()` with `load(): Promise<number>` and `load(): Promise<string>`, or methods that return `this`), have the setup API with the union of the return types: `listeners.onResult('a').returns(1)` and `.returns('x')`, `pet.load().resolves(1)` and `.resolves('x')`, `.mimicks()` and the `configure` view. With 2.0.0-beta.4, `.resolves()` on such methods, and `.returns()` on methods that return `this` and on union-typed callback members, took `never`, and calls of a substitute of a union of function types (`Substitute.for<((e: string) => number) | ((e: string) => string)>()`) had no setup API.
-* The same holds for a method that the variants of a union declare with different parameter lists (an extra optional parameter, other parameter types, other overloads): `client.fetch('/a').resolves('ok')` for `fetch(url)` and `fetch(url, options?)` in `Substitute.for<ClientV1 | ClientV2>()`, and `reader.read('p').returns('text')` and `.returns(new Uint8Array())` for `read(path): string` and `read(path, encoding?): Uint8Array`. `.returns()` takes the return types of the variants whose overloads the call can reach; [Typing limitations](README.md#typing-limitations) has the exact rule, and two cases that need a cast to one variant. With 2.0.0-beta.4, `.returns()` on such methods was missing or took `never` when the return types differ, and on TypeScript 5.4 and newer it was missing even when they are the same.
+* The same holds for a method that the variants of a union declare with different parameter lists (an extra optional parameter, other parameter types, other overloads): `client.fetch('/a').resolves('ok')` for `fetch(url)` and `fetch(url, options?)` in `Substitute.for<ClientV1 | ClientV2>()`, and `reader.read('p').returns('text')` and `.returns(new Uint8Array())` for `read(path): string` and `read(path, encoding?): Uint8Array`. `.returns()` takes the return types of the variants that the call can reach, which depends on the number of arguments that the call passes; [Typing limitations](README.md#typing-limitations) has the exact rule, and the cases that need a cast to one variant (such as `Arg.any()` where the variants' parameter types differ). With 2.0.0-beta.4, `.returns()` on such methods was missing or took `never` when the return types differ, and on TypeScript 5.4 and newer it was missing even when they are the same. Unions whose variants have a string index signature (`{ kind: 'a'; [key: string]: unknown; speak(): 'meow' } | ...`) take the union of the return types as well; with 2.0.0-beta.4, `.returns()` was missing there.
+* Substitutes of constructor types and members that are classes support the setups and checks written as calls that [`new`](#new-is-a-call) needs: `Client('https://api').returns(client)` and `Client.received(1)('https://api')` for `Substitute.for<new (baseUrl: string) => ApiClient>()`, and `sdk.Client(Arg.any()).returns(client)` and `sdk.received(1).Client('https://api')` for a member `Client: typeof ApiClient`. `new Client('https://api')` keeps the constructor's parameter and instance types.
+* `Arg.any('bigint')` is typed `bigint`.
 * A member called `then` is typed `never`: substitutes are never thenables.
 * Members typed only `null` or `undefined` (`error?: undefined`, `ownerDocument: null`) keep their plain type and no longer have `.returns()` and the other setup methods. Configure them through `sub[configure]()`. In a union, a member that is only `null` or `undefined` in some variants (`{ data: string[]; error: null } | { data: null; error: Error }`, or `{ ok: true; value: string; error?: undefined } | { ok: false; value?: undefined; error: Error }`) has the setup API with the type the variants have in common (`result.data.returns(null)`). With 1.x and the betas, the `: null` form turned the substitute into `never` (on TypeScript 3.9 and newer); the `?: undefined` form compiled with 2.0.0-beta.4.
 * Substitutes of function types and of interfaces with call signatures are typed: `Substitute.for<(event: string) => string>()` supports `listener('saved').returns('ack')`, `listener.received(1)('saved')`, `listener[received](1)('saved')` and `listener[configure]()('saved').returns('ack')`. With 2.0.0-beta.4, the setup and the checks of such calls did not compile.
