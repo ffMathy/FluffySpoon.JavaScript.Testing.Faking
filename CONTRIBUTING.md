@@ -82,10 +82,22 @@ npm test
 ```
 
 `npm test` runs `npm run build:spec`, which compiles the specs together with the sources they import into
-`dist-spec/`, and then ava. It never writes into `dist/`, so running the tests (or interrupting them) cannot
+`dist-spec/`, and then ava twice. It never writes into `dist/`, so running the tests (or interrupting them) cannot
 leave a broken or missing `dist/` behind for publishing or for `npm link`.
 
-ava runs two groups of tests:
+The first ava run (`ava`, configured by `ava.config.js`) runs every test file except the timing-sensitive ones, with
+ava's usual parallelism. The timing-sensitive files are the spec files with performance limits (timings, and ratios
+of timings), listed once as `timingSensitive` in `ava.config.js`: `spec/regression/fixes/*hashing*.test.ts`,
+`spec/regression/fixes/performance.test.ts`, `spec/regression/fixes/round5.test.ts`,
+`spec/regression/fixes/round8.test.ts` and `spec/regression/fixes/ported-from-a.spec.ts`. The second run,
+`ava --config ava.perf.config.js --serial --concurrency=1`, runs only those, one test at a time, so that other test
+files cannot slow them down. Tests that compare timings take the median of several interleaved rounds. Both runs
+have a stall timeout of 3 minutes (ava's default of 10 seconds is too short for the packaging checks and the long
+serial tests on a busy machine). A new spec file that measures time must be added to `timingSensitive`: a test in
+`spec/regression/fixes/round8-hashing.test.ts` checks that every spec file that reads a clock runs in the second run,
+and that every spec file runs in exactly one of the two.
+
+The tests are of two kinds:
 
 - `spec/**/*.spec.ts` and `spec/**/*.test.ts`: the runtime behaviour of the library.
 - `packaging/**/*.test.js`: packaging and release checks. They work on a temporary copy of the repository: the
@@ -99,12 +111,20 @@ ava runs two groups of tests:
   The temporary directories are removed afterwards.
 
 No test leaves files in the temporary directory (`os.tmpdir()`). A run leaves only Node.js' module compile cache there
-(`node-compile-cache/`, written when npm, npx or tsc start Node.js) and one empty directory that ava itself creates.
+(`node-compile-cache/`, written when npm, npx or tsc start Node.js) and an empty directory that ava itself creates
+for each of its two runs.
 
 To run a single file or test, use ava's options after building the specs, for example:
 
 ```sh
 npm run build:spec && npx ava spec/regression/returns.spec.ts --match '*order*'
+```
+
+A timing-sensitive file needs the second configuration, because the first one leaves it out (plain `npx ava <file>`
+runs nothing for it):
+
+```sh
+npm run build:spec && npx ava --config ava.perf.config.js spec/regression/fixes/performance.test.ts
 ```
 
 ### Type tests
@@ -123,15 +143,24 @@ npm run test:types:min-ts
 ```
 
 The README promises TypeScript 3.6 or newer. This builds `dist/` and type-checks `spec-types/min-ts/consumer.ts`
-against the built typings (resolved through `package.json` like an installed copy) with TypeScript 3.6, with
-`skipLibCheck` off and on. TypeScript 3.6 is installed on the fly with `npx`, so this needs access to the npm
-registry. To check other versions after `npm run build`, pass them explicitly:
-`node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
+against the built typings (resolved through `package.json` like an installed copy) with TypeScript 3.6 and 4.3 (a
+version whose typing behaviour the consumer pins, `PINNED_TYPESCRIPT_VERSIONS` in `spec-types/min-ts/check.js`),
+each with `skipLibCheck` off and on. These TypeScript versions are installed on the fly with `npx`, so this needs
+access to the npm registry. To check other versions after `npm run build`, pass them explicitly (instead of the
+default ones): `node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
 `@ts-expect-error`, for example). If a change makes the typings need a newer TypeScript, that is a breaking change:
 raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the documented minimum together.
-Afterwards the same script runs `spec-types/TD-10.T32.jsdoc.js`, which uses the TypeScript of this repository to
-check that the public API in the built typings carries documentation comments (editor quick info). It fails when
-one of them is missing.
+Afterwards the same script runs two more checks with the TypeScript of this repository:
+
+- `spec-types/TD-10.T32.jsdoc.js` checks that the public API in the built typings carries documentation comments
+  (editor quick info). It fails when one of them is missing.
+- `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
+  compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
+  against the built typings and fails when that needs more type instantiations than its budget,
+  `INSTANTIATION_BUDGET` in the script: 470,000 (467,858 with TypeScript 5.9.2 now). Instantiation counts are
+  deterministic, unlike timings. A change to the typings that needs more must make them cheaper, or raise the budget
+  in the same change with a reason in the script's header. To run it alone: `npm run build && node
+  spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
 
 ### Documentation examples
 
@@ -154,10 +183,20 @@ not against `src/`, and checks two things:
 
 - `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
   inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
-  after the test function has returned. It also runs `test-runners/jest-matchers/` (`npm run validate:jest-matchers`),
-  which must pass: substitutes used inside jest matchers compare by identity, so a non-matching
-  `expect(fn).toHaveBeenCalledWith(substitute)` fails and `expect(42).toEqual(substitute)` fails with jest's normal
-  assertion error.
+  after the test function has returned. It also runs three suites that must pass:
+  - `test-runners/jest-matchers/` (`npm run validate:jest-matchers`): substitutes used inside jest matchers compare
+    by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
+    `expect(42).toEqual(substitute)` fails with jest's normal assertion error. It also checks that snapshots
+    (`toMatchSnapshot()` against the committed `__snapshots__/`, and `toMatchInlineSnapshot()`) and failure diffs of
+    values that hold substitutes finish quickly, print paths, and do not show substitutes as mock functions.
+  - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
+    vitest's matchers, snapshots and diffs, and how vitest and `util.inspect` see printed, frozen and `in`-probed
+    substitutes.
+  - `test-runners/jest-modules/` (`npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel`): a
+    substitute that stands in for a whole module (a `jest.mock()` factory), imported by the code under test as a
+    namespace, with named imports, with a default and named import together, and as a default export through the
+    factory that README "Mocking a whole module" documents. It runs once compiled by ts-jest with `esModuleInterop`
+    (`jest.modules.ts-jest.config.js`) and once by babel-jest (`jest.modules.babel.config.js`).
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
@@ -199,16 +238,18 @@ does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
 `mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
-`npm run validate:jest-matchers` is the exception: it is expected to pass.
+`npm run validate:jest-matchers`, `npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel` are the
+exceptions: they are expected to pass, as is the vitest-matchers suite.
 
 ## Continuous integration
 
 `.github/workflows/nodejs.yml` runs on every push and pull request:
 
-- **test**: `npm ci`, `npm run build`, `npm test`, `npm run test:types --if-present` and `npm run test:docs` on
-  every supported Node.js LTS line (22, 24 and 26).
-- **types-min-ts**: `npm run test:types:min-ts`, the built typings with the oldest supported TypeScript (3.6) and
-  the documentation comments of the public API, on the development Node.js version.
+- **test**: `npm ci`, `npm run build`, `npm test` (both ava runs), `npm run test:types --if-present` and
+  `npm run test:docs` on every supported Node.js LTS line (22, 24 and 26).
+- **types-min-ts**: `npm run test:types:min-ts`: the built typings with the oldest supported TypeScript (3.6) and
+  with 4.3, the documentation comments of the public API, and the type-check cost budget, on the development
+  Node.js version.
 - **compatibility**: the compatibility checks against the packed package on the same Node.js versions.
 - **minimum-node**: packs the package and smoke-tests it (`packaging/smoke/`) on the oldest supported Node.js
   version (`MINIMUM_NODE_VERSION`, which must equal `engines.node`), on the oldest version with native ES
