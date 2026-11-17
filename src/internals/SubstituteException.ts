@@ -71,13 +71,20 @@ const describeRecord = (record: CallRecord, colors: boolean): string => {
   }
 }
 
-/** E52: whether the expected call or assignment prints like one that was received but does not match it. */
+/**
+ * E52: whether the expected call or assignment prints like one that was received (and is listed) but does not match
+ * it.
+ */
 const printsAlike = (mismatch: CallCountMismatch): boolean => {
   const { expected } = mismatch
   if (expected.kind !== 'method' && expected.kind !== 'set') return false
+  const kind = expected.kind === 'method' ? 'call' : 'set'
   const expectedText = formatArguments(expected.specification?.value ?? [], false)
-  return mismatch.listed.some(({ record, matches }) => !matches && record.kind === (expected.kind === 'method' ? 'call' : 'set') &&
-    formatArguments(record.args ?? [], false) === expectedText)
+  for (let index = 0; index < mismatch.listed.length && index < MAX_LISTED_CALLS; index++) {
+    const { record, matches } = mismatch.listed[index]
+    if (!matches && record.kind === kind && formatArguments(record.args ?? [], false) === expectedText) return true
+  }
+  return false
 }
 
 const describeError = (error: unknown): string => {
