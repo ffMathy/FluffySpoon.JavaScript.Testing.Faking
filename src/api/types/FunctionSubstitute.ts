@@ -387,8 +387,13 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // then checks that the signature for these arguments returns that: a return type that is conditional on a type
 // parameter (`conv<K>(e: K): K extends string ? number : boolean`, whose `conv('x')` returns a `number` but would be
 // inferred as `boolean`) cannot be inferred, and is `any` (R7TD-1, T53).
+// Arguments that fit the parameter list with the type parameters replaced by their constraints but not the method's own
+// signature (`same(1, 'x')` of `same<T extends string | number>(a: T, b: T): T`, `log(1, 'x')` of `log<T>(a: T, b: T):
+// void`) take what that list returns (`TReturnType`), never `any` (R8TD-1, T54): `same(1, 'x').returns({})` and
+// `log(1, 'x').returns(5)` do not compile.
 type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any
+  F extends (...args: P) => any ? (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
+  TReturnType
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
@@ -424,9 +429,9 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // earlier one whose parameters it shares, whose result usually takes the same values (see `UnionReturnTypes`).
 type CombinedSignatures<TFunction, TView extends SubstituteView> =
   false extends EachCallable<TFunction> ? unknown :
-  SignaturesOfSlots<CallbackThisTypes<
-    SlotParameterLists<TFunction, EarlierSlot> | SlotParameterLists<TFunction, 6> | SlotParameterLists<TFunction, 7>
-  >, TView, TFunction>
+  SignaturesWithThis<CallbackThisTypes<AllParameterLists<TFunction>>, TView, TFunction>
+type SignaturesWithThis<TThis, V extends SubstituteView, F> =
+  SignaturesOfSlots<TThis, V, F> & OwnThisSignature<TThis, V, F>
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
 // The boxes of the lists of the earlier overloads, of the last overload but one, and of the last overloads
 // (`Overloads` slots), in this order, so that the signatures keep the order of the overloads where it matters most: a
@@ -472,6 +477,8 @@ type SignatureBox = {
 type DistinctParameterLists<TLists, TThis> = TLists extends any[] ?
   UnnamedArguments<[TThis] extends [never] ? TLists : Extract<WithCallbackThis<TLists, TThis>, any[]>> :
   never
+type AllParameterLists<TFunction> =
+  SlotParameterLists<TFunction, EarlierSlot> | SlotParameterLists<TFunction, 6> | SlotParameterLists<TFunction, 7>
 type SlotParameterLists<TVariant, TSlot extends number> = TVariant extends unknown ? ParameterListOf<Overloads<TVariant>[TSlot]> : never
 type ParameterListOf<TOverload> = TOverload extends Overload<any[], any> ? TOverload['arguments'] : never
 // Not distributive over a parameter's own type (`keyof HTMLElementEventMap` is a union of many literals); `any` gives
@@ -489,6 +496,52 @@ type WithThis<TParameter, TThis> =
 type UnnamedCallbackArguments<A> = A extends [any] ? [A[0]] : UnnamedArguments<Extract<A, any[]>>
 // A separate alias, so that the callbacks of several variants that differ only in their `this` type give one type.
 type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => R
+
+// A callback whose `this` is annotated with the type of one variant (`function (this: Btn, n: number) {}`) does not fit
+// a callback with all the `this` types of the member (`TThis`, the signatures above), as `this` is compared
+// contravariantly. Such calls resolve to one more signature (R8TD-3, T56), which takes the parameter lists of the
+// member with each callback taking a callback with the `this` type of any variant whose list is the same apart from
+// the `this` types of its callbacks (`OwnThisListsOf`): with `onClick(cb: (this: Btn, n: number) => void)` in one variant
+// and `onClick(cb: (this: Lnk, n: number) => void)` in the other, `onClick` takes `function (this: Btn, n: number)` and
+// `function (this: Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x:
+// number) => void)`, `on(function (this: E2, x: string) {})` does not compile. Its parameter list is the constraint of
+// its type parameter, which TypeScript only computes when a call gets to this signature, and being generic, it is left
+// out when TypeScript compares the signatures of the variants of a union, which made such unions of callbacks very slow
+// to check on TypeScript 3.6 for lib.dom's elements.
+// The lists that differ only in the `this` types of their callbacks are the lists of the signatures above
+// (`DistinctParameterLists`, whose callbacks all take the `this` types `TThis`); the `this` types of each group are
+// computed from the parameter lists of the variants.
+// (The lists of the signatures above are passed in: computing them in the constraint made TypeScript 3.6 and 4.1
+// report "Type instantiation is excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`:
+// TypeScript 4.1 and older decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
+type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends never ? unknown :
+  <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>, TThis>) =>
+    PrefixCallResult<V, P, P, F>
+// The arguments `P` fit one of the lists with the variants' own `this` types. Only checked for calls that pass a
+// callback with a `this` type of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature
+// first, do not compute these lists.
+// (The lists are wrapped in a tuple, so that TypeScript computes them only when it checks the arguments, not when it
+// infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
+// they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
+// `any`, which otherwise made them report "Type instantiation is excessively deep".)
+type OwnThisArguments<P extends any[], TAllLists, TThis> =
+  (CallbackThisTypes<P> & {}) extends never ? never :
+  [P] extends [OwnThisLists<TAllLists, TThis>] ? unknown : never
+type OwnThisLists<TAllLists, TThis> = IsAny<TAllLists> extends true ? any[] :
+  OwnThisListsOf<DistinctParameterLists<TAllLists, TThis>, TAllLists, TThis>
+type OwnThisListsOf<TLists, TAllLists, TThis> =
+  TLists extends any[] ? Extract<WithEachCallbackThis<TLists, GroupThisTypes<TLists, TAllLists, TThis>>, any[]> : never
+// The `this` types of the callbacks of the lists `TAllLists` (of the variants) that are the list `TList` apart from
+// these `this` types.
+type GroupThisTypes<TList, TAllLists, TThis> =
+  TAllLists extends any[] ? (SameList<DistinctParameterLists<TAllLists, TThis>, TList> extends true ? CallbackThisTypes<TAllLists> : never) : never
+type SameList<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type WithEachCallbackThis<TList, TThis> = { [P in keyof TList]: WithEachThis<TList[P], TThis> }
+type WithEachThis<TParameter, TThis> =
+  [TParameter] extends [(this: infer TOwnThis, ...args: infer A) => infer R] ?
+  (unknown extends TOwnThis ? TParameter : EachCallbackWithThis<TThis, Extract<A, any[]>, R>) :
+  TParameter
+type EachCallbackWithThis<TThis, A extends any[], R> = TThis extends unknown ? (this: TThis, ...args: A) => R : never
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,
@@ -599,7 +652,11 @@ type VariantSignatures<TFunction, TView extends SubstituteView> = SignaturesInBo
   [union: number]: { signatures: CombinedSignatures<TFunction, TView> }
 }[VariantsKind<TFunction>]>
 type SignaturesInBox<TBox> = TBox extends { signatures: infer TSignatures } ? TSignatures : never
-type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
+/**
+ * `any` for a union (told apart from its variants by type identity), `'single'` for any other type. In generic code
+ * TypeScript cannot decide it and uses `'single'`.
+ */
+export type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
 type IsUnion<TVariant, TFunction> = TVariant extends unknown ? (Equals<TVariant, TFunction> extends true ? false : true) : never
 
 // Primitives, `never` and `any` are ruled out without distributing over a (possibly very large) union of literals
