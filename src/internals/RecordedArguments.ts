@@ -333,6 +333,14 @@ const equivalentNested = (a: unknown, b: unknown, depth = 0): boolean => {
   }
 }
 
+/** Whether two expected arguments without nested matchers are the same, matchers compared as matchers. */
+const equivalentArgument = (a: unknown, b: unknown): boolean => {
+  const aIsMatcher = isArgumentMatcher(a)
+  const bIsMatcher = isArgumentMatcher(b)
+  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && argumentsAreEquivalent(a, b)
+  return literalEquals(a, b)
+}
+
 /**
  * An argument list. Either the actual arguments of a call, or the expected arguments of a setup or an
  * assertion (a specification), which may contain Arg matchers.
@@ -386,10 +394,13 @@ export class RecordedArguments {
     return specification
   }
 
-  /** Whether two lists of actual (matcher-free) arguments are equal, argument by argument. */
+  /**
+   * Whether two lists of actual (matcher-free) arguments are equal, argument by argument. E22: a position that one list
+   * does not have reads as undefined, so `f(1)` and `f(1, undefined)` are equal, and `f(1)` and `f(1, 2)` are not.
+   */
   static literalsEqual(expected: readonly unknown[], actual: readonly unknown[]): boolean {
-    if (expected.length !== actual.length) return false
-    for (let index = 0; index < expected.length; index++) if (!literalEquals(expected[index], actual[index])) return false
+    const length = Math.max(expected.length, actual.length)
+    for (let index = 0; index < length; index++) if (!literalEquals(expected[index], actual[index])) return false
     return true
   }
 
@@ -433,15 +444,27 @@ export class RecordedArguments {
     return this.matchDetailed(actualArguments).matches
   }
 
+  /**
+   * E22: a position that one side does not have (an omitted trailing argument) reads as undefined. It matches only an
+   * undefined argument, or a matcher that accepts undefined (Arg.any(), Arg.any('undefined'), ...): `f(1)` and
+   * `f(1, undefined)` match each other, `set('a', 1, Arg.any())` matches `set('a', 1)`, and `f(1)` and `f(1, 2)` do not.
+   * Arg.all() at a position matches whatever remains from there, including nothing.
+   */
   public matchDetailed(actualArguments: readonly unknown[] | undefined): ArgumentsMatch {
     const expected = this._value
     if (expected === undefined || actualArguments === undefined)
       return expected === undefined && actualArguments === undefined ? MATCH : NO_MATCH
 
-    for (let index = 0; index < expected.length; index++) {
+    const length = Math.max(expected.length, actualArguments.length)
+    for (let index = 0; index < length; index++) {
+      // an argument the specification does not have: only undefined matches it
+      if (index >= expected.length) {
+        if (actualArguments[index] !== undefined) return NO_MATCH
+        continue
+      }
       const expectedArgument = expected[index]
       if (isAllArguments(expectedArgument)) return MATCH
-      if (index >= actualArguments.length) return NO_MATCH
+      // undefined when the call does not have this argument
       const actualArgument = actualArguments[index]
       if (isSingleArgument(expectedArgument)) {
         if (isArgumentMatcher(actualArgument)) return NO_MATCH
@@ -459,25 +482,28 @@ export class RecordedArguments {
       }
       if (!literalEquals(expectedArgument, actualArgument)) return NO_MATCH
     }
-    return expected.length === actualArguments.length ? MATCH : NO_MATCH
+    return MATCH
   }
 
-  /** True when both specifications are the same (used to recognise a re-configuration). */
+  /**
+   * True when both specifications are the same (used to recognise a re-configuration). E22: a position that one of them
+   * does not have is the same as a literal undefined (`f(1)` and `f(1, undefined)` are one specification), and not the
+   * same as a matcher.
+   */
   public equals(other: RecordedArguments): boolean {
     const a = this._value
     const b = other._value
     if (a === undefined || b === undefined) return a === b
-    if (a.length !== b.length) return false
-    if (this._matcherContainers === undefined && other._matcherContainers === undefined) {
-      return a.every((argument, index) => {
-        const otherArgument = b[index]
-        const aIsMatcher = isArgumentMatcher(argument)
-        const bIsMatcher = isArgumentMatcher(otherArgument)
-        if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && argumentsAreEquivalent(argument, otherArgument)
-        return literalEquals(argument, otherArgument)
-      })
+    const plain = this._matcherContainers === undefined && other._matcherContainers === undefined
+    const length = Math.max(a.length, b.length)
+    for (let index = 0; index < length; index++) {
+      if (index >= a.length || index >= b.length) {
+        if ((index < a.length ? a[index] : b[index]) !== undefined) return false
+        continue
+      }
+      if (!(plain ? equivalentArgument(a[index], b[index]) : equivalentNested(a[index], b[index]))) return false
     }
-    return a.every((argument, index) => equivalentNested(argument, b[index]))
+    return true
   }
 
   private classifyArguments(rawArguments: any[]): ArgumentsClass {

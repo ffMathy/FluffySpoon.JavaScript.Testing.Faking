@@ -223,7 +223,9 @@ test('D3/D4 precedence: the most specific setup wins, then the most recent one',
   calculator.add(1, Arg.any()).returns('one-any')
   t.is(calculator.add(1, 2), 'one-any')
   t.is(calculator.add(2, 2), 'any-any')
-  t.is(calculator.add(2), 'all')
+  // E22 (round 7): add(2) has an omitted second argument, which Arg.any() matches
+  t.is(calculator.add(2), 'any-any')
+  t.is(calculator.add(2, 2, 2), 'all')
   calculator[configure]().add(1, 2).returns('literal')
   t.is(calculator.add(1, 2), 'literal')
   calculator.add(Arg.is((x: number) => x === 1), Arg.any()).returns('newer predicate')
@@ -231,7 +233,7 @@ test('D3/D4 precedence: the most specific setup wins, then the most recent one',
   t.is(calculator.add(1, 2), 'literal')
   // a call with matchers is never recorded and never runs a substitution
   calculator.add(Arg.any(), 2)
-  t.notThrows(() => calculator.received(6).add(Arg.all()))
+  t.notThrows(() => calculator.received(7).add(Arg.all()))
 })
 
 test('D9 a failing property-style assertion is deferred only in the ambiguous case', t => {
