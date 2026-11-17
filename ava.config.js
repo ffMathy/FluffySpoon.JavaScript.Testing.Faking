@@ -4,8 +4,9 @@
 const timingSensitive = [
 	'spec/regression/fixes/*hashing*.test.ts',
 	'spec/regression/fixes/performance.test.ts',
-	// these two hold one timing test each among other tests
+	// these hold a few timing tests among other tests
 	'spec/regression/fixes/round5.test.ts',
+	'spec/regression/fixes/round8.test.ts',
 	'spec/regression/fixes/ported-from-a.spec.ts'
 ]
 
