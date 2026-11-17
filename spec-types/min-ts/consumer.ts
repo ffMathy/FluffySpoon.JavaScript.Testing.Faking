@@ -190,6 +190,23 @@ function stubBox<T>(box: SubstituteOf<Box<T>>, value: T) {
 }
 stubBox(Substitute.for<Box<number>>(), 1)
 
+// R6V-4 / T43: members reached through a generic key of a mapped type keep their setup API
+function stubByKey<K extends string>(sub: SubstituteOf<Record<K, () => number>>, key: K) {
+  sub[key]().returns(1)
+  sub[configure]()[key]().returns(2)
+}
+function stubLoaderByKey<K extends string>(sub: SubstituteOf<Record<K, (id: string) => Promise<number>>>, key: K) {
+  sub[key]('a').resolves(1)
+  sub[key](Arg.any()).rejects(new Error())
+}
+type EventHandlers<E extends string> = { [P in E]: (payload: string) => boolean }
+function stubHandler<E extends string>(handlers: SubstituteOf<EventHandlers<E>>, event: E) {
+  handlers[event]('p').returns(true)
+}
+stubByKey(Substitute.for<Record<'a', () => number>>(), 'a')
+stubLoaderByKey(Substitute.for<Record<'a', (id: string) => Promise<number>>>(), 'a')
+stubHandler(Substitute.for<EventHandlers<'saved'>>(), 'saved')
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()

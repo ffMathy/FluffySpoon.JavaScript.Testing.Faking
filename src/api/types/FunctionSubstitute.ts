@@ -294,10 +294,11 @@ type UnnamedArgumentsOf<A extends any[], TMinimum, TMaximum> =
 // TypeScript cannot decide it and uses `'single'`. A union is told apart by type identity, not by assignability:
 // variants that are assignable to each other (`log(message: string): void` and `log(message: string, level?: number):
 // void`) still need the combined signatures.
-type VariantSignatures<TFunction, TView extends SubstituteView> = {
+type VariantSignatures<TFunction, TView extends SubstituteView> = SignaturesInBox<{
   single: { signatures: EachSignatures<TFunction, TView, never> }
   [union: number]: { signatures: CombinedSignatures<TFunction, TView> }
-}[VariantsKind<TFunction>]['signatures']
+}[VariantsKind<TFunction>]>
+type SignaturesInBox<TBox> = TBox extends { signatures: infer TSignatures } ? TSignatures : never
 type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
 type IsUnion<TVariant, TFunction> = TVariant extends unknown ? (Equals<TVariant, TFunction> extends true ? false : true) : never
 
