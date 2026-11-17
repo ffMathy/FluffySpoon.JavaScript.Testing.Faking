@@ -405,6 +405,61 @@ const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): 
   return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
 }
 
+/*
+ * E50 (R8FE-6): converting a substitute to a primitive (template strings, String(), `+`, comparisons) gives the
+ * printout, unless the test configured or mimicked the conversion: then it follows JavaScript's OrdinaryToPrimitive,
+ * as an ordinary object with those methods would. A mimicked instance's Symbol.toPrimitive (a Date, for example) is used
+ * as it is. Otherwise toString() and valueOf() are tried in the order of the hint ('string': toString first; 'number'
+ * and 'default': valueOf first), each only if it is configured (a call setup that matches `()`, or a property setup
+ * whose value is a function) or mimicked (a method of the instance other than Object.prototype's and
+ * Function.prototype's); the first primitive result is the answer. Such a call is recorded, as a call made by the code
+ * under test (`id.received(1).toString()`). When none answers with a primitive, the printout is the answer.
+ */
+const NO_PRIMITIVE: unique symbol = Symbol('no primitive')
+
+const isPrimitive = (value: unknown): boolean => value === null || (typeof value !== 'object' && typeof value !== 'function')
+
+const isDefaultConversion = (method: unknown): boolean =>
+  method === Object.prototype.toString || method === Object.prototype.valueOf || method === Function.prototype.toString
+
+/** The Symbol.toPrimitive of a substitute or an auto-substitute (see above). */
+const toPrimitiveOf = (face: Face): Function => function toPrimitive(this: unknown, hint: unknown) {
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state !== undefined && (state.mimicked !== undefined || state.isConfiguredKey('toString') || state.isConfiguredKey('valueOf'))) {
+    const value = configuredPrimitive(state, hint, this, toPrimitive)
+    if (value !== NO_PRIMITIVE) return value
+  }
+  return printFace(face, false)
+}
+
+const configuredPrimitive = (state: SubstituteState, hint: unknown, receiver: unknown, start: Function): unknown => {
+  const instance = state.mimicked?.instance
+  if (instance !== undefined && (isSubstituteProxy(instance) || hasMember(instance, Symbol.toPrimitive))) {
+    const convert = instance[Symbol.toPrimitive]
+    if (typeof convert === 'function') return Reflect.apply(convert, instance, [hint])
+  }
+  for (const key of hint === 'string' ? ['toString', 'valueOf'] : ['valueOf', 'toString']) {
+    const value = configuredConversion(state, key, instance, receiver, start)
+    if (value !== NO_PRIMITIVE && isPrimitive(value)) return value
+  }
+  return NO_PRIMITIVE
+}
+
+/** The result of a configured or mimicked toString() / valueOf(), called as the code under test would (see above). */
+const configuredConversion = (state: SubstituteState, key: string, instance: any, receiver: unknown, start: Function): unknown => {
+  const property = state.propertySubstitution(key)
+  if (property !== undefined) {
+    state.addRecord('get', key, undefined, captureStack(start))
+    const method = execute(property)
+    return typeof method === 'function' ? Reflect.apply(method, receiver, []) : NO_PRIMITIVE
+  }
+  const call = state.findCallSubstitution(key, new ArgumentHashes([]))
+  const mimicked = instance !== undefined && !isSubstituteProxy(instance) && hasMember(instance, key) &&
+    typeof instance[key] === 'function' && !isDefaultConversion(instance[key])
+  if ((call === undefined || call.method === 'auto') && !mimicked) return NO_PRIMITIVE
+  return resolveCall(state, key, [], state.addRecord('call', key, [], captureStack(start)), NO_SELF)
+}
+
 /** Whether a member has a setup of its own (as a property or as a method), or the mimicked instance has it. */
 const configuresMember = (state: SubstituteState, key: PropertyKey): boolean =>
   state.propertySubstitution(key) !== undefined ||
@@ -469,6 +524,7 @@ const REAL_READ: unique symbol = Symbol('real read')
 
 /** A member access on a substitute or an auto-substitute, unless it is a real read (then REAL_READ). */
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
+  if (property === Symbol.toPrimitive) return toPrimitiveOf(face)
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
   const candidate = adjacentHandOut(face)

@@ -407,7 +407,7 @@ test('R8FE-4 (E49) an Arg.is predicate that returns a promise is a usage error, 
     await new Promise(resolve => setTimeout(resolve, 20))
     t.deepEqual(rejections, [], 'the rejected promises were handled')
 
-    // a predicate that returns any other value matches when the value is truthy (as before)
+    // a predicate that returns any other value matches when the value is truthy (as before, documented as "true")
     const named = Substitute.for<any>()
     named.greet(Arg.is((user: any) => user.name)).returns('hi')
     t.is(named.greet({ name: 'ann' }), 'hi')
@@ -415,4 +415,72 @@ test('R8FE-4 (E49) an Arg.is predicate that returns a promise is a usage error, 
   } finally {
     process.removeListener('unhandledRejection', onRejection)
   }
+})
+
+// ---- E50: conversions to a primitive follow a configured or mimicked toString / valueOf ----------------------------
+
+test('R8FE-6 (E50) a configured toString() or valueOf() is used when the code under test converts the substitute', t => {
+  const describe = (id: unknown, logger: any) => logger.info(`saving ${id}`) // the code under test
+  const id = Substitute.for<any>()
+  id.toString().returns('u1')
+  const logger = Substitute.for<any>()
+  describe(id, logger)
+  t.notThrows(() => logger.received(1).info('saving u1'))
+  t.is(String(id), 'u1')
+  t.is(`${id}`, 'u1')
+  t.is(id + '!', 'u1!', "hint 'default': valueOf() is not configured, so toString() answers")
+  t.notThrows(() => id.received(4).toString(), 'the conversions are calls of toString()')
+  t.true(inspect(id).startsWith('@Substitute {'), 'util.inspect still shows the printout')
+
+  const money = Substitute.for<any>()
+  money.valueOf().returns(5)
+  t.is((money as any) + 1, 6)
+  t.true((money as any) > 3)
+  t.is(String(money), '5', "hint 'string': toString() is not configured, so valueOf() answers")
+  t.notThrows(() => money.received(3).valueOf())
+
+  // a setup for other arguments, or one that does not give a primitive, leaves the printout
+  const radix = Substitute.for<any>()
+  radix.toString(16).returns('ff')
+  t.true(String(radix).startsWith('@Substitute {'), String(radix))
+  t.notThrows(() => radix.didNotReceive().toString(), 'and records nothing')
+  const objectValue = Substitute.for<any>()
+  objectValue.valueOf().returns({ not: 'a primitive' })
+  t.true(`${objectValue}`.startsWith('@Substitute {'))
+  t.true(String(Substitute.for<any>()).startsWith('@Substitute'), 'unconfigured: the printout, as before')
+
+  // an auto-substitute, and a property setup whose value is a function
+  const order = Substitute.for<any>()
+  order.id.toString().returns('o-7')
+  t.is(`${order.id}`, 'o-7')
+  const named = Substitute.for<any>()
+  named[configure]().toString.returns(() => 'named')
+  t.is(`${named}`, 'named')
+})
+
+test('R8FE-6 (E50) a mimicked instance\'s toString(), valueOf() and Symbol.toPrimitive are used, its default ones are not', t => {
+  const money = Substitute.for<any>()
+  money[mimick]({ amount: 5, valueOf() { return 5 }, toString() { return '5 EUR' } })
+  t.is(money + 1, 6)
+  t.is(`${money}`, '5 EUR')
+  t.true(money > 3)
+  t.notThrows(() => money.received(1).toString())
+
+  const date = Substitute.for<any>()
+  date[mimick](new Date(0))
+  t.is(`${date}`, String(new Date(0)))
+  t.is(+date, 0)
+
+  class Id { constructor(private readonly value: string) { } toString() { return `id:${this.value}` } }
+  const id = Substitute.for<any>()
+  id[mimick](new Id('7'))
+  t.is(`${id}`, 'id:7')
+
+  // a plain object or a function has only the default conversions: the printout, as before
+  const config = Substitute.for<any>()
+  config[mimick]({ port: 80 })
+  t.true(`${config}`.startsWith('@Substitute'), `${config}`)
+  const fn = Substitute.for<any>()
+  fn[mimick](function real() { return 1 })
+  t.true(String(fn).startsWith('@Substitute'), String(fn))
 })
