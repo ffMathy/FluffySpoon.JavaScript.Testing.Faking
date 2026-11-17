@@ -8,6 +8,13 @@ export type IsNever<T> = [T] extends [never] ? true : false
 
 export type IsAny<T> = 0 extends (1 & T) ? true : false
 
+/**
+ * `true` for a union (told apart from its members by type identity), `false` otherwise. In generic code TypeScript
+ * cannot decide it.
+ */
+export type IsUnion<T> = true extends EachDiffersFrom<T, T> ? true : false
+type EachDiffersFrom<TMember, T> = TMember extends unknown ? (Equals<TMember, T> extends true ? false : true) : never
+
 /** The intersection of the members of the union `U` (`unknown` for `never`). */
 export type UnionToIntersection<U> = (U extends unknown ? (union: U) => void : never) extends ((union: infer I) => void) ? I : never
 

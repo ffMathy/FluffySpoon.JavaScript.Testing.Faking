@@ -90,7 +90,8 @@ ReturnArg<any> : T extends 'string' ?
 ReturnArg<string> : T extends 'number' ?
 ReturnArg<number> : T extends 'boolean' ?
 ReturnArg<boolean> : T extends 'symbol' ?
-ReturnArg<symbol> : T extends 'undefined' ?
+ReturnArg<symbol> : T extends 'bigint' ?
+ReturnArg<bigint> : T extends 'undefined' ?
 UndefinedArg<TContext> : T extends 'object' ?
 ReturnArg<any> : T extends 'function' ?
 AnyFunction : T extends 'array' ?
@@ -100,12 +101,13 @@ ReturnArg<any[]> : any
 // the matcher without `.not`.
 type MapAnyNotReturn<T> = T extends 'undefined' ? ReturnArg<any> : MapAnyReturn<T, undefined>
 
-type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any'
+type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'bigint' | 'undefined' | 'object' | 'function' | 'array' |
+  'any'
 type Any = {
   /**
    * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
-   * 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and substitutes),
-   * 'array' or 'any'.
+   * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
+   * substitutes), 'array' or 'any'.
    */
   <T extends AnyType = 'any', TContext = undefined>(type?: T): MapAnyReturn<T, TContext>
   /**
@@ -119,8 +121,8 @@ type AnyNot = {
   /**
    * The inverse of `Arg.any`: matches every argument that is NOT of the given type (it does not match where
    * `Arg.any(type)` matches): `Arg.any.not('string')` matches every argument that is not a string, and
-   * `Arg.any.not()` matches nothing. Types: 'string', 'number', 'boolean', 'symbol', 'undefined', 'object' (non-null
-   * objects, arrays and substitutes), 'function' (functions, classes and substitutes), 'array' or 'any'.
+   * `Arg.any.not()` matches nothing. Types: 'string', 'number', 'boolean', 'symbol', 'bigint', 'undefined', 'object'
+   * (non-null objects, arrays and substitutes), 'function' (functions, classes and substitutes), 'array' or 'any'.
    */
   <T extends AnyType = 'any'>(type?: T): MapAnyNotReturn<T>
 }
@@ -183,8 +185,9 @@ type ArgMatchers = {
   is: Is
   /**
    * Matches any argument (`Arg.any()`), or any argument of a type (`Arg.any('string')`): 'string', 'number',
-   * 'boolean', 'symbol', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions,
-   * classes and substitutes), 'array' or 'any'. `Arg.any.not('string')` matches every argument that is not a string.
+   * 'boolean', 'symbol', 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function'
+   * (functions, classes and substitutes), 'array' or 'any'. `Arg.any.not('string')` matches every argument that is not
+   * a string.
    */
   any: Any
 }

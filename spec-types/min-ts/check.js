@@ -8,7 +8,8 @@
 // The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on.
 //
 // Afterwards it runs spec-types/TD-10.T32.jsdoc.js, which checks (with the project's own TypeScript) that the public
-// API in the same built typings carries documentation comments.
+// API in the same built typings carries documentation comments, and spec-types/R6V-5.R6TD-2.T44.check-cost.js, which
+// checks the type-check cost of a substitute of a large union.
 'use strict'
 const { spawnSync } = require('child_process')
 const fs = require('fs')
@@ -87,4 +88,9 @@ if (!documented) {
   const report = `${documentation.stdout || ''}${documentation.stderr || ''}`.split('\n').filter(line => !line.startsWith('ok'))
   console.log(report.join('\n').trim().replace(/^/gm, '     '))
 }
+const cost = spawnSync(process.execPath, [path.join(__dirname, '..', 'R6V-5.R6TD-2.T44.check-cost.js')], { cwd: root, encoding: 'utf8' })
+const cheap = cost.status === 0
+failed = failed || !cheap
+console.log(`${cheap ? 'ok  ' : 'FAIL'} type-check cost of a large union (spec-types/R6V-5.R6TD-2.T44.check-cost.js)`)
+if (!cheap) console.log(`${cost.stdout || ''}${cost.stderr || ''}`.trim().replace(/^/gm, '     '))
 process.exit(failed ? 1 : 0)

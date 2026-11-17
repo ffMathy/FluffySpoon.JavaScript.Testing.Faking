@@ -89,12 +89,15 @@ type NoOverload = { readonly noOverload: true }
 type IsSameOverload<TArguments, TReturnType, TNextArguments, TNextReturnType> =
   Equals<TArguments, TNextArguments> extends true ? Equals<TReturnType, TNextReturnType> : false
 type IsEmptySlot<TArguments, TReturnType> = IsSameOverload<TArguments, TReturnType, unknown[], unknown>
-type Slot<TArguments, TReturnType, TNextArguments, TNextReturnType> = TArguments extends any[] ?
+// Not distributive: a parameter list that is a union of lists (a generic rest parameter erased to its constraint, as in
+// `emit<E extends keyof Events>(event: E, ...args: Parameters<Events[E]>)`) stays one overload, whose positional
+// signature checks the arguments against the whole union (R6FE-7, T46).
+type Slot<TArguments, TReturnType, TNextArguments, TNextReturnType> = [TArguments] extends [any[]] ?
   (IsEmptySlot<TArguments, TReturnType> extends true ? NoOverload :
     IsSameOverload<TArguments, TReturnType, TNextArguments, TNextReturnType> extends true ? NoOverload :
-    Overload<TArguments, TReturnType>) :
+    Overload<Extract<TArguments, any[]>, TReturnType>) :
   NoOverload
-type LastSlot<TArguments, TReturnType> = TArguments extends any[] ? Overload<TArguments, TReturnType> : NoOverload
+type LastSlot<TArguments, TReturnType> = [TArguments] extends [any[]] ? Overload<Extract<TArguments, any[]>, TReturnType> : NoOverload
 
 type NoOverloads = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload]
 
@@ -119,6 +122,35 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
     substituteOverloads(...args: infer A6): infer R6
     substituteOverloads(...args: infer A7): infer R7
     substituteOverloads(...args: infer A8): infer R8
+  } ? [
+    Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
+    Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
+  ] :
+  TFunction extends new (...args: infer A) => infer R ? ConstructOverloads<TFunction, A, R> :
+  NoOverloads
+
+// A type with construct signatures but no call signatures (a class, `new (url: string) => ApiClient`): the overloads
+// of its construct signatures (R6FE-3, T47). At run time `new` on a substitute or a member is recorded and answered
+// like a call (E23), so the substitute offers call signatures with these parameters, whose setup API takes the
+// instance a `new` gives (`Client('u').returns(client)`, `Client.received(1)('u')`), next to the construct signatures
+// of `T` itself. The pattern below cannot use method signatures, which TypeScript compares bivariantly, so on
+// TypeScript 5.0 and older, which fill the slots of missing overloads with `new (...args: unknown[]) => unknown`, it
+// only matches constructors with 8 overloads; there only the last construct signature (`A`, `R`) is taken.
+type ConstructOverloads<TFunction, A, R> = AllConstructOverloads<TFunction> extends NoOverloads ?
+  [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, LastSlot<A, R>] :
+  AllConstructOverloads<TFunction>
+type AllConstructOverloads<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+      new (...args: infer A4): infer R4
+      new (...args: infer A5): infer R5
+      new (...args: infer A6): infer R6
+      new (...args: infer A7): infer R7
+      new (...args: infer A8): infer R8
+    }
   } ? [
     Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
     Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
@@ -180,7 +212,36 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
 type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
-  OverloadSignatures<Overloads<TVariant>, TView, TFunction>
+  OverloadSignatures<Overloads<TVariant>, TView, TFunction> & GenericCallSignature<TVariant, Overloads<TVariant>, TView>
+
+// Generic methods (R6FE-7, T46): `Overloads` sees a generic signature with its type parameters replaced by their
+// constraints, so `get<K extends keyof Config>(key: K): Config[K]` becomes `get(key: keyof Config): Config[keyof
+// Config]`, and `emit<K>(eventName: Key<K, T>, ...args: Args<K, T>)` of Node's `EventEmitter<T>` has no possible
+// arguments at all (`Args<unknown, T>` is `never`). A member with a single signature that is generic therefore also
+// gets the signature below, after all others. It takes any arguments with which the member itself can be called, as
+// TypeScript checks them against the member's own (generic) signatures, and its result takes what the member returns
+// for them (with the type parameters replaced by their constraints, which is all TypeScript infers here). Coming before
+// the member's own signatures (`SubstituteOf<T>` intersects the member with `T`), it is also what calls with `any`
+// arguments (`Arg.any()`) resolve to: TypeScript first tries the signatures with the subtype relation, under which
+// `any` fits a type parameter, but no other parameter type. (Overloaded members do not get it: there TypeScript takes
+// the return type of the last overload, and `any` arguments resolve to the first overload that accepts them.)
+type GenericCallSignature<F, TOverloads extends any[], V extends SubstituteView> =
+  F extends (...args: any) => any ? GenericCallSignatureOf<F, TOverloads, V> : unknown
+type GenericCallSignatureOf<F, TOverloads extends any[], V extends SubstituteView> =
+  IsGenericSignature<F, TOverloads> extends true ?
+  <P extends ArgumentValue[]>(...args: P & CallableWith<F, P>) => CallResult<V, P, CallReturnTypeOf<F, P>, never> :
+  unknown
+// `true` for a function type with a single call signature that is not the same as the signature `Overloads` sees, i.e.
+// a generic one (also, harmlessly, a callable type with other members).
+type IsGenericSignature<F, TOverloads extends any[]> =
+  TOverloads[6] extends NoOverload ? (TOverloads[7] extends Overload<any[], any> ?
+    (Equals<F, (...args: TOverloads[7]['arguments']) => TOverloads[7]['returnType']> extends true ? false : true) :
+    false) :
+  false
+// Includes the primitive types, so that TypeScript keeps the literal types of the arguments (`get('port')`).
+type ArgumentValue = string | number | boolean | bigint | symbol | object | null | undefined
+type CallableWith<F, P extends any[]> = F extends (...args: P) => any ? unknown : never
+type CallReturnTypeOf<F, P extends any[]> = F extends (...args: P) => infer R ? R : never
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
@@ -197,62 +258,170 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // unions, such as the methods of all lib.dom elements), and identical signatures of several variants are one type, so
 // the intersection holds each of them once (see `EachBox`). A member that is not callable in every variant has no
 // signatures (as before). `TFunction` passes the whole member type on to the call results (see `CallResult`).
-// The positional signatures are ordered by the number of arguments they require, most first (`fetch(url, options)`
-// before `fetch(url)` before `fetch()`), each group in the order of the variants and their overloads. When TypeScript
-// 5.3 and older call the union, they pair each signature of one variant with the FIRST signature of the other variant
-// that requires no more arguments and whose parameter types accept its own, even one with fewer parameters (5.4 and
-// newer look for the same signature first). With `get()` before `get(key)`, `get('k')` resolved to `get(key)` paired
-// with `get()`, and `.returns()` took only what both return. In this order a signature can only be paired with an
-// earlier one that requires as many arguments (`fetch(url, options?)` with `fetch(url)`); as each of the two accepts
-// some calls of the other, their results usually take the same values (see `UnionReturnTypes`).
+// The positional signatures take an exact number of arguments (see `EachBox`) and are ordered by it, most first
+// (`fetch(url, options)` before `fetch(url)`), each group in the order of the variants and their overloads; then the
+// signatures for more than 6 arguments, the `Arg.all()` signatures, and last the signatures without parameters. When
+// TypeScript 5.3 and older call the union, they pair each signature of one variant with the FIRST signature of the
+// other variant that requires no more arguments and whose parameter types accept its own, even one with fewer
+// parameters (5.4 and newer look for the same signature first); a signature without parameters accepts any other. With
+// `get()` before `get(key)`, `get('k')` resolved to `get(key)` paired with `get()`, and `.returns()` took only what
+// both return. In this order a signature is paired with itself (every variant carries the same signatures) or with an
+// earlier one whose parameters it shares, whose result usually takes the same values (see `UnionReturnTypes`).
+//
+// Fast path (T44, R6V-5, R6TD-2): when every overload of every variant returns the same type (`void` for the
+// `addEventListener` of all lib.dom elements, `Promise<string>` for `fetch(url)` and `fetch(url, options?)`), the
+// parameter lists alone tell the calls apart, and every call returns that type. The member then has one positional
+// signature per overload position (`Overloads` slot), whose rest parameter is the union of the parameter lists that
+// the variants declare in that position, plus the `Arg.all()` signatures, all returning that type. TypeScript checks
+// the arguments against that union as a whole, so they keep their combinations. A callback argument without parameter
+// types is typed from the variants' callback types when these differ at most in their `this` type; otherwise it gets
+// no contextual type (spec-types/limitations.ts). These signatures are computed from the whole member type, the same
+// for every variant, without comparing the variants with each other: `UnionToIntersection` below compares every box
+// with every other one, which made large unions slow to check (all lib.dom elements: 1.6 to 1.8 times as long as
+// before T42 on TypeScript 3.6 to 3.8).
+// The choice is an indexed access as for the kinds in Utilities.ts: where a return type involves a type parameter
+// (`(() => T) | ((fallback?: string) => string)` in `Picker<T>`), TypeScript cannot decide `ReturnsAlike` and takes the
+// boxes. (The boxed signatures are unwrapped by a conditional type, see `VariantSignatures`.)
 type CombinedSignatures<TFunction, TView extends SubstituteView> =
   false extends EachCallable<TFunction> ? unknown :
-  SignaturesOfBoxes<UnionToIntersection<EachBox<TFunction, TView, TFunction>>>
+  SignaturesInBox<{
+    boxes: { signatures: SignaturesOfBoxes<UnionToIntersection<EachBox<TFunction, TView, TFunction>>> }
+    [fast: number]: { signatures: SameReturnSignatures<TFunction, AllReturnTypes<TFunction>, TView> }
+  }[CombinedKind<TFunction>]>
+// `any` for the fast path, which takes parameter lists of up to 6 parameters without a rest parameter (see
+// `SlotSignature`), `'boxes'` otherwise.
+type CombinedKind<TFunction> = ReturnsAlike<TFunction> extends true ?
+  (7 extends MaximumArguments<Extract<SlotParameterLists<TFunction, number>, any[]>> ? 'boxes' : any) :
+  'boxes'
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
+// Told apart by type identity (as `VariantsKind` does), which takes linear time, unlike comparing every return type with
+// the union of all (`ReturnsKind`), which made unions of many variants with `this`-returning methods slow.
+type ReturnsAlike<TFunction> = true extends IsUnion<AllReturnTypes<TFunction>, AllReturnTypes<TFunction>> ? false : true
+// The parameter lists of the overloads in slot `TSlot` of the variants (all slots for `number`). The parameter names
+// are kept: removing them (`UnnamedArguments`) costs more than the duplicates it would remove.
+type SlotParameterLists<TVariant, TSlot extends number> =
+  TVariant extends unknown ? ParameterListsOf<Overloads<TVariant>[TSlot]> : never
+type ParameterListsOf<TOverload> = TOverload extends Overload<any[], any> ? TOverload['arguments'] : never
+type SameReturnSignatures<F, R, V extends SubstituteView> =
+  SlotSignature<SlotParameterLists<F, 0>, R, V> & SlotSignature<SlotParameterLists<F, 1>, R, V> &
+  SlotSignature<SlotParameterLists<F, 2>, R, V> & SlotSignature<SlotParameterLists<F, 3>, R, V> &
+  SlotSignature<SlotParameterLists<F, 4>, R, V> & SlotSignature<SlotParameterLists<F, 5>, R, V> &
+  SlotSignature<SlotParameterLists<F, 6>, R, V> & SlotSignature<SlotParameterLists<F, 7>, R, V> &
+  AllArgumentsSignaturesFor<Extract<SlotParameterLists<F, number>, any[]>, R, V, never>
+// One signature for the whole union of parameter lists, with the parameters at each position (their types the union of
+// the lists' types there; the parameters from the shortest list's length on optional). A rest parameter typed as the
+// union of the lists would keep their combinations, but TypeScript compares such signatures only by the type of their
+// first element: two of them whose lists start with parameters of the same type count as the same signature, and one
+// of them is dropped from the intersection.
+type SlotSignature<A, R, V extends SubstituteView> =
+  [A] extends [never] ? unknown : SlotSignatureOf<Extract<A, any[]>, R, V>
+type SlotSignatureOf<A extends any[], R, V extends SubstituteView> =
+  PositionalSignatureOf<UnnamedArgumentsOf<A, MinimumArguments<A>, MaximumArguments<A>>, R, V, never>
 type SignaturesOfBoxes<TBoxes> = TBoxes extends SignatureBox ?
-  TBoxes[6] & TBoxes[5] & TBoxes[4] & TBoxes[3] & TBoxes[2] & TBoxes[1] & TBoxes[0] & TBoxes['allArguments'] :
+  TBoxes[6] & TBoxes[5] & TBoxes[4] & TBoxes[3] & TBoxes[2] & TBoxes[1] & TBoxes['more'] & TBoxes['full'] &
+  TBoxes['allArguments'] &
+  TBoxes[0] :
   never
-type SignatureBox = { 0: unknown, 1: unknown, 2: unknown, 3: unknown, 4: unknown, 5: unknown, 6: unknown, allArguments: unknown }
-// The signatures of one variant, the positional signatures grouped by `MinimumArguments`. `variant` keeps the boxes of
-// variants with different overloads apart: TypeScript would otherwise infer only one box for `UnionToIntersection`
-// when the box of one variant is assignable to the box of another.
-// The signatures are those of the overloads' parameter lists without the parameter names (`UnnamedArguments`), and
-// their call results depend only on the parameter list and the whole member type (`CallResult`). So the overloads of
-// several variants with the same parameter list (`self(x: string): this` in each variant) are one signature. When
-// TypeScript calls the union, it pairs up the signatures of all variants; with one distinct signature per variant and
-// overload, a call of a union of 20 variants took 10 to 16 seconds to check on TypeScript 4.0 to 4.5.
+type SignatureBox = {
+  0: unknown, 1: unknown, 2: unknown, 3: unknown, 4: unknown, 5: unknown, 6: unknown, more: unknown, full: unknown,
+  allArguments: unknown
+}
+// The signatures of one variant: for each number of arguments `n` from 0 to 6 that an overload accepts, a positional
+// signature that takes exactly `n` arguments, the overload's first `n` parameters (T45, R6TD-1); in `more`, the
+// overloads that accept more than 6 arguments (also with a rest parameter); and the `Arg.all()` signatures. A call
+// that omits optional parameters (`get('k')` of `get(key: string, options?: OptionsV1)` and `get(key: string, options?:
+// OptionsV2)`) then resolves to a signature with just the parameters it passes, whose result takes what every variant
+// that accepts these arguments returns (see `PrefixCallResult`). `variant` keeps the boxes of variants with different
+// overloads apart: TypeScript would otherwise infer only one box for `UnionToIntersection` when the box of one variant
+// is assignable to the box of another.
+// The parameters of these signatures are tuples without names, and their call results depend only on the parameter
+// lists and the whole member type (`CallResult`). So the overloads of several variants with the same parameter list
+// (`self(x: string): this` in each variant) give the same signatures. When TypeScript calls the union, it pairs up the
+// signatures of all variants; with distinct signatures per variant and overload, a call of a union of 20 variants took
+// 10 to 16 seconds to check on TypeScript 4.0 to 4.5.
 type EachBox<TVariant, TView extends SubstituteView, TFunction> = TVariant extends unknown ? {
   variant: (overloads: Overloads<TVariant>) => Overloads<TVariant>
-  0: PositionalSignaturesTaking<Overloads<TVariant>, 0, TView, TFunction>
-  1: PositionalSignaturesTaking<Overloads<TVariant>, 1, TView, TFunction>
-  2: PositionalSignaturesTaking<Overloads<TVariant>, 2, TView, TFunction>
-  3: PositionalSignaturesTaking<Overloads<TVariant>, 3, TView, TFunction>
-  4: PositionalSignaturesTaking<Overloads<TVariant>, 4, TView, TFunction>
-  5: PositionalSignaturesTaking<Overloads<TVariant>, 5, TView, TFunction>
-  6: PositionalSignaturesTaking<Overloads<TVariant>, 6, TView, TFunction>
+  0: PrefixSignatures<Overloads<TVariant>, 0, TView, TFunction>
+  1: PrefixSignatures<Overloads<TVariant>, 1, TView, TFunction>
+  2: PrefixSignatures<Overloads<TVariant>, 2, TView, TFunction>
+  3: PrefixSignatures<Overloads<TVariant>, 3, TView, TFunction>
+  4: PrefixSignatures<Overloads<TVariant>, 4, TView, TFunction>
+  5: PrefixSignatures<Overloads<TVariant>, 5, TView, TFunction>
+  6: PrefixSignatures<Overloads<TVariant>, 6, TView, TFunction>
+  more: PrefixSignatures<Overloads<TVariant>, 7, TView, TFunction>
+  full: FullSignatures<Overloads<TVariant>, TView, TFunction>
   allArguments: UnionAllArgumentsSignaturesOf<Overloads<TVariant>, TView, TFunction>
 } : never
-type PositionalSignaturesTaking<TOverloads extends any[], TMinimum, TView extends SubstituteView, TFunction> =
-  PositionalSignatureTaking<TOverloads[0], TMinimum, TView, TFunction> & PositionalSignatureTaking<TOverloads[1], TMinimum, TView, TFunction> &
-  PositionalSignatureTaking<TOverloads[2], TMinimum, TView, TFunction> & PositionalSignatureTaking<TOverloads[3], TMinimum, TView, TFunction> &
-  PositionalSignatureTaking<TOverloads[4], TMinimum, TView, TFunction> & PositionalSignatureTaking<TOverloads[5], TMinimum, TView, TFunction> &
-  PositionalSignatureTaking<TOverloads[6], TMinimum, TView, TFunction> & PositionalSignatureTaking<TOverloads[7], TMinimum, TView, TFunction>
-// The positional signature of an overload that requires `TMinimum` arguments, otherwise `unknown`.
-type PositionalSignatureTaking<TOverload, TMinimum, TView extends SubstituteView, TFunction> =
+type PrefixSignatures<TOverloads extends any[], TCount extends ArgumentCount, TView extends SubstituteView, TFunction> =
+  PrefixSignature<TOverloads[0], TCount, TView, TFunction> & PrefixSignature<TOverloads[1], TCount, TView, TFunction> &
+  PrefixSignature<TOverloads[2], TCount, TView, TFunction> & PrefixSignature<TOverloads[3], TCount, TView, TFunction> &
+  PrefixSignature<TOverloads[4], TCount, TView, TFunction> & PrefixSignature<TOverloads[5], TCount, TView, TFunction> &
+  PrefixSignature<TOverloads[6], TCount, TView, TFunction> & PrefixSignature<TOverloads[7], TCount, TView, TFunction>
+// The signature of an overload that takes exactly `TCount` arguments (7: more than 6, with the whole parameter list),
+// otherwise `unknown`.
+type PrefixSignature<TOverload, TCount extends ArgumentCount, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
-  (MinimumArguments<TOverload['arguments']> extends TMinimum ?
-    PositionalSignatureOf<UnnamedArguments<TOverload['arguments']>, unknown, TView, TFunction> :
+  (ArgumentCounts[TCount] extends TOverload['arguments'] ?
+    PrefixSignatureOf<Extract<PrefixOf<TOverload['arguments'], TCount>, any[]>, UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
     unknown) :
   unknown
+// The signature of each overload with its whole parameter list (the optional parameters included). Calls resolve to the
+// signatures above first; these make sure that when TypeScript calls the union, it finds the same parameter list as
+// a variant's own method among the substitute's signatures and leaves the plain method out. (TypeScript tries a
+// signature whose parameters have literal types, such as `read(path: string, encoding?: 'buffer')`, first.)
+type FullSignatures<TOverloads extends any[], TView extends SubstituteView, TFunction> =
+  FullSignature<TOverloads[0], TView, TFunction> & FullSignature<TOverloads[1], TView, TFunction> &
+  FullSignature<TOverloads[2], TView, TFunction> & FullSignature<TOverloads[3], TView, TFunction> &
+  FullSignature<TOverloads[4], TView, TFunction> & FullSignature<TOverloads[5], TView, TFunction> &
+  FullSignature<TOverloads[6], TView, TFunction> & FullSignature<TOverloads[7], TView, TFunction>
+// Left out for a list of required parameters: the prefix signature with all its parameters is the same signature, and
+// having it twice made TypeScript 3.7 and 3.8 check a union of 60 variants 8 times slower. (Not for an empty list,
+// whose prefix signature comes last: a call without arguments resolves to the signatures of the variants without
+// parameters first.)
+type FullSignature<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  (RequiredParametersOnly<TOverload['arguments']> extends true ? unknown :
+    PrefixSignatureOf<UnnamedArguments<TOverload['arguments']>, UnnamedArguments<TOverload['arguments']>, TView, TFunction>) :
+  unknown
+type RequiredParametersOnly<A extends any[]> =
+  MaximumArguments<A> extends 0 ? false : MinimumArguments<A> extends MaximumArguments<A> ? true : false
+type ArgumentCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
+type ArgumentCounts = [[], [any], [any, any], [any, any, any], [any, any, any, any], [any, any, any, any, any],
+  [any, any, any, any, any, any], [any, any, any, any, any, any, any]]
+// The first `TCount` parameters of a parameter list, as a tuple without names (7: the whole list).
+type PrefixOf<A extends any[], TCount extends ArgumentCount> = {
+  0: []
+  1: [A[0]]
+  2: [A[0], A[1]]
+  3: [A[0], A[1], A[2]]
+  4: [A[0], A[1], A[2], A[3]]
+  5: [A[0], A[1], A[2], A[3], A[4]]
+  6: [A[0], A[1], A[2], A[3], A[4], A[5]]
+  7: A
+}[TCount]
+type PrefixSignatureOf<P extends any[], A extends any[], V extends SubstituteView, F> =
+  (...args: P) => PrefixCallResult<V, P, A, F>
+// The result of a call with the arguments `P` that resolves to an overload with the parameters `A`: it takes what the
+// variants return whose overloads accept calls with the parameters `A` (see `UnionReturnTypes`), and what those
+// return whose overloads accept the arguments `P` (`get('k')` above: `number | string`).
+type PrefixCallResult<V extends SubstituteView, P extends any[], A extends any[], F> =
+  V extends 'assertion' ? void : SetupResult<V, P, UnionReturnType<F, A> | UnionReturnType<F, P>>
 type UnionAllArgumentsSignaturesOf<TOverloads extends any[], TView extends SubstituteView, TFunction> =
   UnionAllArgumentsSignatures<TOverloads[0], TView, TFunction> & UnionAllArgumentsSignatures<TOverloads[1], TView, TFunction> &
   UnionAllArgumentsSignatures<TOverloads[2], TView, TFunction> & UnionAllArgumentsSignatures<TOverloads[3], TView, TFunction> &
   UnionAllArgumentsSignatures<TOverloads[4], TView, TFunction> & UnionAllArgumentsSignatures<TOverloads[5], TView, TFunction> &
   UnionAllArgumentsSignatures<TOverloads[6], TView, TFunction> & UnionAllArgumentsSignatures<TOverloads[7], TView, TFunction>
+// A single `Arg.all()` matches every call, so its result takes what any overload of any variant returns (T45, R6TD-1).
 type UnionAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
-  AllArgumentsSignaturesFor<UnnamedArguments<TOverload['arguments']>, unknown, TView, TFunction> :
+  UnionAllArgumentsSignaturesFor<UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
   unknown
+// A separate alias of the parameter list without names, so that variants with the same parameter list give the same
+// signatures (see `EachBox`). Written out in `UnionAllArgumentsSignatures`, each variant had its own copy, and a union
+// of 60 variants took 1.5 times as long to check.
+type UnionAllArgumentsSignaturesFor<A extends any[], V extends SubstituteView, F> =
+  ((allArguments: AllArguments<A>) => CallResult<V, A, AllReturnTypes<F>, never>) &
+  TrailingAllArgumentsSignatures<A, unknown, V, F>
 // The number of arguments a parameter list requires; 6 stands for 6 or more.
 type MinimumArguments<A> =
   [] extends A ? 0 : [any] extends A ? 1 : [any, any] extends A ? 2 : [any, any, any] extends A ? 3 :
@@ -294,10 +463,11 @@ type UnnamedArgumentsOf<A extends any[], TMinimum, TMaximum> =
 // TypeScript cannot decide it and uses `'single'`. A union is told apart by type identity, not by assignability:
 // variants that are assignable to each other (`log(message: string): void` and `log(message: string, level?: number):
 // void`) still need the combined signatures.
-type VariantSignatures<TFunction, TView extends SubstituteView> = {
+type VariantSignatures<TFunction, TView extends SubstituteView> = SignaturesInBox<{
   single: { signatures: EachSignatures<TFunction, TView, never> }
   [union: number]: { signatures: CombinedSignatures<TFunction, TView> }
-}[VariantsKind<TFunction>]['signatures']
+}[VariantsKind<TFunction>]>
+type SignaturesInBox<TBox> = TBox extends { signatures: infer TSignatures } ? TSignatures : never
 type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
 type IsUnion<TVariant, TFunction> = TVariant extends unknown ? (Equals<TVariant, TFunction> extends true ? false : true) : never
 
@@ -324,7 +494,9 @@ export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substi
 
 // The assertion view of a callable member also checks the call arguments; for a property it is only the property's
 // type. `'call'` or `'plain'` per non-primitive member of the union (see `AssertionMember`).
-type EachCallKind<TFunction> = TFunction extends (...args: any[]) => any ? 'call' : 'plain'
+// Construct signatures count as calls (T47): `new` is recorded as a call.
+type EachCallKind<TFunction> =
+  TFunction extends (...args: any[]) => any ? 'call' : TFunction extends new (...args: any) => any ? 'call' : 'plain'
 type GuardedCallKind<TFunction> = [TFunction] extends [Primitive] ? never : EachCallKind<TFunction>
 
 /**

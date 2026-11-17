@@ -190,6 +190,66 @@ function stubBox<T>(box: SubstituteOf<Box<T>>, value: T) {
 }
 stubBox(Substitute.for<Box<number>>(), 1)
 
+// R6V-4 / T43: members reached through a generic key of a mapped type keep their setup API
+function stubByKey<K extends string>(sub: SubstituteOf<Record<K, () => number>>, key: K) {
+  sub[key]().returns(1)
+  sub[configure]()[key]().returns(2)
+}
+function stubLoaderByKey<K extends string>(sub: SubstituteOf<Record<K, (id: string) => Promise<number>>>, key: K) {
+  sub[key]('a').resolves(1)
+  sub[key](Arg.any()).rejects(new Error())
+}
+type EventHandlers<E extends string> = { [P in E]: (payload: string) => boolean }
+function stubHandler<E extends string>(handlers: SubstituteOf<EventHandlers<E>>, event: E) {
+  handlers[event]('p').returns(true)
+}
+stubByKey(Substitute.for<Record<'a', () => number>>(), 'a')
+stubLoaderByKey(Substitute.for<Record<'a', (id: string) => Promise<number>>>(), 'a')
+stubHandler(Substitute.for<EventHandlers<'saved'>>(), 'saved')
+
+// R6FE-7 / T46: generic methods, configured and checked with their type parameters replaced by their constraints
+interface ChannelEvents { saved: (id: string) => void; failed: (error: Error) => void }
+interface Channel {
+  on<E extends keyof ChannelEvents>(event: E, listener: ChannelEvents[E]): this
+  emit<E extends keyof ChannelEvents>(event: E, ...args: Parameters<ChannelEvents[E]>): boolean
+}
+const channel = Substitute.for<Channel>()
+channel.emit('saved', 'id1').returns(true)
+channel.emit(Arg.all()).returns(false)
+channel[configure]().emit('saved', Arg.any()).returns(true)
+channel.on(Arg.any(), Arg.any()).returns(channel)
+channel.received(1).emit('saved', 'id1')
+interface Settings { port: number; host: string }
+interface SettingsService { get<K extends keyof Settings>(key: K): Settings[K] }
+const settings = Substitute.for<SettingsService>()
+settings.get('port').returns(80)
+settings.get(Arg.any()).returns('localhost')
+settings.received().get(Arg.all())
+
+// R6FE-3 / T47: constructor types and constructor members are configured and checked with call syntax
+interface HttpClient { get(path: string): Promise<string> }
+type HttpClientFactory = new (baseUrl: string) => HttpClient
+const HttpClientCtor = Substitute.for<HttpClientFactory>()
+HttpClientCtor('https://api').returns(Substitute.for<HttpClient>())
+HttpClientCtor.received(1)(Arg.any())
+const httpClient: HttpClient = new HttpClientCtor('https://api')
+class Pool { constructor(readonly size: number) { } }
+interface PoolModule { Pool: typeof Pool }
+const poolModule = Substitute.for<PoolModule>()
+poolModule.Pool(4).returns(new Pool(4))
+poolModule.received(1).Pool(Arg.any())
+
+// R6FE-5 / T48: Arg.any('bigint'); R6TD-3 / T48: unions of types with a string index signature
+interface Ledger { credit(amount: bigint): bigint }
+declare const amount: bigint
+const ledger = Substitute.for<Ledger>()
+ledger.credit(Arg.any('bigint')).returns(amount)
+interface MeowPet { kind: 'cat'; [key: string]: unknown; speak(): 'meow' }
+interface WoofPet { kind: 'dog'; [key: string]: unknown; speak(): 'woof' }
+const anyPet = Substitute.for<MeowPet | WoofPet>()
+anyPet.speak().returns('meow')
+anyPet.speak().returns('woof')
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()
@@ -256,4 +316,4 @@ try {
   }
 }
 
-export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing }
+export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing, httpClient }

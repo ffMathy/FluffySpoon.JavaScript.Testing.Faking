@@ -78,16 +78,47 @@ const letters = Substitute.for<Lower | Upper>()
 letters.letter('b').returns('upper')
 ;(letters as SubstituteOf<Upper>).letter('b').returns('upper')
 
-// In the same unions, the signatures are tried in the order of the number of arguments they require, most first (so
-// that TypeScript 5.3 and older pair them up correctly): a call that an earlier overload with optional parameters also
-// accepts resolves to the later overload with more required parameters. Configure such a call through the variant's
-// type.
-interface Plot { kind: 'plot'; draw(x: number, y?: number, z?: number): 'flat'; draw(x: number, y: number, z: number): 'solid' }
-interface Sketch { kind: 'sketch'; draw(x: number): 'line' }
-const drawing = Substitute.for<Plot | Sketch>()
-drawing.draw(1, 2, 3).returns('solid')
-// @ts-expect-error resolves to `draw(x, y, z)`, although a `Plot` resolves `draw(1, 2, 3)` to the first overload
-drawing.draw(1, 2, 3).returns('flat')
-;(drawing as SubstituteOf<Plot>).draw(1, 2, 3).returns('flat')
+// In the same unions, `Arg.any()` and an `Arg.is()` predicate without a parameter type resolve to the first variant's
+// overload that takes that many arguments, so when the variants' parameter types differ (R6TD-1 / T45), the call takes
+// only the values of the variants that accept that overload's parameters. (A single `Arg.all()`, and `Arg.any()` where
+// the variants' parameter types are the same, take every variant's values: R6TD-1.T45.union-call-arguments.ts.)
+// Configure such a call with `Arg.all()`, with a typed matcher, or through the variant's type.
+interface MatchA { kind: 'a'; m(x: string): 'A' }
+interface MatchB { kind: 'b'; m(x: number): 'B' }
+const matched = Substitute.for<MatchA | MatchB>()
+// @ts-expect-error the call resolves to `m(x: string)`, which only MatchA declares
+matched.m(Arg.any()).returns('B')
+// @ts-expect-error the predicate's parameter is typed from `m(x: string)`
+matched.m(Arg.is(x => x !== undefined)).returns('B')
+matched.m(Arg.all()).returns('B')
+matched.m(Arg.any('number')).returns('B')
+;(matched as SubstituteOf<MatchB>).m(Arg.any()).returns('B')
+
+// Concrete unions whose variants declare a method with different parameter lists but the same return type (T44, R6V-5,
+// R6TD-2): a callback argument whose parameters have no type annotation gets no contextual type when the variants'
+// callback types differ in more than their `this` type (the media and body elements of lib.dom have their own event
+// maps). Annotate the callback's parameters.
+type AnyElement = HTMLElementTagNameMap[keyof HTMLElementTagNameMap]
+const anyElement = Substitute.for<AnyElement>()
+// @ts-expect-error `event` implicitly has an `any` type
+anyElement.addEventListener('click', event => event.preventDefault())
+anyElement.addEventListener('click', (event: Event) => event.preventDefault())
+
+// Generic methods (R6FE-7 / T46) are configured and checked with their type parameters replaced by their constraints
+// (TypeScript cannot carry a method's type parameters over to the substitute's signatures). The arguments of a setup or
+// check are then only checked against the constraints, and the configured value against what the method returns for
+// them, so these compile although the methods themselves reject them. Configure the exact call through the method's
+// own type where it matters.
+interface Settings { port: number; host: string }
+interface SettingsService { get<K extends keyof Settings>(key: K): Settings[K] }
+const settings = Substitute.for<SettingsService>()
+settings.get('port').returns('eighty') // `Settings[keyof Settings]` is `number | string`
+interface SignalEvents { saved: (id: string) => void; failed: (error: Error) => void }
+interface Signals { emit<E extends keyof SignalEvents>(event: E, ...args: Parameters<SignalEvents[E]>): boolean }
+const signals = Substitute.for<Signals>()
+signals.emit('failed', 'id1').returns(true) // the event and its arguments are not matched up
+const asSettings: SettingsService = settings
+// @ts-expect-error the method itself keeps its own signature
+asSettings.get('port').toFixed(0).returns(1)
 
 export { found }
