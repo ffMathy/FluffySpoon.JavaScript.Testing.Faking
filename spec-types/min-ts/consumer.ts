@@ -239,6 +239,17 @@ const poolModule = Substitute.for<PoolModule>()
 poolModule.Pool(4).returns(new Pool(4))
 poolModule.received(1).Pool(Arg.any())
 
+// R6FE-5 / T48: Arg.any('bigint'); R6TD-3 / T48: unions of types with a string index signature
+interface Ledger { credit(amount: bigint): bigint }
+declare const amount: bigint
+const ledger = Substitute.for<Ledger>()
+ledger.credit(Arg.any('bigint')).returns(amount)
+interface MeowPet { kind: 'cat'; [key: string]: unknown; speak(): 'meow' }
+interface WoofPet { kind: 'dog'; [key: string]: unknown; speak(): 'woof' }
+const anyPet = Substitute.for<MeowPet | WoofPet>()
+anyPet.speak().returns('meow')
+anyPet.speak().returns('woof')
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()

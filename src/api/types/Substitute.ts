@@ -1,6 +1,6 @@
 import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
 import { CallKind, FunctionSubstitute } from './FunctionSubstitute'
-import { GenericKind, IndexKind, ValueKind } from './Utilities'
+import { GenericKind, IndexKind, IsUnion, ValueKind } from './Utilities'
 
 /**
  * The setup API of a member read on a substitute (`sub.isEnabled.returns(true)`). The value itself is not part of it:
@@ -22,8 +22,27 @@ export type PropertySubstitute<TValue> = SetupMethods<TValue, () => TValue>
  * signature, and in generic code, where `MembersKind` cannot be decided, TypeScript leaves out its `any` branch and
  * takes `T`. (`MembersKind` is not distributive, so a union is not split.)
  */
-type Members<T> = { indexed: T, [plain: string]: Pick<T, keyof T> }[MembersKind<T>]
+type Members<T> = { indexed: IndexedMembers<T>, [plain: string]: Pick<T, keyof T> }[MembersKind<T>]
 type MembersKind<T> = string extends keyof T ? 'indexed' : any
+
+// A union of types with a string index signature (`{ kind: 'a'; [key: string]: unknown; speak(): 'meow' } | { kind:
+// 'b'; ...; speak(): 'woof' }`, R6TD-3, T48): the homomorphic mapping would map each variant on its own, so that
+// `speak` had the setup API of each variant's `speak` and `.returns()` took only what both return (`never`). Such a
+// union is mapped as one type instead: its named members, each with the union of the variants' member types (which
+// then takes the combined signatures of T39/T42), next to its string index signature. The choice is an indexed access
+// as for the kinds in Utilities.ts; in generic code, where `IsUnion` cannot be decided, it is `T` itself.
+type IndexedMembers<T> = { indexed: T, [union: number]: IndexedUnionMembers<T> }[IndexedUnionKind<T>]
+type IndexedUnionKind<T> = IsUnion<T> extends true ? any : 'indexed'
+type IndexedUnionMembers<T> = { [P in NamedKeys<T>]: T[P] } & { [key: string]: StringIndexOf<T> }
+type StringIndexOf<T> = T extends { [key: string]: infer V } ? V : never
+// The keys of the members of `T` that are declared by name (`keyof T` of a type with a string index signature is just
+// `string | number`). They are inferred from a mapping of `T` whose values are the keys; TypeScript 4.0 and older
+// infer them from a target mapped over `keyof T`, newer versions from a target with a string index signature.
+type NamedKeys<T> = [NamedKeysFromIndex<T>] extends [never] ? NamedKeysFromMapping<T> : NamedKeysFromIndex<T>
+type NamedKeysFromMapping<T> = { [P in keyof T]: string extends P ? never : number extends P ? never : P } extends
+  { [P in keyof T]: infer K } ? Extract<K, PropertyKey> : never
+type NamedKeysFromIndex<T> = { [P in keyof T]: string extends P ? never : number extends P ? never : P } extends
+  { [key: string]: infer K } ? Extract<K, PropertyKey> : never
 
 // The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
