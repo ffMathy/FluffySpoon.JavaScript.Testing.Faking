@@ -1,5 +1,3 @@
-import { inspect } from 'util'
-
 import { EXCEPTION, SELF, SubstituteExceptionType, keyToString } from './Constants'
 import { colorsEnabled, describeOtherReading, firstStackFrame, formatArguments, formatValue, plural, TextBuilder, TextPart, withPrintGuard } from './utilities'
 import type { CallRecord } from './CallRecord'
@@ -49,6 +47,11 @@ const memberLabel = (key: PropertyKey): string => key === SELF ? '' : keyToStrin
 
 /** D23: a failure message lists at most this many received calls, then "› … and N more". */
 export const MAX_LISTED_CALLS = 50
+/**
+ * E44: and it stops listing them once the listed calls take this many characters (each value in them is bounded, see
+ * Stringify), so that a message stays readable, whatever the size of the arguments.
+ */
+export const MAX_LISTED_CHARACTERS = 20000
 
 const describeExpectedCall = (mismatch: CallCountMismatch, colors: boolean): string => {
   const { key, expected } = mismatch
@@ -71,7 +74,7 @@ const describeRecord = (record: CallRecord, colors: boolean): string => {
 const describeError = (error: unknown): string => {
   try {
     if (error instanceof Error) return `${error.name}: ${error.message}`
-    return inspect(error, { depth: 1, colors: false })
+    return formatValue(error, false)
   } catch {
     return String(typeof error)
   }
@@ -121,18 +124,24 @@ export class SubstituteException extends Error {
       const heading = expected.kind === 'set' ? 'All property assignments to' : 'All property or method calls to'
       textBuilder.newLine().add(`${heading} ${memberPath} received so far:`)
       const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
+      let listedCount = 0
+      let listedCharacters = 0
       for (const listed of shown) {
+        if (listedCharacters >= MAX_LISTED_CHARACTERS) break
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
+        const call = describeRecord(listed.record, colors)
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
           .add(listed.record.constructed === true ? `new ${memberPath}` : memberPath, style)
-          .add(describeRecord(listed.record, colors), style)
+          .add(call, style)
         const frame = firstStackFrame(listed.record.stack)
         if (frame !== undefined) textBuilder.newLine().add(frame.replace('at ', 'called at '), t => t.faint())
         if (listed.predicateThrew)
           textBuilder.newLine().add(`    (an Arg.is predicate threw while matching this call: ${describeError(listed.predicateError)})`, t => t.faint())
+        listedCount++
+        listedCharacters += memberPath.length + call.length + (frame === undefined ? 0 : frame.length)
       }
-      const hidden = mismatch.listed.length - shown.length
+      const hidden = mismatch.listed.length - listedCount
       if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
     }

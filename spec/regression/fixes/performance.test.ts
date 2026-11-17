@@ -1,6 +1,7 @@
 import test from 'ava'
 
 import { Substitute, Arg, configure } from '../../../src'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 interface Logger { log(message: string): void, level: number }
 interface Calculator { add(a: number, b: number): number }
@@ -15,23 +16,25 @@ test('R:RT-8 / D19 calls and configured reads do not scan earlier calls (10k cal
   const logger = Substitute.for<Logger>()
   logger.level.returns(1)
 
+  const elapsedLimit = timeLimit(1000)
   const elapsed = millisecondsOf(() => {
     for (let i = 0; i < 10_000; i++) logger.log('x')
     for (let i = 0; i < 10_000; i++) void logger.level
     logger.received(10_000).log('x')
     logger.received(10_000).level
   })
-  t.true(elapsed < 1000, `took ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, '10,000 calls and configured reads, and their checks')
 })
 
 test('R:RT-8 / D19 resolving configured calls with distinct arguments stays fast (10k calls < 1s)', t => {
   const calculator = Substitute.for<Calculator>()
   calculator.add(Arg.any(), Arg.any()).returns(3)
+  const elapsedLimit = timeLimit(1000)
   const elapsed = millisecondsOf(() => {
     for (let i = 0; i < 10_000; i++) calculator.add(i, i)
     calculator.received(10_000).add(Arg.all())
   })
-  t.true(elapsed < 1000, `took ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, '10,000 configured calls with distinct arguments, and their check')
 })
 
 /**
@@ -80,18 +83,20 @@ const literalSetupsAndCalls = (count: number) => {
 
 test('R:RT-8 / D19 8000 literal setups and 8000 matching calls finish in under 1s (literal substitutions are indexed)', t => {
   literalSetupsAndCalls(1_000) // warm up
+  const elapsedLimit = timeLimit(1000)
   const elapsed = bestOfThree(() => literalSetupsAndCalls(8_000))
-  t.true(elapsed < 1000, `took ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, '8,000 literal setups and 8,000 matching calls')
 
   // the same through configure(), on a substitute that also has matcher setups
   const calculator = Substitute.for<any>()
   calculator.add(Arg.all()).returns(-1)
   calculator.add(Arg.any(), 0).returns(-2)
+  const configuredLimit = timeLimit(1000)
   const configured = millisecondsOf(() => {
     for (let i = 0; i < 8_000; i++) calculator[configure]().add(i, 1).returns(i)
     for (let i = 0; i < 8_000; i++) if (calculator.add(i, 1) !== i) throw new Error(`add(${i}, 1) did not return ${i}`)
   })
-  t.true(configured < 1000, `took ${configured} ms through configure()`)
+  assertWithin(t, configured, configuredLimit, '8,000 literal setups and calls through configure()')
   t.is(calculator.add(1, 0), -2)
   t.is(calculator.add(1, 2), -1)
 

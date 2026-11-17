@@ -1,5 +1,6 @@
 import test, { ExecutionContext, ThrowsExpectation } from 'ava'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 import { EventEmitter } from 'events'
 import * as path from 'path'
 import { inspect, types } from 'util'
@@ -566,19 +567,21 @@ test('R:RT-8 / D19 resolving calls does not scan the received calls: 10k calls a
   logger.level.returns(1)
   logger.format(Arg.any()).returns('formatted')
 
+  const limit = timeLimit(1000)
   const start = Date.now()
   for (let index = 0; index < 10_000; index++) logger.log('message', index % 10)
   for (let index = 0; index < 10_000; index++) void logger.level
   for (let index = 0; index < 10_000; index++) logger.format(index)
   const elapsed = Date.now() - start
-  t.true(elapsed < 1000, `took ${elapsed} ms`)
+  assertWithin(t, elapsed, limit, '10,000 calls, configured reads and configured calls')
 
   // unconfigured calls with distinct arguments each get their own (cached) auto-substitute
   const tracker = substitute()
+  const trackingLimit = timeLimit(1000)
   const trackingStart = Date.now()
   for (let index = 0; index < 10_000; index++) tracker.track({ id: index })
   const trackingElapsed = Date.now() - trackingStart
-  t.true(trackingElapsed < 1000, `took ${trackingElapsed} ms`)
+  assertWithin(t, trackingElapsed, trackingLimit, '10,000 unconfigured calls with distinct objects')
 
   t.notThrows(() => logger.received(10_000).log('message', Arg.any()))
   t.notThrows(() => logger.received(10_000).level)

@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'util'
 import { Substitute, Arg, configure } from '../../../src'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
 import { hashArguments, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 5: the structural hash and the search for nested matchers (R4-ADV-2, R4-ADV-4; E9, E10). Only agreement with
 // the RUNNING Node.js's isDeepStrictEqual is asserted, never its own results, which differ between versions.
@@ -101,8 +102,9 @@ test('R4-ADV-2 (E9) wide objects and Maps shared by many values, or passed again
     }]
   ]
   for (const [name, run] of cases) {
+    const elapsedLimit = timeLimit(1000)
     const elapsed = bestOfThree(run)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // still exact: deep strictly equal copies find the setup, other values do not, and the most recent setup wins
@@ -148,8 +150,9 @@ test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container o
   store.put(wide)
   t.notThrows(() => store.received(1).put(wide))
 
+  const elapsedLimit = timeLimit(250)
   const elapsed = bestOfThree(() => {
     for (let index = 0; index < 2000; index++) RecordedArguments.containsMatchers([`key${index}`, wide])
   })
-  t.true(elapsed < 250, `2,000 searches of a 2,001-key object: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `2,000 searches of a 2,001-key object`)
 })

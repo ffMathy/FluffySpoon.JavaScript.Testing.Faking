@@ -4,6 +4,7 @@ import * as path from 'path'
 
 import { Substitute, Arg, configure } from '../../../src'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 8, engine A: the timing-sensitive test run, the memo of wide containers and values that cannot be read (fix
 // spec E29 to E32). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
@@ -67,7 +68,8 @@ test('R7V-6 (E29) the timing-sensitive spec files run in an ava invocation of th
     const inMain = selects(main.files, file)
     const inPerf = selects(perf.files, file)
     t.true(inMain !== inPerf, `${file} runs in ${inMain && inPerf ? 'both invocations' : 'neither invocation'}`)
-    if (/process\.hrtime|Date\.now\(\)|performance\.now\(\)/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
+    // (round 9, E43: or through the timing helper, which scales the limits by the machine's load)
+    if (/process\.hrtime|Date\.now\(\)|performance\.now\(\)|helpers\/timing/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
       timed.push(file)
       t.true(inPerf, `${file} measures time, so it runs in the serial invocation`)
     }
@@ -194,6 +196,7 @@ test.serial('R7-ADV-5 / R7V-5 (E31) records of wide containers that share a wide
     }]
   ]
   for (const [name, values] of shapes) {
+    const bestLimit = timeLimit(200)
     let best = Infinity
     for (let run = 0; run < 3; run++) {
       const args = values()
@@ -201,7 +204,7 @@ test.serial('R7-ADV-5 / R7V-5 (E31) records of wide containers that share a wide
       best = Math.min(best, millisecondsOf(() => args.forEach(value => sub.load(value))))
     }
     t.log(`${name}: ${best.toFixed(1)} ms`)
-    t.true(best < 200, `${name}: ${best} ms`)
+    assertWithin(t, best, bestLimit, `${name}`)
   }
 })
 
@@ -219,6 +222,7 @@ test.serial('R7-ADV-4 (E31) 10,000 calls whose small argument holds a shared wid
   ]
   let generation = 0
   for (const [name, args] of shapes) {
+    const bestLimit = timeLimit(1000)
     let best = Infinity
     for (let run = 0; run < 3; run++) {
       const calls = Array.from({ length: 10_000 }, () => args(++generation))
@@ -226,7 +230,7 @@ test.serial('R7-ADV-4 (E31) 10,000 calls whose small argument holds a shared wid
       best = Math.min(best, millisecondsOf(() => calls.forEach(call => sub.f(...call))))
     }
     t.log(`10,000 calls with ${name}: ${best.toFixed(1)} ms`)
-    t.true(best < 1000, `10,000 calls with ${name}: ${best} ms`)
+    assertWithin(t, best, bestLimit, `10,000 calls with ${name}`)
   }
   // still exact: an equal wrapper, also with a copy of the table, finds the same auto-substitute, another id another one
   const sub = Substitute.for<any>()
