@@ -24,6 +24,15 @@ emitter.emit('paid', 'o1', 20).returns('yes')
 emitter.received().emit('paid', 'o1', '20')
 // @ts-expect-error the member is callable, not `never`
 const notNever: 1 = emitter.emit
+// Limitation (R7TD-7 / T50): the number of arguments of a generic method is checked against its parameter list with the
+// type parameters replaced by their constraints. `emit(eventName, ...args: Args<K, Events>)` has no possible arguments
+// with `K` replaced by its constraint, so the number of event arguments is not checked (their types are): these
+// compile although `paid` takes two arguments. Check such a call through the plain type.
+emitter.emit('paid', 'o1').returns(true)
+emitter.received().emit('paid', 'o1')
+emitter[configure]().emit('cancelled', 'o1', 2).returns(true)
+// @ts-expect-error the plain type checks the number of arguments
+asEmitter.emit('paid', 'o1')
 
 // A hand-written typed emitter.
 interface Events { saved: (id: string) => void; failed: (error: Error) => void }

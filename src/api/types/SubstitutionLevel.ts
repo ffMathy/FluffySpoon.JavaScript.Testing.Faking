@@ -8,9 +8,9 @@ import { HasMember, LibraryMemberName, Primitive } from './Utilities'
 export const returns: typeof constants.CONTEXT.returns.symbol = constants.CONTEXT.returns.symbol
 /** Symbol form of `.throws(...)`: `sub.divide(1, 0)[throws](new Error())`. */
 export const throws: typeof constants.CONTEXT.throws.symbol = constants.CONTEXT.throws.symbol
-/** Symbol form of `.resolves(...)`, offered on members that return a promise: `sub.load()[resolves](value)`. */
+/** Symbol form of `.resolves(...)`, offered on members that may return a promise: `sub.load()[resolves](value)`. */
 export const resolves: typeof constants.CONTEXT.resolves.symbol = constants.CONTEXT.resolves.symbol
-/** Symbol form of `.rejects(...)`, offered on members that return a promise: `sub.load()[rejects](new Error())`. */
+/** Symbol form of `.rejects(...)`, offered on members that may return a promise: `sub.load()[rejects](new Error())`. */
 export const rejects: typeof constants.CONTEXT.rejects.symbol = constants.CONTEXT.rejects.symbol
 /** Symbol form of `.mimicks(...)`: `sub.add(Arg.all())[mimicks]((a, b) => a + b)`. */
 export const mimicks: typeof constants.CONTEXT.mimicks.symbol = constants.CONTEXT.mimicks.symbol
@@ -23,11 +23,14 @@ type MimicksFunction<TImplementation> = OneArgumentRequiredFunction<TImplementat
 type ResolvesFunction<TResolved> = OneArgumentRequiredFunction<TResolved, void>
 type RejectsFunction = OneArgumentRequiredFunction<any, void>
 
-// `null | undefined` are ignored when deciding whether the value is a promise or has a conflicting member:
-// `Promise<T> | undefined` still offers resolves/rejects. The check is not distributive (see T:TY-1).
-type PromiseValue<TReturnType> = [NonNullable<TReturnType>] extends [Promise<infer U>] ? U : never
-type IsPromise<TReturnType> = [NonNullable<TReturnType>] extends [never] ? false :
-  [NonNullable<TReturnType>] extends [Promise<any>] ? true : false
+// A value that may be a promise (a promise or any other thenable such as `PromiseLike<T>`, also as part of a union such
+// as `void | Promise<void>` or `T | Promise<T>`, R7FE-8, T52) offers resolves/rejects, which configure a promise.
+// `null | undefined` are ignored: `Promise<T> | undefined` offers them as well. The value they take is what the
+// promises of the union resolve to.
+type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ? PromiseValueOf<TValue> : never
+type PromiseValueOf<TValue> = TValue extends PromiseLike<infer U> ? U : never
+type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>> ? true : false
+type EachIsPromise<TValue> = TValue extends PromiseLike<any> ? true : false
 
 type SymbolSetupMethods<TReturnType, TImplementation> = {
   /**

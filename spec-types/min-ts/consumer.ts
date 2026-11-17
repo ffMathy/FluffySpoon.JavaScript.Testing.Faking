@@ -308,6 +308,51 @@ finder.count(Arg.is.not(value => value > 0)).returns(1)
 finder.count(Arg.any.not('number')).returns(2)
 const missing: undefined = Arg.any('undefined')
 
+// R7TD-2 / T53: every construct signature has the call syntax (TypeScript 5.2 and older offered only the last one)
+interface Connection { open(): void }
+interface ConnectionConstructor { new (url: string): Connection; new (url: string, retries: number): Connection }
+const connection = Substitute.for<Connection>()
+const Connect = Substitute.for<ConnectionConstructor>()
+Connect('u').returns(connection)
+Connect('u', 2).returns(connection)
+Connect.received()('u')
+Connect[configure]()('u', 2).returns(connection)
+
+// R7TD-3 / T53: unions with a string index signature take the union of the variants' return types (also on 4.3)
+interface IndexedA { kind: 'a'; [key: string]: unknown; speak(): 'meow' }
+interface IndexedB { kind: 'b'; [key: string]: unknown; speak(): 'woof' }
+const indexed = Substitute.for<IndexedA | IndexedB>()
+indexed.speak().returns('meow')
+indexed.speak().returns('woof')
+indexed.kind.returns('a')
+
+// R7TD-5 / R7TD-8 / T49: one set of signatures per distinct parameter list in a union; callbacks are typed
+interface SocketV1 { version: 1; on(cb: (data: string) => void): void; move(x: string, y: number): void }
+interface SocketV2 { version: 2; on(cb: (data: Uint8Array) => void): void; move(x: number, y: string): void }
+const socket = Substitute.for<SocketV1 | SocketV2>()
+socket.on(data => undefined).returns()
+socket.move('a', 1)
+socket.move(1, 'b').returns()
+
+// R7TD-7 / T50, R7TD-1 / T53: generic methods
+interface ServiceSettings { port: number; host: string }
+interface ServiceWithSettings {
+  get<K extends keyof ServiceSettings>(key: K): ServiceSettings[K]
+  conv<K>(e: K): K extends string ? number : boolean
+}
+const service = Substitute.for<ServiceWithSettings>()
+service.get('port').returns(80)
+service.get(Arg.any()).returns('localhost')
+service.conv('x').returns(1)
+service[configure]().conv('x').returns(1)
+
+// R7FE-8 / T52: members that may return a promise
+interface Hooks { onInit(): void | Promise<void>; load(): string | Promise<string>; like(): PromiseLike<number> }
+const hooks = Substitute.for<Hooks>()
+hooks.onInit().resolves()
+hooks.load().resolves('x')
+hooks.like().resolves(1)
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
