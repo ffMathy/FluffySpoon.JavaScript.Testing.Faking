@@ -208,6 +208,30 @@ queryResult.data.returns(['a'])
 queryResult.error.returns(null)
 const asQueryResult: QueryResult = queryResult
 
+// R4TD-1 / T39 and R5TD-1 / T42: a union whose variants declare a method with different return types or parameter
+// lists; the setup API takes what any variant the call can reach returns
+interface ReaderA { kind: 'a'; read(path: string): string; close(): void }
+interface ReaderB { kind: 'b'; read(path: string, encoding?: string): Uint8Array; close(force?: boolean): void }
+const reader = Substitute.for<ReaderA | ReaderB>()
+reader.read('p').returns('text')
+reader.read('p').returns(new Uint8Array(0))
+reader.read('p', 'utf8').mimicks(() => 'text')
+reader.read(Arg.any()).returns('text')
+reader.read(Arg.all()).throws(new Error())
+reader.close().returns()
+reader[configure]().read('p').returns(new Uint8Array(0))
+reader.received().read('p')
+const asReader: ReaderA | ReaderB = reader
+interface CacheA { kind: 'a'; get(): string[]; get(key: string): string; load(key: string): Promise<string> }
+interface CacheB { kind: 'b'; get(): number[]; get(key: string, fallback?: number): number; load(key: string, retries: number): Promise<number> }
+const cache = Substitute.for<CacheA | CacheB>()
+cache.get().returns([1])
+cache.get('k').returns('v')
+cache.get('k').returns(1)
+cache.get('k', 2).returns(1)
+cache.load('k').resolves('v')
+cache.load('k', 3).resolves(1)
+
 // R3TD-2 / T34: the ways around the optional-callback limitation
 interface Widget { onChange?: (value: string) => void }
 const widget = Substitute.for<Widget>()
@@ -232,4 +256,4 @@ try {
   }
 }
 
-export { asCalculator, nothing, asOk, asListener, asQueryResult, missing }
+export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing }

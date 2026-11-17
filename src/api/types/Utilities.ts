@@ -8,6 +8,9 @@ export type IsNever<T> = [T] extends [never] ? true : false
 
 export type IsAny<T> = 0 extends (1 & T) ? true : false
 
+/** The intersection of the members of the union `U` (`unknown` for `never`). */
+export type UnionToIntersection<U> = (U extends unknown ? (union: U) => void : never) extends ((union: infer I) => void) ? I : never
+
 /**
  * The non-nullish primitive types. They are not callable, and the typings assume that they have no members named like
  * the library's methods.

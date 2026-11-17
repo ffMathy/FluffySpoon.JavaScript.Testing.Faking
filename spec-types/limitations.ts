@@ -67,4 +67,27 @@ export function stubPet<T extends Cat | Dog>(pet: SubstituteOf<T>) {
   ;(pet as SubstituteOf<Cat | Dog>).speak().returns('meow')
 }
 
+// Concrete unions whose variants declare a method with different parameter lists (R5TD-1 / T42): the call results take
+// the values of the variants whose overloads accept calls with the parameter list of the signature the call resolves
+// to. The argument values themselves are not considered, so parameter types that only overlap (`'a' | 'b'` and
+// `'b' | 'c'`) do not count. Configure such a call through the variant's type.
+interface Lower { kind: 'lower'; letter(x: 'a' | 'b'): 'lower' }
+interface Upper { kind: 'upper'; letter(x: 'b' | 'c'): 'upper' }
+const letters = Substitute.for<Lower | Upper>()
+// @ts-expect-error the call resolves to `letter(x: 'a' | 'b')`, which `letter(x: 'b' | 'c')` does not accept as a whole
+letters.letter('b').returns('upper')
+;(letters as SubstituteOf<Upper>).letter('b').returns('upper')
+
+// In the same unions, the signatures are tried in the order of the number of arguments they require, most first (so
+// that TypeScript 5.3 and older pair them up correctly): a call that an earlier overload with optional parameters also
+// accepts resolves to the later overload with more required parameters. Configure such a call through the variant's
+// type.
+interface Plot { kind: 'plot'; draw(x: number, y?: number, z?: number): 'flat'; draw(x: number, y: number, z: number): 'solid' }
+interface Sketch { kind: 'sketch'; draw(x: number): 'line' }
+const drawing = Substitute.for<Plot | Sketch>()
+drawing.draw(1, 2, 3).returns('solid')
+// @ts-expect-error resolves to `draw(x, y, z)`, although a `Plot` resolves `draw(1, 2, 3)` to the first overload
+drawing.draw(1, 2, 3).returns('flat')
+;(drawing as SubstituteOf<Plot>).draw(1, 2, 3).returns('flat')
+
 export { found }
