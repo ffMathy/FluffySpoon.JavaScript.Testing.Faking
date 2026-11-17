@@ -94,16 +94,6 @@ matched.m(Arg.all()).returns('B')
 matched.m(Arg.any('number')).returns('B')
 ;(matched as SubstituteOf<MatchB>).m(Arg.any()).returns('B')
 
-// Concrete unions whose variants declare a method with different parameter lists but the same return type (T44, R6V-5,
-// R6TD-2): a callback argument whose parameters have no type annotation gets no contextual type when the variants'
-// callback types differ in more than their `this` type (the media and body elements of lib.dom have their own event
-// maps). Annotate the callback's parameters.
-type AnyElement = HTMLElementTagNameMap[keyof HTMLElementTagNameMap]
-const anyElement = Substitute.for<AnyElement>()
-// @ts-expect-error `event` implicitly has an `any` type
-anyElement.addEventListener('click', event => event.preventDefault())
-anyElement.addEventListener('click', (event: Event) => event.preventDefault())
-
 // Generic methods (R6FE-7 / T46) are configured and checked with their type parameters replaced by their constraints
 // (TypeScript cannot carry a method's type parameters over to the substitute's signatures). The arguments of a setup or
 // check are then only checked against the constraints, and the configured value against what the method returns for
