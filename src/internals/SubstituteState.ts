@@ -505,8 +505,26 @@ export class SubstituteState {
   private _configuredKeys?: Set<PropertyKey>
   /** E35: whether this substitute, or one of its auto-substitutes, has a setup or mimicks an instance. */
   private _configured?: boolean
+  /** E39: the record of the operation that last answered with this substitute (a configured value), and when. */
+  private _handedOutBy?: CallRecord
+  private _handedOutAt?: number
 
   constructor(public readonly owner?: AutoEntry) { }
+
+  /**
+   * E39: notes that the operation of `record` answered with this substitute, a configured value
+   * (`app.getCalc().returns(calc)`), so that a setup or a check chained to it in the same expression
+   * (`app.getCalc().add(1, 2).returns(3)`) leaves out that operation, as for auto-substitutes (see AutoEntry.handOut).
+   */
+  public handOut(record: CallRecord): void {
+    this._handedOutBy = record
+    this._handedOutAt = currentSequence()
+  }
+
+  /** E39: the record that answered with this substitute, if that was the most recent operation of all. */
+  public adjacentHandOut(): CallRecord | undefined {
+    return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
+  }
 
   public get mimicked(): { instance: any } | undefined {
     return this._mimicked

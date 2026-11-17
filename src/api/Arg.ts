@@ -1,5 +1,6 @@
 import { inspect } from 'util'
 import { Argument, AllArguments, ArgumentOptions, PredicateFunction, isSubstituteProxy } from '../shared'
+import { cancelLatestDeferredReport } from '../internals/Assertions'
 
 // The shape `createInversable` builds at runtime. The public types (`Is`, `Any`) give `.not` its own call signatures
 // with their own documentation, so that editors describe the inverse at `Arg.is.not(...)` (T35).
@@ -32,9 +33,19 @@ const describeInvalidPredicate = (value: unknown): string => {
   }
 }
 
+/**
+ * A usage error of a matcher. E37: the check whose arguments the matcher was meant for (`sub.received(2).log(...)`) is
+ * never invoked, so the report that its invocation would have cancelled is cancelled here: the usage error is the only
+ * error.
+ */
+const usageError = (message: string): TypeError => {
+  cancelLatestDeferredReport()
+  return new TypeError(message)
+}
+
 const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options?: ArgumentOptions) => {
   if (typeof predicate !== 'function')
-    throw new TypeError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`)
+    throw usageError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`)
   return new Argument(`Arg.is{${describePredicate(predicate)}}`, predicate, options)
 }
 type Is = {
@@ -162,7 +173,7 @@ const anyTypes: readonly string[] = ['any', 'string', 'number', 'boolean', 'symb
 const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
   if (typeof type !== 'string' || anyTypes.indexOf(type) === -1) {
     const name = options?.inverseMatch ? 'Arg.any.not' : 'Arg.any'
-    throw new TypeError(
+    throw usageError(
       `${name} expects one of ${anyTypes.map(name => `'${name}'`).join(', ')} (or no argument for 'any'), ` +
       `but received ${describeInvalidPredicate(type)}.`
     )

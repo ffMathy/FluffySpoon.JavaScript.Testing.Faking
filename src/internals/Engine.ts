@@ -248,7 +248,22 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
   return record
 }
 
-const adjacentHandOut = (face: Face): CallRecord | undefined => face instanceof AutoEntry ? face.adjacentHandOut() : undefined
+const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHandOut()
+
+/**
+ * E39: a read or a call that answers with a configured value that is a substitute of this copy of the library
+ * (`app.getCalc().returns(calc)`, `app.logger.returns(logger)`, a mimicked instance's substitute) hands that substitute
+ * out, as an unconfigured one hands out its auto-substitute, so that a setup or a check chained to it in the same
+ * expression (`app.getCalc().add(1, 2).returns(3)`, `app.logger.received(1).info('x')`) leaves out the read or call
+ * that led to it (D25). Returns the value.
+ */
+const handOutConfigured = <T>(value: T, record: CallRecord): T => {
+  if (typeof value === 'function' && Object.getPrototypeOf(value) === faceTargetPrototype) {
+    const face = (value as any)[INTERNAL] as Face | undefined
+    if (face !== undefined) face.handOut(record)
+  }
+  return value
+}
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
@@ -314,6 +329,7 @@ const faceHandler: ProxyHandler<FaceTarget> = {
   },
   set: function set(target: FaceTarget, property: PropertyKey, value: unknown, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.set(target, property, value, receiver)
+    if (inheritsFromSubstitute(receiver)) return defineOnReceiver(receiver, property, value)
     faceSet(target(), property, value, set)
     return true
   },
@@ -336,10 +352,29 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
   },
   // E23: `new sub(...)` and `new sub.Member(...)` are invocations, recorded as constructions (see faceApply)
-  construct: function construct(target: FaceTarget, args: any[]) {
+  construct: function construct(target: FaceTarget, args: any[], newTarget: Function) {
     const face = target()
-    return constructed(faceApply(face, CONSTRUCT, args, construct, recordsInvocation(face) ? captureStack(construct) : undefined))
+    return constructed(faceApply(face, constructing(newTarget), args, construct, recordsInvocation(face) ? captureStack(construct) : undefined))
   }
+}
+
+/**
+ * E36: whether an assignment reached the substitute through the prototype chain of another object: an instance of a
+ * class that extends a substitute (`this.name = name` in its constructor, whose prototype chain leads to `sub.Base` or
+ * its `prototype`), or such a class itself (a static field). The receiver is then not a substitute of this copy.
+ */
+const inheritsFromSubstitute = (receiver: unknown): receiver is object =>
+  (typeof receiver === 'object' && receiver !== null) ||
+  (typeof receiver === 'function' && Object.getPrototypeOf(receiver) !== faceTargetPrototype)
+
+/**
+ * E36: what an ordinary prototype without the property does with such an assignment: the property is created on the
+ * object that was assigned to (or set, if it is there by now). Nothing is recorded.
+ */
+const defineOnReceiver = (receiver: object, property: PropertyKey, value: unknown): boolean => {
+  const existing = Reflect.getOwnPropertyDescriptor(receiver, property)
+  if (existing !== undefined) return 'value' in existing && existing.writable === true && Reflect.defineProperty(receiver, property, { value })
+  return Reflect.defineProperty(receiver, property, { value, writable: true, enumerable: true, configurable: true })
 }
 
 // bound to the face: a bound function is smaller than a closure and its context
@@ -447,7 +482,8 @@ const recordsInvocation = (face: Face): boolean => !(face instanceof AutoEntry &
  * the instance, D12.)
  */
 const faceApply = (face: Face, self: Self, args: any[], stackStart: Function, site?: StackHolder): any => {
-  if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, undefined, self, site)
+  // E39: a substitute handed out as a configured value continues the expression that handed it out
+  if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, face.adjacentHandOut(), self, site)
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self, site)
   // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
   if (isStringAssertionKey(face.key)) {
@@ -482,7 +518,7 @@ const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, 
   const substitution = state.findCallSubstitution(helper, hashes)
   if (substitution !== undefined) {
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
-    return execute(substitution, rawArgs, thisArg)
+    return execute(substitution, rawArgs, { thisArg, explicit: true })
   }
   const instance = state.mimicked?.instance
   if (instance !== undefined && hasMember(instance, helper)) {
@@ -608,9 +644,9 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
       return invoke(direct.state, direct.key, [...boundArgs, ...args], apply, direct.readSource, undefined, { thisArg, explicit: true }, captureStack(apply))
     },
     // `new` on a bound function constructs the function it is bound to, with the bound arguments first (E23)
-    construct: function construct(_target: unknown, args: any[]) {
+    construct: function construct(_target: unknown, args: any[], newTarget: Function) {
       const direct = directReadingOf(face)
-      return constructed(invoke(direct.state, direct.key, [...boundArgs, ...args], construct, direct.readSource, undefined, CONSTRUCT, captureStack(construct)))
+      return constructed(invoke(direct.state, direct.key, [...boundArgs, ...args], construct, direct.readSource, undefined, constructing(newTarget), captureStack(construct)))
     }
   })
   return proxy
@@ -640,7 +676,7 @@ const functionHelper = (property: FunctionHelperKey, invokeWith: (args: any[], s
 const hasMember = (instance: any, key: PropertyKey): boolean =>
   ((typeof instance === 'object' && instance !== null) || typeof instance === 'function') && key in instance
 
-const execute = (substitution: Substitution, args?: any[], thisArg?: unknown, construct = false): any => {
+const execute = (substitution: Substitution, args?: any[], self: Self = NO_SELF): any => {
   const value = substitution.nextValue()
   switch (substitution.method) {
     case 'returns':
@@ -652,7 +688,7 @@ const execute = (substitution: Substitution, args?: any[], thisArg?: unknown, co
     case 'rejects':
       return Promise.reject(value)
     case 'mimicks':
-      return callOrConstruct(value, thisArg, args ?? [], construct)
+      return callOrConstruct(value, self.thisArg, args ?? [], self)
     case 'auto':
       return entryProxy(substitution.entry!)
   }
@@ -672,7 +708,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
     // Configured both as a property and as a method: whether this read is a property read is only known later.
     if (state.hasCallSubstitutions(key)) return deferredRead(state, key, record, substitution)
-    return execute(substitution)
+    return handOutConfigured(execute(substitution), record)
   }
 
   const mimicked = state.mimicked
@@ -684,8 +720,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const value = delegate ? mimicked.instance[key] : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
-      linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
-      return value
+      return handOutConfigured(value, linkChain(state.addRecord('get', key, undefined, site), chainCandidate))
     }
   }
 
@@ -728,16 +763,17 @@ const invoke = (
     read.convertToCall(args, callSite)
     record = read
   } else record = linkChain(state.addRecord('call', key, args, callSite), chainCandidate)
-  if (self === CONSTRUCT) record.constructed = true
+  if (self.construct === true) record.constructed = true
 
   return resolveCall(state, key, args, record, self)
 }
 
 /**
  * The `this` of an invocation. `explicit` when it was given through call/apply/bind: then a mimicked instance's
- * method runs with it as well, instead of with the instance. CONSTRUCT for `new` (E23).
+ * method runs with it as well, instead of with the instance. `construct` for `new` (E23), with the `new.target` of a
+ * subclass or of Reflect.construct (E36; undefined when it is the substitute itself).
  */
-type Self = { thisArg: unknown, explicit: boolean }
+type Self = { thisArg: unknown, explicit: boolean, construct?: boolean, newTarget?: Function }
 const NO_SELF: Self = { thisArg: undefined, explicit: false }
 
 /*
@@ -746,49 +782,70 @@ const NO_SELF: Self = { thisArg: undefined, explicit: false }
  * syntax apply to it (`ns.Client(Arg.any()).returns(client)`, `ns.received(1).Client(url)`). It answers with the
  * configured value when that is an object or a function, and with the auto-substitute of the call otherwise (`new`
  * always gives an object). A mimicked function, or a function given to mimicks(), is constructed when it is a
- * constructor (a class or an ordinary function), and called otherwise (an arrow function, a method).
+ * constructor (a class, an ordinary function or a bound constructor), and called otherwise (an arrow function, a method).
+ *
+ * E36: `new.target` is honoured. When it is not the substitute itself (`class Derived extends sub.Base`, then
+ * `new Derived()`; Reflect.construct(sub, args, Other)), a mimicked constructor is constructed with it
+ * (Reflect.construct(RealBase, args, newTarget)), and a construction that nothing answers with an object gives a new
+ * object with newTarget.prototype (not the cached auto-substitute of the call). The call is recorded either way.
  */
-const CONSTRUCT: Self = { thisArg: undefined, explicit: false }
+const constructing = (newTarget: unknown): Self => ({
+  thisArg: undefined,
+  explicit: false,
+  construct: true,
+  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another). A subclass of a substitute
+  // inherits its marker, but it is not a proxy.
+  newTarget: typeof newTarget === 'function' && !(types.isProxy(newTarget) && isSubstituteProxy(newTarget)) ? newTarget : undefined
+})
 
 const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
 /** What `new` gives for the answer of an invocation that is not an object: an empty object (as `new` on a function would). */
 const constructed = (answer: unknown): object => isObjectLike(answer) ? answer : {}
 
+/** E36: the object that `new` on a subclass gives when nothing answers with an object: one with newTarget.prototype. */
+const instanceOf = (newTarget: Function): object => {
+  const prototype = (newTarget as { prototype?: unknown }).prototype
+  return Object.create(isObjectLike(prototype) ? prototype : Object.prototype)
+}
+
 /**
- * Whether a function can be constructed: a substitute, a class or an ordinary function (they have an own `prototype`;
- * arrow functions, methods and async functions do not, and generator functions cannot be constructed).
+ * Whether a function can be constructed: a substitute, a class, an ordinary function or (E36) a bound constructor.
+ * Arrow functions, methods, async and generator functions cannot. Functions with an own `prototype` are decided without
+ * a probe; the others (bound functions, arrow functions, methods) with Reflect.construct's own check of new.target,
+ * which constructs nothing for a constructor and throws for anything else.
  */
 const isConstructor = (fn: Function): boolean => {
   if (isSubstituteProxy(fn)) return true
   try {
-    return Object.getOwnPropertyDescriptor(fn, 'prototype') !== undefined && !types.isGeneratorFunction(fn)
+    if (Object.getOwnPropertyDescriptor(fn, 'prototype') !== undefined) return !types.isGeneratorFunction(fn) && !types.isAsyncFunction(fn)
+    Reflect.construct(Object, [], fn)
+    return true
   } catch {
     return false
   }
 }
 
-/** Runs a mimicked function: constructs it for `new` when it is a constructor, calls it otherwise. */
-const callOrConstruct = (fn: Function, thisArg: unknown, args: any[], construct: boolean): any =>
-  construct && isConstructor(fn) ? Reflect.construct(fn, args) : Reflect.apply(fn, thisArg, args)
+/** Runs a mimicked function: constructs it for `new` when it is a constructor (with the new.target, E36), calls it otherwise. */
+const callOrConstruct = (fn: Function, thisArg: unknown, args: any[], self: Self): any =>
+  self.construct === true && isConstructor(fn) ? Reflect.construct(fn, args, self.newTarget ?? fn) : Reflect.apply(fn, thisArg, args)
 
 /** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
 const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord, self: Self): any => {
-  const construct = self === CONSTRUCT
   const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
-    return execute(substitution, args, self.thisArg, construct)
+    return execute(substitution, args, self)
   }
 
   const mimicked = state.mimicked
   if (mimicked !== undefined) {
     const instance = mimicked.instance
     if (key === SELF) {
-      if (typeof instance === 'function') return callOrConstruct(instance, self.thisArg, args, construct)
+      if (typeof instance === 'function') return callOrConstruct(instance, self.thisArg, args, self)
     } else {
       const member = instance[key]
-      if (typeof member === 'function') return callOrConstruct(member, self.explicit ? self.thisArg : instance, args, construct)
+      if (typeof member === 'function') return callOrConstruct(member, self.explicit ? self.thisArg : instance, args, self)
     }
   }
   return NOT_CONFIGURED
@@ -798,7 +855,9 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   const hashes = new ArgumentHashes(args)
   const answer = configuredAnswer(state, key, args, hashes, record, self)
   // E23: `new` answers with an object; for any other configured value it gives the auto-substitute of the call
-  if (answer !== NOT_CONFIGURED && (self !== CONSTRUCT || isObjectLike(answer))) return answer
+  if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return handOutConfigured(answer, record)
+  // E36: or, for a subclass (new.target), a new instance of it
+  if (self.newTarget !== undefined) return instanceOf(self.newTarget)
   const entry = state.callEntry(key, hashes)
   entry.handOut(record)
   return entryProxy(entry)
@@ -925,8 +984,8 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       return invoke(state, key, args, apply, record)
     },
-    construct: function construct(_target: unknown, args: any[]) {
-      return constructed(invoke(state, key, args, construct, record, undefined, CONSTRUCT))
+    construct: function construct(_target: unknown, args: any[], newTarget: Function) {
+      return constructed(invoke(state, key, args, construct, record, undefined, constructing(newTarget)))
     }
   })
 }

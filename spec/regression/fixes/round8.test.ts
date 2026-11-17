@@ -5,8 +5,9 @@ import * as path from 'path'
 import { performance } from 'perf_hooks'
 import { inspect } from 'util'
 
-import { Substitute, Arg, configure, mimick } from '../../../src'
+import { Substitute, Arg, configure, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 8: the behaviour findings of round 7 (R7V-*, R7FE-*, R7-ADV-*), decided in the fix spec as E33-E41.
 
@@ -472,4 +473,183 @@ test('R7FE-7 (E40) util.inspect without custom inspection (node:assert) does not
   const error = t.throws(() => assert.strictEqual(user, 'ann'))
   t.false(error!.message.includes('returnThis'), error!.message)
   t.true(error!.message.includes('[Function: bound substitute]'), error!.message)
+})
+
+// ---- E36: new.target ----------------------------------------------------------------------------------------
+
+class RealBase {
+  public readonly kind: string
+  constructor(public readonly name: string) { this.kind = new.target.name }
+  hello() { return `hi ${this.name}` }
+}
+
+test('R7-ADV-2 (E36) a subclass of a substitute that mimicks a class, Reflect.construct with a newTarget, and a bound constructor', t => {
+  const Base = Substitute.for<any>()
+  Base[mimick](RealBase)
+  class Derived extends (Base as unknown as typeof RealBase) { extra() { return 'extra' } }
+  const derived = new Derived('d')
+  t.is(Object.getPrototypeOf(derived), Derived.prototype)
+  t.true(derived instanceof Derived)
+  t.is(derived.kind, 'Derived', 'new.target is the subclass')
+  t.is(derived.extra(), 'extra')
+  t.is(derived.hello(), 'hi d')
+  t.notThrows(() => Base.received(1)('d'), 'the construction is recorded')
+  t.true(String(Base).includes("new @Substitute('d')"))
+
+  const ns = Substitute.for<any>()
+  ns.Model(Arg.all()).mimicks(RealBase)
+  class Other { }
+  const other: any = Reflect.construct(ns.Model, ['m'], Other)
+  t.is(Object.getPrototypeOf(other), Other.prototype)
+  t.is(other.kind, 'Other')
+  t.is(other.name, 'm')
+  t.notThrows(() => ns.received(1).Model('m'))
+
+  class Connection { public readonly address: string; constructor(host: string, port: number) { this.address = `${host}:${port}` } }
+  const net = Substitute.for<any>()
+  net.Connection(Arg.all()).mimicks(Connection.bind(null, 'db'))
+  const connection = new net.Connection(5432)
+  t.is(connection.address, 'db:5432', 'a bound constructor is constructed, not called')
+  t.true(connection instanceof Connection)
+  const viaMimick = Substitute.for<any>()
+  viaMimick[mimick](Connection.bind(null, 'cache'))
+  t.is(new viaMimick(6379).address, 'cache:6379')
+  // an arrow function is still called
+  const arrows = Substitute.for<any>()
+  arrows.make(Arg.all()).mimicks((value: number) => ({ value }))
+  t.deepEqual(new arrows.make(1), { value: 1 })
+})
+
+test('R7FE-4 (E36) a class extending an unconfigured or configured substitute member keeps its own methods, and each new gives a new instance', t => {
+  const sdk = Substitute.for<any>()
+  sdk.Base(Arg.all()).mimicks(RealBase)
+  class Derived extends (sdk.Base as typeof RealBase) {
+    constructor() { super('d') }
+    own() { return 'own' }
+  }
+  const derived = new Derived()
+  t.true(derived instanceof Derived)
+  t.is(derived.own(), 'own')
+  t.is(derived.kind, 'Derived')
+  t.is(derived.name, 'd', 'constructed by the mimicked class')
+  // (the prototype a class inherits from a member is the member's `prototype`, an auto-substitute: the methods of the
+  // mimicked class are not inherited; a substitute that mimicks the class itself, `Base[mimick](RealBase)`, reads it
+  // from the class)
+  t.is(typeof derived.hello, 'function')
+
+  const unconfigured = Substitute.for<any>()
+  class Plugin extends (unconfigured.Base as typeof RealBase) {
+    static instances = 0
+    public ready: boolean
+    constructor(name: string) {
+      super(name)
+      this.ready = true
+      Plugin.instances++
+    }
+    own() { return 'own' }
+  }
+  const first = new Plugin('a')
+  const second = new Plugin('b')
+  t.true(first instanceof Plugin)
+  t.is(first.own(), 'own')
+  t.not(first, second, 'not the cached auto-substitute of the call')
+  // assignments to the instance (and to the class) create its own properties, as with an ordinary base class
+  t.true(first.ready)
+  t.deepEqual(Object.keys(first), ['ready'])
+  t.is(Plugin.instances, 2)
+  t.false(String(unconfigured).includes('ready'), 'and are not recorded on the substitute')
+  t.notThrows(() => unconfigured.received(1).Base('a'))
+  t.notThrows(() => unconfigured.received(2).Base(Arg.any()))
+  t.true(String(unconfigured).includes("new Base('a')"))
+
+  // without a subclass, new still gives the configured object or the auto-substitute of the call
+  t.is(new unconfigured.Base('a'), unconfigured.Base('a'))
+  const instance = { configured: true }
+  unconfigured.Made(Arg.any()).returns(instance)
+  t.is(new unconfigured.Made(1), instance)
+  class FromConfigured extends (unconfigured.Made as new (...args: any[]) => object) { }
+  t.is(new FromConfigured(1), instance, 'a configured object is what super() returns, as in JavaScript')
+})
+
+// ---- E37: a check whose argument throws a usage error ----------------------------------------------------------
+
+test('R7V-1 (E37) a check whose matcher throws a usage error leaves no deferred report behind', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const logger = Substitute.for<any>()
+    logger.log('a')
+    logger.log(2)
+    const anyNot = Arg.any as unknown as (type: string) => unknown
+    t.throws(() => logger.received(2).log(anyNot('String')), { instanceOf: TypeError, message: /^Arg\.any expects one of/ })
+    t.notThrows(() => clock.tick(), 'Arg.any: no report of log as a property')
+    t.throws(() => logger.received(2).log((Arg.any.not as any)('Number')), { instanceOf: TypeError })
+    t.notThrows(() => clock.tick(), 'Arg.any.not')
+    t.throws(() => logger.received(2).log(Arg.is('not a function' as any)), { instanceOf: TypeError, message: /^Arg\.is expects a predicate function/ })
+    t.notThrows(() => clock.tick(), 'Arg.is')
+
+    // a property-style check that is really not invoked still reports
+    void logger.received(2).log
+    t.throws(() => clock.tick(), { instanceOf: SubstituteException, message: /log was never read as a property/ })
+    // and so does one made after a usage error
+    t.throws(() => Arg.any('nope' as any))
+    void logger.received(3).log
+    t.throws(() => clock.tick(), { instanceOf: SubstituteException })
+  } finally {
+    clock.uninstall()
+  }
+})
+
+// ---- E39: chains through a member configured to return a substitute ---------------------------------------------
+
+test('R7FE-11 (E39) a setup or check chained through a member configured to return a substitute leaves out the leading read or call', t => {
+  const app = Substitute.for<any>()
+  const calc = Substitute.for<any>()
+  app.getCalc().returns(calc)
+  app.getCalc().add(1, 2).returns(3)
+  const compute = (a: any) => a.getCalc().add(1, 2)
+  t.is(compute(app), 3)
+  t.notThrows(() => app.received(1).getCalc(), 'the setup through the configured call is not a call')
+  t.notThrows(() => calc.received(1).add(1, 2))
+
+  const logger = Substitute.for<any>()
+  const child = Substitute.for<any>()
+  logger.child(Arg.any()).returns(child)
+  const log = (l: any) => l.child({ c: 1 }).info('x')
+  log(logger)
+  logger.child({ c: 1 }).received(1).info('x')
+  t.notThrows(() => logger.received(1).child({ c: 1 }), 'the check through the configured call is not a call')
+
+  const service = Substitute.for<any>()
+  const serviceLogger = Substitute.for<any>()
+  service.logger.returns(serviceLogger)
+  const start = (s: any) => s.logger.info('started')
+  start(service)
+  service.logger.received(1).info('started')
+  service.logger[received](1).info('started')
+  t.notThrows(() => service.received(1).logger, 'the checks through the configured property are not reads')
+
+  // reads and calls by the code under test stay recorded
+  const viaCode = Substitute.for<any>()
+  const repo = Substitute.for<any>()
+  viaCode.repo.returns(repo)
+  const getRepo = (s: any) => s.repo
+  getRepo(viaCode).save(1)
+  t.notThrows(() => viaCode.received(1).repo)
+  const handed = getRepo(viaCode)
+  handed.find(1).returns('one')
+  t.notThrows(() => viaCode.received(2).repo, 'a value the code under test returned, configured by the test')
+
+  // a mimicked instance's substitute member, and a direct call of a configured function substitute
+  const mimicking = Substitute.for<any>()
+  const nested = Substitute.for<any>()
+  mimicking[mimick]({ nested })
+  mimicking.nested.value.returns(5)
+  t.is(nested.value, 5)
+  t.notThrows(() => mimicking.didNotReceive().nested)
+  const factory = Substitute.for<any>()
+  const listener = Substitute.for<any>()
+  factory.listener().returns(listener)
+  factory.listener()('x').returns('y')
+  t.is(listener('x'), 'y')
+  t.notThrows(() => factory.didNotReceive().listener())
 })
