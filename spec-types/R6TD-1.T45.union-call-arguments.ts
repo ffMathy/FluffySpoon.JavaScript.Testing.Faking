@@ -91,8 +91,6 @@ reader.read('p').returns(1)
 const root = Substitute.for<Document | Element>()
 root.querySelector('a').returns(null)
 root.querySelectorAll('div')
-const canvas = Substitute.for<HTMLCanvasElement | OffscreenCanvas>()
-canvas.getContext('2d').returns(null)
 
 // Generic code keeps the variant's own signatures (see limitations.ts for union constraints).
 export function stubApi<T extends ApiV1>(sub: SubstituteOf<T>) {
