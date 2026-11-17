@@ -318,7 +318,8 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
 type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
   SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
-type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> = TGeneric extends true ?
+type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
+  TGeneric extends true ?
   GenericPositionalSignature<F, TOverloads[7], TView> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction> &
   GenericCallSignatureFor<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
@@ -326,14 +327,16 @@ type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TF
 // Generic methods (R6FE-7, T46): `Overloads` sees a generic signature with its type parameters replaced by their
 // constraints, so `get<K extends keyof Config>(key: K): Config[K]` becomes `get(key: keyof Config): Config[keyof
 // Config]`, and `emit<K>(eventName: Key<K, T>, ...args: Args<K, T>)` of Node's `EventEmitter<T>` has no possible
-// arguments at all (`Args<unknown, T>` is `never`). A member with a single signature that is generic therefore also
-// gets the signature below, after all others. It takes any arguments with which the member itself can be called, as
-// TypeScript checks them against the member's own (generic) signatures, and its result takes what the member returns
-// for them (with the type parameters replaced by their constraints, which is all TypeScript infers here). Coming before
-// the member's own signatures (`SubstituteOf<T>` intersects the member with `T`), it is also what calls with `any`
-// arguments (`Arg.any()`) resolve to: TypeScript first tries the signatures with the subtype relation, under which
-// `any` fits a type parameter, but no other parameter type. (Overloaded members do not get it: there TypeScript takes
-// the return type of the last overload, and `any` arguments resolve to the first overload that accepts them.)
+// arguments at all (`Args<unknown, T>` is `never`). A member with a single signature that is generic therefore gets
+// generic signatures instead of the positional one: first `GenericPositionalSignature`, whose arguments are constrained
+// by that parameter list, then the `Arg.all()` signatures, and last `GenericCallSignatureFor`, which takes any
+// arguments with which the member itself can be called (for `emit`). Their results take what the member returns for
+// the arguments (with the type parameters replaced by their constraints, which is all TypeScript infers here, see
+// `CallReturnTypeOf`). Coming before the member's own signatures (`SubstituteOf<T>` intersects the member with `T`),
+// they are also what calls with `any` arguments (`Arg.any()`) resolve to: TypeScript first tries the signatures with
+// the subtype relation, under which `any` fits a type parameter, but no other parameter type. (Overloaded members do
+// not get them: there TypeScript takes the return type of the last overload, and `any` arguments resolve to the first
+// overload that accepts them.)
 type GenericSignatureKind<F, TOverloads extends any[]> = F extends (...args: any) => any ? IsGenericSignature<F, TOverloads> : false
 // The positional signature of a generic method: its parameter list with the type parameters replaced by their
 // constraints, as a constraint of the arguments `P`, so that callbacks are typed from it (R7TD-1, T53). Its result
@@ -348,9 +351,11 @@ type GenericCallSignatureFor<F, TOverload extends Overload<any[], any>, V extend
   [] extends TOverload['arguments'] ?
   (<P extends ArgumentValue[]>(...args: P & CallableWith<F, P, TOverload['arguments']>) =>
     CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>) :
-  (<P0 extends ArgumentValue, P extends ArgumentValue[]>(arg0: P0 & CallableWith<F, Prepend<P0, P>, TOverload['arguments']>, ...args: P) =>
+  (<P0 extends ArgumentValue, P extends ArgumentValue[]>(
+    arg0: P0 & CallableWith<F, Prepend<P0, P>, TOverload['arguments']>, ...args: P) =>
     CallResult<V, Prepend<P0, P>, CallReturnTypeOf<F, Prepend<P0, P>, TOverload['returnType']>, never>)
-type Prepend<P0, P extends any[]> = ((arg0: P0, ...args: P) => void) extends ((...args: infer L) => void) ? Extract<L, any[]> : never
+type Prepend<P0, P extends any[]> =
+  ((arg0: P0, ...args: P) => void) extends ((...args: infer L) => void) ? Extract<L, any[]> : never
 // `true` for a function type with a single call signature that is generic (R7TD-7, T50): a function type that is not
 // the same type as the signature `Overloads` sees (with the type parameters replaced by their constraints), or a
 // callable type with other members (`{ <T>(x: T): T; extra: boolean }`) to which that signature with the other members
