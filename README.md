@@ -200,8 +200,27 @@ console.log(calculator.isEnabled) // prints true
 
 A call or property that is not configured does not return `undefined`: it returns an [auto-substitute](#auto-substitutes-and-nested-members). A configured value can be changed later with [`configure`](#re-configuring-a-call-configure). Another substitute is a fine return value, too.
 
+To make a member return `undefined`, call `.returns()` without a value. In TypeScript, that compiles whenever `undefined` is a valid value of the member: for `void`, `undefined`, `any`, `unknown` and `T | undefined`. The same goes for `.resolves()` (see [Working with promises](#working-with-promises)). Where `undefined` is not a valid value, as for a `number`, TypeScript asks for one. `.throws()`, `.rejects()` and `.mimicks()` always need an argument.
+
+```typescript
+import { Substitute } from '@fluffy-spoon/substitute'
+
+interface Session {
+  reset(): void
+  currentUser(): string | undefined
+  timeout(): number
+}
+
+const session = Substitute.for<Session>()
+session.reset().returns()
+session.currentUser().returns()
+console.log(session.currentUser()) // prints undefined
+// @ts-expect-error a number is needed
+session.timeout().returns()
+```
+
 ## Working with promises
-For members that return a promise, `resolves()` and `rejects()` are shortcuts for returning a resolved or rejected promise. They work on methods and on promise-typed properties. In TypeScript, they are offered on every member whose return type can be a promise: `Promise<T>`, `PromiseLike<T>`, and unions such as `void | Promise<void>` (a hook that may be `async`), `string | Promise<string>` or `Promise<T> | undefined`, and they take what the promise resolves to.
+For members that return a promise, `resolves()` and `rejects()` are shortcuts for returning a resolved or rejected promise. They work on methods and on promise-typed properties. They configure a native promise, so in TypeScript they are offered on every member that a native promise of the value fits: `Promise<T>` (and its subtypes), `PromiseLike<T>`, and unions such as `void | Promise<void>` (a hook that may be `async`), `string | Promise<string>` or `Promise<T> | undefined`. They take what the promise resolves to, and `resolves()` can be called without a value when `undefined` is a valid one (`Promise<void>`, `Promise<any>`, `Promise<User | undefined>`, Koa's `next: () => Promise<any>`).
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -248,6 +267,29 @@ async function start(p: Plugin) {
   console.log(await p.load('config')) // prints {}
 }
 start(plugin)
+```
+
+A thenable with members of its own, such as a query builder (`interface Query extends PromiseLike<Row[]> { where(...): Query }`), is not a promise, so `resolves()` and `rejects()` are not offered for it: a native promise has no `where()`. Configure such a member with `.returns()` and a substitute of the thenable:
+
+```typescript
+import { Substitute } from '@fluffy-spoon/substitute'
+
+interface Row { id: number }
+interface Query extends PromiseLike<Row[]> {
+  where(column: string, value: unknown): Query
+}
+interface Database {
+  query(table: string): Query
+}
+
+// @ts-expect-error a native promise has no where()
+Substitute.for<Database>().query('users').resolves([])
+
+const database = Substitute.for<Database>()
+const query = Substitute.for<Query>()
+database.query('users').returns(query)
+query.where('id', 1).returns(query)
+console.log(database.query('users').where('id', 1) === query) // prints true
 ```
 
 ## Throwing exceptions
@@ -349,18 +391,33 @@ const plugin = new Plugin('audit')
 console.log(plugin instanceof Plugin, plugin.ready, plugin.describe()) // prints true true plugin audit
 sdk.received(1).Base('audit')
 
+// the code under test hands the instance to another substitute
+const host = Substitute.for()
+host.register(plugin)
+host.received(1).register(plugin)
+host.received(1).register(Arg.any('object'))
+console.log(JSON.stringify(plugin)) // prints {"name":"audit","ready":true}
+console.log(plugin) // prints Plugin { name: 'audit', ready: true }
+
 // without a setup, every `new` gives a new instance
 const Unconfigured = definePlugin(Substitute.for())
 console.log(new Unconfigured('a') !== new Unconfigured('a'), new Unconfigured('b') instanceof Unconfigured) // prints true true
 ```
 
-**Known issue:** when the code under test passes an instance of such a class to a substitute, as in `host.register(new Plugin('audit'))`, the library takes the instance for an [argument matcher](#argument-matchers), because it inherits from an auto-substitute (`sdk.Base.prototype`). So the call is not recorded, and it is treated as a setup. This does not happen for a class that extends a substitute after `[mimick](RealBase)`.
+Instances of such a class, and any other object whose prototype chain leads to a substitute (`Object.create(sub)`, or objects made from such instances), are ordinary objects, to the library and to the code that looks at them:
+
+* Passed to a substitute, they are recorded, checked and matched like other objects: by [deep strict equality](#how-arguments-are-compared) of their own fields and their prototype, and `Arg.any('object')` matches them.
+* `JSON.stringify(plugin)` gives their own fields. `util.inspect()`, `console.log()`, failure messages, and the messages and snapshots of jest and vitest show them with their class, as `Plugin { name: 'audit', ready: true }`. `String(plugin)`, template strings and `plugin + ''` give `[object Object]`, as with an empty base class.
+* Through such an object, the substitute answers `then`, `toJSON`, `Symbol.toPrimitive`, `util.inspect.custom` and the library's own symbols with `undefined`, and `toString` and `valueOf` with those of `Object.prototype` (with `Function.prototype.toString` for the class itself), unless the substitute configures or mimicks them.
+* A class that extends a substitute is not a substitute itself: `Arg.any('object')` does not match it (`Arg.any('function')` does), and it has no `[received]()`.
+
+Other members that neither the instance nor its class has are still read from the `prototype` of the substitute, which is an auto-substitute, and these reads are recorded there. For example, `util.inspect()` on Node.js 22 and newer reads `href` of every object it prints, so calling it on such an instance, in the test or in the code under test, records a read of `Base.prototype.href` on `sdk` (the library's own printing reads nothing). On Node.js 20 only, `String(plugin)` is `[object Function]`: V8 there takes every object whose prototype is a proxy of a function for a function, with or without the library.
 
 # Argument matchers
 There are several ways of matching arguments. They work the same when you set up calls and when you verify them, and they also work for property assignments (`calculator.received().isEnabled = Arg.any()`).
 
 ## Matching specific arguments
-`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns `true`. When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument.
+`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns a truthy value (`Arg.is(user => user.name)` matches `{ name: 'ann' }`). When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument.
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -387,6 +444,27 @@ console.log(calculator.divide(-4, -2)) // prints 1
 ```
 
 `Arg.is()` with something other than a function throws a `TypeError` right away. A predicate that throws, for example because it reads a property of `null`, counts as a non-match: the code under test is not affected, and a failed assertion says that the predicate threw.
+
+A predicate must decide synchronously. One that returns a promise or another thenable, such as an `async` function, throws a `TypeError` where it is used: in the check, or in the call of the code under test that a setup with it is compared with. Its promise is handled, so no unhandled rejection follows. Await what the predicate needs before the setup or the check:
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const repository = Substitute.for()
+repository.save({ name: 'ann' })
+repository.received(1).save(Arg.is(user => user.name)) // a truthy value matches
+repository.received(1).save(Arg.is(async user => user.name === 'ann')) // throws TypeError: Arg.is{async user => user.name === 'ann'} returned a promise (or another thenable), but an Arg.is predicate must return whether the value matches synchronously
+```
+
+The matchers must be called. In JavaScript, a matcher function passed as it is, such as `Arg.any` instead of `Arg.any()`, would only match that function itself, so a setup with it would never answer and a `didNotReceive()` check with it would always pass. As a direct argument of a setup or a check, `Arg.any`, `Arg.any.not`, `Arg.is`, `Arg.is.not` and `Arg.all` therefore throw a `SubstituteException` that suggests the call. (TypeScript rejects them, unless the parameter takes functions, `any` or `unknown`.) Inside an object or array, they are compared as values, and the code under test can pass them in its own calls, which are recorded as usual.
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const repository = Substitute.for()
+repository.find(Arg.any).returns('ann') // throws SubstituteException: Arg.any was passed as an argument without calling it, so it would only match the function Arg.any itself. Did you mean Arg.any()?
+repository.didNotReceive().delete(Arg.is) // throws SubstituteException: Did you mean Arg.is(predicate)?
+```
 
 ## Matching by type
 `Arg.any(type)` matches values of a type:
