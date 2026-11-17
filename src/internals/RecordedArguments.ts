@@ -1,5 +1,5 @@
 import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
-import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
+import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument, matcherFactoryOf } from '../shared'
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 
@@ -410,6 +410,7 @@ export class RecordedArguments {
    * so anything after it is a usage error.
    */
   static forSpecification(rawArguments: any[]): RecordedArguments {
+    RecordedArguments.rejectMatcherFactories(rawArguments)
     const allIndex = rawArguments.findIndex(argument => isAllArguments(argument))
     if (allIndex !== -1 && allIndex !== rawArguments.length - 1)
       throw SubstituteException.generic(
@@ -421,6 +422,23 @@ export class RecordedArguments {
     if (containers !== undefined)
       for (const argument of rawArguments) if (containers.has(argument)) validateNestedAll(argument, containers)
     return specification
+  }
+
+  /**
+   * E49 (R8FE-5): the arguments of a setup or a check must not be one of the matcher functions themselves (`Arg.any`
+   * for `Arg.any()`, a JavaScript slip): compared as a literal function, such a setup never matched, and a negative
+   * check always passed. It is a usage error that names the matcher.
+   */
+  static rejectMatcherFactories(rawArguments: readonly unknown[], stackStart?: Function): void {
+    for (const argument of rawArguments) {
+      const factory = matcherFactoryOf(argument)
+      if (factory !== undefined)
+        throw SubstituteException.generic(
+          `${factory.name} was passed as an argument without calling it, so it would only match the function ${factory.name} ` +
+          `itself. Did you mean ${factory.call}?`,
+          stackStart
+        )
+    }
   }
 
   /**

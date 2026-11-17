@@ -46,6 +46,11 @@ export class CallRecord {
     this._stack = site
   }
 
+  /** The captured call site itself (E48: the stack of a report about this operation). */
+  public get site(): StackHolder {
+    return this._stack
+  }
+
   /** The call site as a stack trace text, for messages. */
   public get stack(): string | undefined {
     return stackText(this._stack)

@@ -26,6 +26,8 @@ type V8CallSite = {
   getFunctionName(): string | null
   getEnclosingLineNumber?(): number | null
   getEnclosingColumnNumber?(): number | null
+  getLineNumber?(): number | null
+  getColumnNumber?(): number | null
   isAsync?(): boolean
 }
 
@@ -36,7 +38,13 @@ export type StackHolder = { stack?: unknown }
  * The function the first frame outside the library runs in: its file, and the position where the function starts
  * (V8 since Node 14.18) or, on older runtimes, its name.
  */
-export type Frame = { readonly file: string | null | undefined, readonly enclosing: string | null }
+export type Frame = {
+  readonly file: string | null | undefined
+  readonly enclosing: string | null
+  /** E47: where in the file the operation is (as V8 counts, before source maps), when V8 tells it. */
+  readonly line?: number | null
+  readonly column?: number | null
+}
 
 const errorConstructor = Error as unknown as Record<string, unknown>
 const STACK_TRACE_LIMIT = 'stackTraceLimit'
@@ -181,7 +189,12 @@ const frameOf = (callSite: V8CallSite | undefined): Frame | null => {
     const line = typeof callSite.getEnclosingLineNumber === 'function' ? callSite.getEnclosingLineNumber() : null
     const column = typeof callSite.getEnclosingColumnNumber === 'function' ? callSite.getEnclosingColumnNumber() : null
     const enclosing = typeof line === 'number' && typeof column === 'number' ? `${line}:${column}` : callSite.getFunctionName()
-    return { file: callSite.getFileName(), enclosing }
+    return {
+      file: callSite.getFileName(),
+      enclosing,
+      line: typeof callSite.getLineNumber === 'function' ? callSite.getLineNumber() : null,
+      column: typeof callSite.getColumnNumber === 'function' ? callSite.getColumnNumber() : null
+    }
   } catch {
     return null
   }

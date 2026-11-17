@@ -169,3 +169,50 @@ describe('R8 jest snapshots and diffs of values that hold substitutes', () => {
     expect(message).not.toContain('MockFunction')
   })
 })
+
+// Round 9 (E46, R8V-2, R8-ADV-2): an instance of a class that extends a substitute member is an ordinary object to
+// jest: toEqual and toHaveBeenCalledWith compare its fields, and pretty-format prints them (not the substitute's path).
+describe('E46 instances of classes that extend a substitute', () => {
+  const modelClass = () => {
+    const orm = Substitute.for<any>()
+    class User extends (orm.Model as new (options: object) => object) {
+      constructor(public readonly id: number, public readonly name: string) { super({ table: 'users' }) }
+    }
+    return { orm, User }
+  }
+
+  test('toEqual compares their fields', () => {
+    const { User } = modelClass()
+    expect(new User(1, 'ann')).toEqual(new User(1, 'ann'))
+    expectAssertionFailure(failureOf(() => expect(new User(1, 'ann')).toEqual(new User(2, 'bob'))), 'toEqual')
+  })
+
+  test('toHaveBeenCalledWith matches them by their fields', () => {
+    const { User } = modelClass()
+    const save = jest.fn()
+    save(new User(1, 'ann'))
+    expect(save).toHaveBeenCalledWith(new User(1, 'ann'))
+    expectAssertionFailure(failureOf(() => expect(save).toHaveBeenCalledWith(new User(2, 'bob'))), 'toHaveBeenCalledWith')
+  })
+
+  test('failure messages and snapshots print their fields', () => {
+    const { User } = modelClass()
+    const message = failureOf(() => expect(new User(1, 'ann')).toEqual({ id: 2 })).message
+    expect(message).toContain('"name": "ann"')
+    expect(message).not.toContain('@Substitute')
+    expect(new User(3, 'cy')).toMatchInlineSnapshot(`
+User {
+  "id": 3,
+  "name": "cy",
+}
+`)
+  })
+
+  test('a substitute checks calls made with them, and setups made with them answer', () => {
+    const { User } = modelClass()
+    const repository = Substitute.for<any>()
+    repository.save(new User(1, 'ann')).returns('saved')
+    expect(repository.save(new User(1, 'ann'))).toBe('saved')
+    repository.received(1).save(new User(1, 'ann'))
+  })
+})

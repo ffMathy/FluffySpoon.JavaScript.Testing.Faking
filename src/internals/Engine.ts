@@ -7,10 +7,12 @@ import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
-import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
 import {
-  ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
-  contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
+  assertCall, assertPropertyRead, assertSet, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
+} from './Assertions'
+import {
+  ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, StringAssertionKey, SubstitutionMethod,
+  answersOnlyItself, contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
@@ -64,11 +66,13 @@ const viewChangeError = (operation: string, print: Printer, start: Function) => 
   start
 )
 
-const viewTraps = (print: Printer): ProxyHandler<any> => ({
+const viewTraps = (print: Printer, onUse?: () => void): ProxyHandler<any> => ({
   defineProperty: function defineProperty() {
+    onUse?.()
     throw viewChangeError('Object.defineProperty()', print, defineProperty)
   },
   preventExtensions: function preventExtensions() {
+    onUse?.()
     throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
   },
   deleteProperty: () => true,
@@ -76,8 +80,12 @@ const viewTraps = (print: Printer): ProxyHandler<any> => ({
   getOwnPropertyDescriptor: () => undefined
 })
 
-/** A short-lived proxy (see viewTarget and viewTraps). */
-const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(viewTarget(print), { ...viewTraps(print), ...handler })
+/**
+ * A short-lived proxy (see viewTarget and viewTraps). `onUse` (E48): told when the code changes the view (which is a
+ * usage error), as the handler's own traps are told when it is used.
+ */
+const createView = (print: Printer, handler: ProxyHandler<any>, onUse?: () => void): any =>
+  new Proxy(viewTarget(print), { ...viewTraps(print, onUse), ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -327,6 +335,10 @@ const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwne
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
+    if ((answersOnlyItself(property) || isPrinting()) && inheritsFromSubstitute(receiver)) {
+      const inherited = inheritedMember(target(), property, receiver)
+      if (inherited !== AS_USUAL) return inherited
+    }
     const face = target()
     const value = faceGet(face, property, get)
     return value === REAL_READ ? realGet(faceState(face), property, adjacentHandOut(face), captureStack(get)) : value
@@ -348,9 +360,10 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return Reflect.preventExtensions(target)
   },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
-  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : [],
+  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
+  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
   getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
-    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : undefined,
+    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : mimickedDescriptor(target(), property),
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
@@ -370,6 +383,127 @@ const faceHandler: ProxyHandler<FaceTarget> = {
 const inheritsFromSubstitute = (receiver: unknown): receiver is object =>
   (typeof receiver === 'object' && receiver !== null) ||
   (typeof receiver === 'function' && Object.getPrototypeOf(receiver) !== faceTargetPrototype)
+
+const AS_USUAL: unique symbol = Symbol('as usual')
+
+/**
+ * E46: what an object that inherits from a substitute (see inheritsFromSubstitute) reads for one of the members that a
+ * substitute answers in its own way only for itself (see answersOnlyItself): such an object is an ordinary object to
+ * the library and to the code that looks at it, so it reads nothing for the library's own symbols (it is no
+ * substitute, matcher or library value: `isSubstituteProxy`, the matcher brand) and for the printing and conversion
+ * members (then, toJSON, Symbol.toPrimitive, util.inspect.custom): JSON.stringify, util.inspect, String(), template
+ * strings and pretty-format see its own fields. toString and valueOf are those of Object.prototype (Function.prototype's
+ * toString for a class that extends a substitute), as for an empty base class, unless the substitute configures or
+ * mimicks them (then AS_USUAL: the read is a member read like any other). Nothing is recorded.
+ * While the library prints (an argument in a message or a path), any read that reaches a substitute through such an
+ * object reads undefined and is not recorded either: util.inspect probes the objects it prints (Node.js 22 reads
+ * `href`), and printing never records anything.
+ */
+const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): unknown => {
+  if (property !== 'toString' && property !== 'valueOf') return undefined
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state !== undefined && configuresMember(state, property)) return AS_USUAL
+  return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
+}
+
+/*
+ * E50 (R8FE-6): converting a substitute to a primitive (template strings, String(), `+`, comparisons) gives the
+ * printout, unless the test configured or mimicked the conversion: then it follows JavaScript's OrdinaryToPrimitive,
+ * as an ordinary object with those methods would. A mimicked instance's Symbol.toPrimitive (a Date, for example) is used
+ * as it is. Otherwise toString() and valueOf() are tried in the order of the hint ('string': toString first; 'number'
+ * and 'default': valueOf first), each only if it is configured (a call setup that matches `()`, or a property setup
+ * whose value is a function) or mimicked (a method of the instance other than Object.prototype's and
+ * Function.prototype's); the first primitive result is the answer. Such a call is recorded, as a call made by the code
+ * under test (`id.received(1).toString()`). When none answers with a primitive, the printout is the answer.
+ */
+const NO_PRIMITIVE: unique symbol = Symbol('no primitive')
+
+const isPrimitive = (value: unknown): boolean => value === null || (typeof value !== 'object' && typeof value !== 'function')
+
+const isDefaultConversion = (method: unknown): boolean =>
+  method === Object.prototype.toString || method === Object.prototype.valueOf || method === Function.prototype.toString
+
+/** The Symbol.toPrimitive of a substitute or an auto-substitute (see above). */
+const toPrimitiveOf = (face: Face): Function => function toPrimitive(this: unknown, hint: unknown) {
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state !== undefined && (state.mimicked !== undefined || state.isConfiguredKey('toString') || state.isConfiguredKey('valueOf'))) {
+    const value = configuredPrimitive(state, hint, this, toPrimitive)
+    if (value !== NO_PRIMITIVE) return value
+  }
+  return printFace(face, false)
+}
+
+const configuredPrimitive = (state: SubstituteState, hint: unknown, receiver: unknown, start: Function): unknown => {
+  const instance = state.mimicked?.instance
+  if (instance !== undefined && (isSubstituteProxy(instance) || hasMember(instance, Symbol.toPrimitive))) {
+    const convert = instance[Symbol.toPrimitive]
+    if (typeof convert === 'function') return Reflect.apply(convert, instance, [hint])
+  }
+  for (const key of hint === 'string' ? ['toString', 'valueOf'] : ['valueOf', 'toString']) {
+    const value = configuredConversion(state, key, instance, receiver, start)
+    if (value !== NO_PRIMITIVE && isPrimitive(value)) return value
+  }
+  return NO_PRIMITIVE
+}
+
+/** The result of a configured or mimicked toString() / valueOf(), called as the code under test would (see above). */
+const configuredConversion = (state: SubstituteState, key: string, instance: any, receiver: unknown, start: Function): unknown => {
+  const property = state.propertySubstitution(key)
+  if (property !== undefined) {
+    state.addRecord('get', key, undefined, captureStack(start))
+    const method = execute(property)
+    return typeof method === 'function' ? Reflect.apply(method, receiver, []) : NO_PRIMITIVE
+  }
+  const call = state.findCallSubstitution(key, new ArgumentHashes([]))
+  const mimicked = instance !== undefined && !isSubstituteProxy(instance) && hasMember(instance, key) &&
+    typeof instance[key] === 'function' && !isDefaultConversion(instance[key])
+  if ((call === undefined || call.method === 'auto') && !mimicked) return NO_PRIMITIVE
+  return resolveCall(state, key, [], state.addRecord('call', key, [], captureStack(start)), NO_SELF)
+}
+
+/*
+ * E51 (R8FE-2): a substitute that mimicks an instance enumerates like it: Object.keys, Object.entries, spread, for-in
+ * and Object.assign see the instance's enumerable own keys (reported as configurable properties, so that no Proxy
+ * invariant can conflict with the substitute's own target, E25), and reading them goes through the substitute as
+ * usual (recorded, configured values first). JSON.stringify uses the instance's toJSON, or serializes the instance
+ * (see toJSONOf). A substitute that mimicks another substitute, and one that the code under test has frozen or given
+ * properties (E25), keep their own keys.
+ */
+const mimickedInstanceOf = (face: Face): any => {
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  const instance = state?.mimicked?.instance
+  return instance === undefined || isSubstituteProxy(instance) ? undefined : instance
+}
+
+const isEnumerableOwn = (instance: object, key: PropertyKey): boolean => Object.prototype.propertyIsEnumerable.call(instance, key)
+
+const mimickedKeys = (face: Face): Array<string | symbol> => {
+  const instance = mimickedInstanceOf(face)
+  return instance === undefined ? [] : Reflect.ownKeys(instance).filter(key => isEnumerableOwn(instance, key))
+}
+
+const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | undefined => {
+  const instance = mimickedInstanceOf(face)
+  if (instance === undefined || !isEnumerableOwn(instance, key)) return undefined
+  const descriptor = Reflect.getOwnPropertyDescriptor(instance, key)
+  return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+}
+
+/** E51: toJSON of a substitute: the mimicked object's (its own toJSON, or the object itself), otherwise the printout. */
+const toJSONOf = (face: Face): Function => {
+  const instance = mimickedInstanceOf(face)
+  if (instance !== undefined && typeof instance === 'object') {
+    const toJSON = instance.toJSON
+    return typeof toJSON === 'function' ? (key: unknown) => Reflect.apply(toJSON, instance, [key]) : () => instance
+  }
+  return () => printFace(face, false)
+}
+
+/** Whether a member has a setup of its own (as a property or as a method), or the mimicked instance has it. */
+const configuresMember = (state: SubstituteState, key: PropertyKey): boolean =>
+  state.propertySubstitution(key) !== undefined ||
+  state.hasCallSubstitutions(key) ||
+  (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
 
 /**
  * E36: what an ordinary prototype without the property does with such an assignment: the property is created on the
@@ -429,6 +563,8 @@ const REAL_READ: unique symbol = Symbol('real read')
 
 /** A member access on a substitute or an auto-substitute, unless it is a real read (then REAL_READ). */
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
+  if (property === Symbol.toPrimitive) return toPrimitiveOf(face)
+  if (property === 'toJSON') return toJSONOf(face)
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
   const candidate = adjacentHandOut(face)
@@ -439,11 +575,14 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
     const entry = face
+    const stringCheck = entry.kind === 'call' && isStringAssertionKey(entry.key)
+    // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
+    if (stringCheck) useStringCheck(entry)
     const method = substitutionMethodOf(property)
-    if (method !== undefined) return setupFunction(entry, method, chainHead())
+    if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
-    if (entry.kind === 'call' && isStringAssertionKey(entry.key)) {
+    if (stringCheck) {
       const assertion = resolveStringAssertion(entry, chainHead(), stackStart)
       return assertionMember(assertion.state, property, assertion.count, stackStart)
     }
@@ -560,10 +699,9 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     const memberState = faceState(face)
 
     if (RecordedArguments.containsMatchers(rawArgs)) {
-      const specification = RecordedArguments.forSpecification(rawArgs)
       retract(read)
       retract(chainHead)
-      return configureCall(memberState, helper, specification)
+      return configureCall(memberState, helper, RecordedArguments.forSpecification(rawArgs))
     }
 
     // the direct reading takes over the read of the member (`sub.method.call(...)`), as a direct call would
@@ -608,9 +746,8 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         const rawArgs = [thisArg, ...boundArgs]
         const memberState = faceState(face)
         if (RecordedArguments.containsMatchers(rawArgs)) {
-          const specification = RecordedArguments.forSpecification(rawArgs)
           retract(chainHead)
-          return configureCall(memberState, 'bind', specification)
+          return configureCall(memberState, 'bind', RecordedArguments.forSpecification(rawArgs))
         }
         const memberRecord = memberState.addRecord('call', 'bind', rawArgs, captureStack(bind))
         memberRecord.chainPrevious = chainHead
@@ -753,9 +890,10 @@ const invoke = (
   const read = readSource === TAKE_PENDING_READ ? state.takePendingRead(key) : readSource
 
   if (RecordedArguments.containsMatchers(args)) {
-    const specification = RecordedArguments.forSpecification(args)
+    // (retracted first: a usage error in the arguments, E49, leaves no record of the expression behind)
     retract(read)
     retract(continuedChain(chainCandidate, frameAt(stackStart)))
+    const specification = RecordedArguments.forSpecification(args)
     return configureCall(state, key, specification, isStringAssertionKey(key))
   }
 
@@ -866,7 +1004,60 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
   const entry = state.callEntry(key, hashes)
   entry.handOut(record)
+  if (isStringAssertionKey(key) && self.construct !== true) deferStringCheck(state, key, args, entry, record)
   return entryProxy(entry)
+}
+
+/*
+ * E48: a check view that nothing follows checks nothing (`next.didNotReceive()`, `res.received(2)`, `sub[received]()`
+ * as a statement). It is reported as a usage error from a microtask, as a check that fails later is (D9), unless the
+ * view is used before that: a member access (other than the printing members and `then`), an assignment, a call or
+ * `new`. The symbol forms are always checks (see createAssertionProxy).
+ *
+ * The string forms (`sub.received(2)`, `sub.didNotReceive()`) are calls of a member of that name until something
+ * follows them (D11). Such a call is reported when it has the arguments of a check (none, or a valid count for
+ * received), nothing answered it (no setup, no mimicked instance), and at the time of the report the member still has
+ * no setup and has not been checked as a member (`sub[received](1).received(10)`): a type that has a member called
+ * received or didNotReceive of its own configures it, or checks it with the symbols.
+ */
+
+/** E48: the pending reports of the string-form calls that handed out an auto-substitute, until it is used. */
+const danglingStringChecks = new WeakMap<AutoEntry, DeferredAssertion[]>()
+/** E48: the members called received or didNotReceive that a check named, per substitute (see deferStringCheck). */
+const checkedAssertionMembers = new WeakMap<SubstituteState, Set<PropertyKey>>()
+
+const deferStringCheck = (state: SubstituteState, key: StringAssertionKey, args: any[], entry: AutoEntry, record: CallRecord): void => {
+  let count: ExpectedCount
+  if (key === 'didNotReceive') {
+    if (args.length > 0) return
+    count = 0
+  } else {
+    if (args.length > 1 || (args.length === 1 && !isValidCount(args[0]))) return
+    count = args[0]
+  }
+  const deferred = deferDanglingCheck(state, 'string', count, record.site, () =>
+    !record.retracted && !configuresMember(state, key) && checkedAssertionMembers.get(state)?.has(key) !== true)
+  const pending = danglingStringChecks.get(entry)
+  if (pending === undefined) danglingStringChecks.set(entry, [deferred])
+  else pending.push(deferred)
+}
+
+const isValidCount = (count: unknown): boolean => count === undefined || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
+
+/** E48: the auto-substitute of a string-form call is used: its pending reports are settled. */
+const useStringCheck = (entry: AutoEntry): void => {
+  const pending = danglingStringChecks.get(entry)
+  if (pending === undefined) return
+  danglingStringChecks.delete(entry)
+  for (const deferred of pending) settle(deferred)
+}
+
+/** E48: notes that a check named a member called received or didNotReceive (see deferStringCheck). */
+const noteCheckedMember = (state: SubstituteState, key: PropertyKey): void => {
+  if (!isStringAssertionKey(key)) return
+  const members = checkedAssertionMembers.get(state)
+  if (members === undefined) checkedAssertionMembers.set(state, new Set([key]))
+  else members.add(key)
 }
 
 /** The actual arguments of the call that handed out this auto-substitute, when it is part of the same expression. */
@@ -894,11 +1085,13 @@ const describeCall = (state: SubstituteState, key: PropertyKey, args: readonly u
   `${state.memberPath(key)}${formatArguments(args ?? [], false)}`
 
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
-const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined): Function => {
+const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined, stackStart: Function): Function => {
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
     ? RecordedArguments.from(actualArgumentsOf(entry, chainHead)) // handed out by a matcher setup: configure the actual call
     : entry.args
   retract(chainHead)
+  // E49: `repo.find(Arg.any).returns(user)`, a call without matchers whose argument is a matcher function itself
+  if (specification !== undefined && specification.value !== undefined) RecordedArguments.rejectMatcherFactories(specification.value, stackStart)
   return function substitution(...values: any[]) {
     validateSubstitution(method, values, () => entry.kind === 'get'
       ? entry.parent.memberPath(entry.key)
@@ -909,6 +1102,7 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
 }
 
 const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefined, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
+  useStringCheck(entry)
   const args = actualArgumentsOf(entry, chainHead)
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
@@ -927,12 +1121,12 @@ const contextFunction = (context: ContextMethod, getState: () => SubstituteState
       return function received(count?: unknown) {
         const expected = validateExpectedCount(count, received)
         retract(chainHead)
-        return createAssertionProxy(getState(), expected)
+        return createAssertionProxy(getState(), expected, captureStack(received))
       }
     case 'didNotReceive':
       return function didNotReceive() {
         retract(chainHead)
-        return createAssertionProxy(getState(), 0)
+        return createAssertionProxy(getState(), 0, captureStack(didNotReceive))
       }
     case 'clearReceivedCalls':
       return function clearReceivedCalls() {
@@ -1000,27 +1194,33 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
 
 const describeCount = (count: ExpectedCount) => count === undefined ? 'received()' : count === 0 ? 'didNotReceive()' : `received(${count})`
 
-const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any => {
+/** `sub[received](n)` / `sub[didNotReceive]()` (`site`: where). E48: reported later if nothing uses it (see deferStringCheck). */
+const createAssertionProxy = (state: SubstituteState, count: ExpectedCount, site: StackHolder): any => {
   const print: Printer = () => `${state.path}.${describeCount(count)}`
+  const dangling = deferDanglingCheck(state, 'symbol', count, site)
   return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
+      settle(dangling)
       return assertionMember(state, property, count, get)
     },
     set: function set(_target: unknown, property: PropertyKey, value: unknown) {
+      settle(dangling)
       assertSet(state, property, value, count, set)
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      settle(dangling)
       assertDirectCall(state, args, count, apply)
       return undefined
     },
     // E23: a check of `new` is a check of the call
     construct: function construct(_target: unknown, args: any[]) {
+      settle(dangling)
       assertDirectCall(state, args, count, construct)
       return {}
     }
-  })
+  }, () => settle(dangling))
 }
 
 /**
@@ -1036,6 +1236,7 @@ const assertDirectCall = (state: SubstituteState, args: any[], count: ExpectedCo
 
 /** `sub.received(n).member`: a property assertion now, or a method assertion if it is invoked. */
 const assertionMember = (state: SubstituteState, key: PropertyKey, count: ExpectedCount, stackStart: Function): any => {
+  noteCheckedMember(state, key)
   const deferred = assertPropertyRead(state, key, count, stackStart)
   const assertInvocation = (args: any[], start: Function): undefined => {
     settle(deferred)

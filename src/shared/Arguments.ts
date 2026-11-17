@@ -79,7 +79,11 @@ const brandOf = (value: unknown): ArgumentBrand | undefined => {
   // and reading a property from them would be recorded as a property access.
   if (typeof value !== 'object' || value === null) return undefined
   try {
-    return (value as any)[argumentBrand]
+    // E46: only the two brand values make a matcher. An object that inherits from a substitute (an instance of
+    // `class Plugin extends sdk.Base`) reaches the substitute with this read, which answers undefined (see the get trap
+    // in Engine), and a substitute of another copy of the library may answer it with anything.
+    const brand = (value as any)[argumentBrand]
+    return brand === 'single' || brand === 'all' ? brand : undefined
   } catch {
     return undefined
   }
@@ -98,13 +102,54 @@ export const isArgumentMatcher = (value: unknown): value is AnyArgument => brand
 export const evaluateArgument = (argument: AnyArgument, value: unknown): ArgumentEvaluation => {
   const matchingFunction = argument['_matchingFunction'] as PredicateFunction<unknown>
   const inverseMatch = argument['_options']?.inverseMatch ?? false
+  let result: unknown
   try {
-    const result = !!matchingFunction(value)
-    return { matches: inverseMatch ? !result : result, threw: false }
+    result = matchingFunction(value)
   } catch (error) {
     return { matches: false, error, threw: true }
   }
+  if (isThenable(result)) throw thenablePredicateError(argument, result)
+  return { matches: inverseMatch ? !result : !!result, threw: false }
 }
+
+/** Whether a predicate returned a promise or another thenable (an async predicate). */
+const isThenable = (value: unknown): value is PromiseLike<unknown> => {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return false
+  try {
+    return typeof (value as { then?: unknown }).then === 'function'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * E49 (R8FE-4): an Arg.is predicate must decide synchronously. A promise is truthy, so an async predicate matched every
+ * value, and one that rejected left an unhandled rejection behind. It is a usage error instead (a TypeError, like the
+ * other invalid uses of Arg.is), and the promise's rejection is handled, so that it is the only error.
+ */
+const thenablePredicateError = (argument: AnyArgument, result: PromiseLike<unknown>): TypeError => {
+  try {
+    result.then(undefined, () => { })
+  } catch { /* a thenable whose then throws: nothing to handle */ }
+  return new TypeError(
+    `${argument.toString()} returned a promise (or another thenable), but an Arg.is predicate must return whether the ` +
+    `value matches synchronously: an async predicate cannot be used. Await what it needs before the setup or the check.`
+  )
+}
+
+// ---- E49 (R8FE-5): the matcher functions themselves -------------------------------------------------------------
+
+/** Arg.any, Arg.any.not, Arg.is, Arg.is.not and Arg.all of this copy of the library, with how they are called. */
+const matcherFactories = new Map<unknown, { name: string, call: string }>()
+
+/** Registers one of the functions of `Arg` (see Arg.ts): `name` as written, `call` as it is meant to be written. */
+export const registerMatcherFactory = (factory: Function, name: string, call: string): void => {
+  matcherFactories.set(factory, { name, call })
+}
+
+/** The matcher function (Arg.any, ...) that a value is, if it is one, with how it is meant to be called. */
+export const matcherFactoryOf = (value: unknown): { name: string, call: string } | undefined =>
+  typeof value === 'function' ? matcherFactories.get(value) : undefined
 
 /**
  * Two matchers are equivalent when they would always give the same answer: same kind, same predicate

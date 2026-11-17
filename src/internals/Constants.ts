@@ -78,7 +78,10 @@ const protocolKeys = new Set<PropertyKey>([
   '_isMockFunction',
   // E38: DOM event targets call `listener.handleEvent(event)` when it is there (happy-dom checks it first), so a function
   // substitute added as an event listener records the event as a call of itself in happy-dom, jsdom and Node.js
-  'handleEvent'
+  'handleEvent',
+  // E46: the brand that tells the library's matchers apart (shared/Arguments), which a substitute never is, so that a
+  // copy of the library that looks for it on a substitute records nothing
+  Symbol.for('@fluffy-spoon/substitute:argument')
   // E34: '__esModule' is NOT a protocol key (E27 is reverted). Code compiled from ES modules reads it to decide how to
   // import a CommonJS module, and a substitute that stands in for a whole module (a jest.mock factory) must answer it
   // truthy, so that namespace imports (`import * as m`), named imports and Babel's mixed imports
@@ -87,6 +90,34 @@ const protocolKeys = new Set<PropertyKey>([
 ].filter(key => key !== undefined) as PropertyKey[])
 
 export const isProtocolKey = (property: PropertyKey): boolean => protocolKeys.has(property)
+
+const LIBRARY_SYMBOL_PREFIX = '@fluffy-spoon/substitute:'
+const registeredInspectCustom = Symbol.for('nodejs.util.inspect.custom')
+
+/**
+ * E46: the library's own symbols: the registered ones of every copy of the package (the exported symbols, the
+ * substitute marker, the matcher brand, ...) and INTERNAL.
+ */
+export const isLibrarySymbol = (property: symbol): boolean => {
+  if (property === INTERNAL) return true
+  const key = Symbol.keyFor(property)
+  return key !== undefined && key.startsWith(LIBRARY_SYMBOL_PREFIX)
+}
+
+/**
+ * E46: the members that a substitute answers in its own way only for itself, not for an object that inherits from it (an
+ * instance of `class Plugin extends sdk.Base`, `Object.create(sub)`): the library's own symbols and the printing and
+ * conversion members (then, toJSON, Symbol.toPrimitive, util.inspect.custom, toString, valueOf). See the get trap in
+ * Engine.
+ */
+export const answersOnlyItself = (property: PropertyKey): boolean => typeof property === 'symbol'
+  ? property === Symbol.toPrimitive || property === inspect.custom || property === registeredInspectCustom || isLibrarySymbol(property)
+  : property === 'toString' || property === 'valueOf' || property === 'toJSON' || property === 'then' ||
+    (property === 'inspect' && callsInspectMethod)
+
+/** Node.js 10 still calls an object's own `inspect` method in util.inspect (DEP0079, removed in Node.js 11). */
+const callsInspectMethod = typeof process === 'object' && process !== null && typeof process.version === 'string' &&
+  /^v10\./.test(process.version)
 
 export const keyToString =(key: PropertyKey): string => typeof key === 'symbol' ? key.toString() : String(key)
 

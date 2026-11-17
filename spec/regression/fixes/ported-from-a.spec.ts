@@ -739,8 +739,9 @@ test('G:RG-1 symbol assertions on a member named returns/throws/resolves/rejects
     t.throws(() => readOnce[received](3)[name], { instanceOf: SubstituteException }, name)
     t.throws(() => readOnce[didNotReceive]()[name], { instanceOf: SubstituteException }, name)
 
-    // the assertion did not configure anything
-    t.true(types.isProxy(readOnce.received(1)), name)
+    // the assertion did not configure anything (round 9, E48: the bare call `readOnce.received(1)` that looked at this
+    // is now reported as a check that checks nothing, so the setups are looked at directly)
+    t.false(inspect(readOnce).includes('configured:'), name)
 
     // the same for method calls: an assertion never turns into a substitution
     const calledOnce = substitute()

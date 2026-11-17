@@ -166,6 +166,22 @@ test.describe('Verifies test runner compatibility', () => {
     }
   })
 
+  // Round 9 (E53): module mocks that need a plain object, made of a substitute's member handles: a module re-exported
+  // by a barrel (`export *`, jest with ts-jest and babel-jest, in the jest-modules suites above), vitest's vi.mock(),
+  // node:test's mock.module() and jest's unstable_mockModule() for native ES modules. These suites must pass.
+  test.describe('module mocks that need a plain object', () => {
+    for (const suite of ['vitest-modules', 'nodejs-modules', 'jest-modules-esm']) {
+      test.it(`E53 the documented pattern works (${suite})`, () => {
+        try {
+          execSync(`npm run validate:${suite}`, { env: testRunnerEnvironment(), stdio: 'pipe' })
+        } catch (error) {
+          // @ts-expect-error
+          assert.fail(`The module mock checks failed:\n${error.stdout.toString()}${error.stderr.toString()}`)
+        }
+      })
+    }
+  })
+
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
       test.it('reports the Substitute exception', () => {

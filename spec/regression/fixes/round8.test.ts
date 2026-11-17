@@ -475,12 +475,15 @@ test('R7FE-6 (E40) failure messages and printouts show an Error argument as [Nam
 test('R7FE-7 (E40) util.inspect without custom inspection (node:assert) does not show the internal name returnThis', t => {
   const app = Substitute.for<any>()
   const user = app.getUser(1)
-  for (const value of [app, user, app.logger, app[configure](), app.received(), app.getUser.bind(null)]) {
+  const check = app.received()
+  for (const value of [app, user, app.logger, app[configure](), check, app.getUser.bind(null)]) {
     const shown = inspect(value, { customInspect: false })
     t.false(shown.includes('returnThis'), shown)
     // (Node.js 26 shows a proxy as `Proxy(...)` here)
     t.regex(shown, /^(Proxy\()?\[Function: bound substitute\]/)
   }
+  // (round 9, E48: a check view that nothing follows is reported later as checking nothing, so this one is completed)
+  check.getUser(1)
   const error = t.throws(() => assert.strictEqual(user, 'ann'))
   t.false(error!.message.includes('returnThis'), error!.message)
   t.true(error!.message.includes('[Function: bound substitute]'), error!.message)
