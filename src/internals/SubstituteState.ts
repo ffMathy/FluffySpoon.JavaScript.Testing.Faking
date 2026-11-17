@@ -5,8 +5,8 @@ import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import {
-  coarseHashArguments, hashArguments, identityHashArguments, lastHashUsedMemo, lastHashWasApproximate, newOperation,
-  refinedHashArguments
+  coarseHashArguments, hashArguments, identityHashArguments, lastHashMemoUses, lastHashWasApproximate, lastNarrowHash,
+  newOperation, refinedHashArguments, stillWide
 } from './utilities'
 
 let substitutionOrder = 0
@@ -17,15 +17,20 @@ let substitutionOrder = 0
  *
  * E18: the structural hash may use what earlier operations found out about wide containers among the arguments, and
  * be stale when one of them changed since. Such a lookup that finds nothing looks again with the fresh hash before it
- * takes the call as unmatched, wherever a candidate could exist (see CallSubstitutions.match, SubstituteState.callEntry).
- * The arguments of a setup (`setup`) are hashed fresh to begin with, so that they are filed under their contents.
+ * takes the call as unmatched, wherever a candidate could exist: one with the same narrow hash (see
+ * ArgumentHash.lastNarrowHash, CallSubstitutions.match, SubstituteState.callEntry). The arguments of a setup (`setup`)
+ * are hashed fresh to begin with, so that they are filed under their contents.
  */
 export class ArgumentHashes {
   private readonly _operation = newOperation()
   private _structural?: number
+  private _narrow = 0
   private _approximate = false
-  private _memoBased = false
+  /** The containers whose memos of earlier operations the structural hash used (undefined: none). */
+  private _memoUses?: readonly object[]
   private _fresh?: number
+  private _freshNarrow = 0
+  private _stillWide?: boolean
   private _refined?: number
   private _identity?: number | null
   private _coarse?: number
@@ -35,8 +40,9 @@ export class ArgumentHashes {
   public get structural(): number {
     if (this._structural === undefined) {
       this._structural = hashArguments(this.args, this._operation, this._setup)
+      this._narrow = lastNarrowHash()
       this._approximate = lastHashWasApproximate()
-      this._memoBased = lastHashUsedMemo()
+      this._memoUses = lastHashMemoUses()
     }
     return this._structural
   }
@@ -44,14 +50,36 @@ export class ArgumentHashes {
   /** E18: whether the structural hash used what an earlier operation found out (then it may be stale). */
   public get memoBased(): boolean {
     void this.structural
-    return this._memoBased
+    return this._memoUses !== undefined
   }
 
   /** E18: the structural hash from what this operation finds out alone (the structural hash, unless memoBased). */
   public get fresh(): number {
     if (!this.memoBased) return this._structural!
-    if (this._fresh === undefined) this._fresh = hashArguments(this.args, this._operation, true)
+    if (this._fresh === undefined) {
+      this._fresh = hashArguments(this.args, this._operation, true)
+      this._freshNarrow = lastNarrowHash()
+    }
     return this._fresh
+  }
+
+  /** Whether the fresh hash has been computed (it is the one to file a new entry under then). */
+  public get hasFresh(): boolean {
+    return this._fresh !== undefined || !this.memoBased
+  }
+
+  /**
+   * E18: the narrow hash of the arguments (see ArgumentHash.lastNarrowHash): exact, whatever memos the structural hash
+   * used. That of the structural hash, if every container whose memo it used is still wide; otherwise the fresh one.
+   */
+  public get narrow(): number {
+    if (!this.memoBased) return this._narrow
+    if (this._fresh === undefined) {
+      if (this._stillWide === undefined) this._stillWide = this._memoUses!.every(stillWide)
+      if (this._stillWide) return this._narrow
+      void this.fresh
+    }
+    return this._freshNarrow
   }
 
   /**
@@ -229,11 +257,11 @@ type CallEntryIndex = {
   /** The entries handed out for arguments with objects, by their identity hash. */
   byIdentity?: Buckets<AutoEntry>
   /**
-   * E18: the coarse hashes of the entries for arguments with objects (whether a call with objects among its arguments
+   * E18: the narrow hashes of the entries for arguments with objects (whether a call with objects among its arguments
    * can have a candidate at all), each with the entry that was filed under a hash that used memos without a check, if
    * there is one (see callEntry).
    */
-  byCoarse?: Map<number, Unchecked | null>
+  byNarrow?: Map<number, Unchecked | null>
 }
 
 /** An entry filed under a hash that used memos of earlier operations, and that hash. */
@@ -287,8 +315,9 @@ const mostRecentMatch = (list: readonly Substitution[], actual: ArgumentHashes, 
  * there are with other arguments.
  *
  * E18: the literal substitutions are filed under the fresh hash of their arguments, and a call whose hash used a memo
- * of an earlier operation, and finds no literal substitution with it, looks again with its fresh hash, so that a wide
- * object that changed after it was first hashed still matches a substitution for its current contents.
+ * of an earlier operation, and finds no literal substitution with it, looks again with its fresh hash when one has its
+ * narrow hash, so that a wide object that changed after it was first hashed still matches a substitution for its
+ * current contents.
  */
 class CallSubstitutions {
   /** In configuration order within each bucket. */
@@ -296,6 +325,8 @@ class CallSubstitutions {
   private readonly _byIdentity: Buckets<Substitution> = new Map()
   /** The coarse hashes of the literal substitutions (a replaced substitution has the coarse hash of its replacement). */
   private readonly _coarse = new Set<number>()
+  /** E18: the narrow hashes of the literal substitutions (likewise). */
+  private readonly _narrow = new Set<number>()
   /** The order of the most recent literal substitution. */
   private _latestLiteral = 0
   private readonly _withMatchers: Substitution[] = []
@@ -325,6 +356,7 @@ class CallSubstitutions {
     } else this._size++
     bucketAdd(this._literal, hash, substitution)
     this._coarse.add(coarseHashArguments(args.value!))
+    this._narrow.add(hashes.narrow)
     this._latestLiteral = substitution.order
     const identity = identityHashArguments(args.value!)
     if (identity !== undefined) {
@@ -356,8 +388,8 @@ class CallSubstitutions {
         const before = best
         const literal = bucketItems(this._literal, hashes.structural)
         if (literal !== undefined) best = mostRecentMatch(literal, hashes, best, true)
-        // E18: no confirmed match with a hash that may be stale: look again with the fresh one
-        if (best === before && hashes.memoBased) {
+        // E18: no confirmed match with a hash that may be stale: look again with the fresh one, where one could match
+        if (best === before && hashes.memoBased && this._narrow.has(hashes.narrow)) {
           const current = bucketItems(this._literal, hashes.fresh)
           if (current !== undefined) best = mostRecentMatch(current, hashes, best, false)
         }
@@ -535,11 +567,11 @@ export class SubstituteState {
    * the identity of those objects, first.
    *
    * E18: an entry is filed under the hash its call had, which may have used a memo of an earlier operation (a wide
-   * object passed before). A call that finds no entry looks again, wherever an entry with objects at the same places
-   * exists (the coarse hash, which uses no memos): with its fresh hash, when its own hash used a memo; and it files
-   * the one entry of that coarse hash that was filed under a hash with memos without such a look (the first of its
-   * coarse hash, as the later ones looked) under its fresh hash first. So the auto-substitute for a call is the one it
-   * would be without memos, as long as the arguments of an entry do not change after its call.
+   * object passed before). A call that finds no entry looks again, wherever an entry with its narrow hash exists
+   * (exact without memos, see ArgumentHash.lastNarrowHash): with its fresh hash, when its own hash used a memo; and
+   * it files the one entry of that narrow hash that was filed under a hash with memos without such a look (the first
+   * of its narrow hash, as the later ones looked) under its fresh hash first. So the auto-substitute for a call is the
+   * one it would be without memos, as long as the arguments of an entry do not change after its call.
    */
   public callEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry {
     const actualArguments = actual.args
@@ -558,16 +590,19 @@ export class SubstituteState {
     let entry = findEntry(index.byHash, hash, actual, true)
     let unchecked = false
     if (entry === undefined && identity !== undefined) {
-      const groups = index.byCoarse ?? (index.byCoarse = new Map())
-      const coarse = actual.coarse
-      const group = groups.get(coarse)
+      const groups = index.byNarrow ?? (index.byNarrow = new Map())
+      const narrow = actual.narrow
+      const group = groups.get(narrow)
       if (group === undefined) {
-        unchecked = actual.memoBased
-        if (!unchecked) groups.set(coarse, null)
+        // no entry can be equal: file the new one under the fresh hash if there is one, else note it as unchecked
+        if (actual.hasFresh) {
+          hash = actual.fresh
+          groups.set(narrow, null)
+        } else unchecked = true
       } else {
         if (group !== null) {
           refile(index.byHash, group)
-          groups.set(coarse, null)
+          groups.set(narrow, null)
           if (!actual.memoBased) entry = findEntry(index.byHash, hash, actual, false)
         }
         if (entry === undefined && actual.memoBased) {
@@ -579,7 +614,7 @@ export class SubstituteState {
     if (entry === undefined) {
       entry = new AutoEntry('call', this, key, actualArguments)
       bucketAdd(index.byHash, hash, entry)
-      if (unchecked) index.byCoarse!.set(actual.coarse, { entry, hash })
+      if (unchecked) index.byNarrow!.set(actual.narrow, { entry, hash })
     }
     if (identity !== undefined) {
       if (index.byIdentity === undefined) index.byIdentity = new Map()

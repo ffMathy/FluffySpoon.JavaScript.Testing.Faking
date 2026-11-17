@@ -86,7 +86,7 @@ const enum Tag {
   Array = 0x6a09e667, Object = 0x3c6ef373, Map = 0x510e527f, Set = 0x9b05688c, Date = 0x1f83d9ac,
   RegExp = 0x5be0cd1a, Bytes = 0x428a2f98, Boxed = 0x71374491, Identity = 0x2a5c4e2b, Arguments = 0x0f1bbcdc,
   Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Family = 0x3a8f05c5, Unsampled = 0x7c3b1d95,
-  Unreadable = 0x5f356495
+  Unreadable = 0x5f356495, Wide = 0x6b2c97e1
 }
 
 const mix = (hash: number, value: number): number => {
@@ -305,7 +305,11 @@ const listKeys = (object: object): PropertyKey[] => {
  * is being hashed, or it was found inside an entry). Values that cannot be read are remembered with their identity
  * hash, for their operation only (E14, E18).
  */
-type Memo = { operation: number, hash?: number, refined?: number, family?: boolean, unreadable?: number }
+type Memo = {
+  operation: number, hash?: number, refined?: number, family?: boolean, unreadable?: number,
+  /** MAX_ENTRIES + 1 of a wide object's own enumerable keys when it was found wide (see stillWide). */
+  witness?: readonly PropertyKey[]
+}
 const memos = new WeakMap<object, Memo>()
 let remembered = false
 
@@ -330,9 +334,36 @@ const memoOf = (container: object): Memo => {
   return memo
 }
 
-/** Notes, before its entries are hashed, that a container is wide (see entryHash). */
-const markWide = (container: object): void => {
-  memoOf(container)
+/**
+ * Notes, before its entries are hashed, that a container is wide (see entryHash), with keys that show it (for an
+ * object: some of its keys, at least MAX_ENTRIES + 1 of them).
+ */
+const markWide = (container: object, witness?: readonly PropertyKey[]): void => {
+  const memo = memoOf(container)
+  if (witness !== undefined) memo.witness = witness
+  wideCount++
+}
+
+const mapSize = Object.getOwnPropertyDescriptor(Map.prototype, 'size')!.get!
+const setSize = Object.getOwnPropertyDescriptor(Set.prototype, 'size')!.get!
+
+/**
+ * E18: whether a container whose memo an earlier operation wrote is still wide (more than MAX_ENTRIES entries), without
+ * listing its keys: a Map or Set by its size, an object by the keys it had then (all of them are still its own
+ * enumerable keys). Then a hash that used the memo stands for a wide container at the same place, whatever changed
+ * inside it (see lastNarrowHash).
+ */
+export const stillWide = (container: object): boolean => {
+  try {
+    if (types.isMap(container)) return mapSize.call(container) > MAX_ENTRIES
+    if (types.isSet(container)) return setSize.call(container) > MAX_ENTRIES
+    const witness = memos.get(container)?.witness
+    if (witness === undefined || witness.length <= MAX_ENTRIES) return false
+    for (let index = 0; index <= MAX_ENTRIES; index++) if (!propertyIsEnumerable.call(container, witness[index])) return false
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** Remembers the hash of a wide container: as a refined hash too unless it is a family hash. */
@@ -491,7 +522,16 @@ let refining = false
 let approximate = false
 let operation = 0
 let fresh = false
-let usedMemo = false
+/** The containers whose memos of earlier operations the current hash used (undefined: none). */
+let memoUses: object[] | undefined
+/** How many wide containers the current hash met (for lastNarrowHash). */
+let wideCount = 0
+
+/** The current hash uses the memo of a wide container (`current`: written by the current operation). */
+const usesMemo = (container: object, current: boolean): void => {
+  wideCount++
+  if (!current) (memoUses ?? (memoUses = [])).push(container)
+}
 
 let operations = 0
 
@@ -520,12 +560,12 @@ const hashObject = (object: object, budget: number, depth: number): number => {
       } else if (current || !fresh) {
         // a wide container inside an entry (see entryHash)
         if (inEntry) {
-          if (!current) usedMemo = true
+          usesMemo(object, current)
           return Tag.Cut
         }
         const known = refining ? memo.refined : memo.hash
         if (known !== undefined) {
-          if (!current) usedMemo = true
+          usesMemo(object, current)
           if (!refining && memo.family === true) approximate = true
           return known
         }
@@ -599,7 +639,7 @@ const hashKeyed = (object: object, budget: number, depth: number, plain: boolean
     const family = familyOf(object)
     if (family !== -1) {
       if (inEntry) {
-        markWide(object)
+        markWide(object, families[family])
         return Tag.Cut
       }
       if (!refining) return withFamily(object, tag, family, error, depth)
@@ -611,7 +651,7 @@ const hashKeyed = (object: object, budget: number, depth: number, plain: boolean
   if (count > MAX_ENTRIES) {
     // E20: known to be wide from now on in this operation, so that other references to it (records that share it,
     // records that point back to it while it is being hashed) end at its memo without listing its keys again
-    markWide(object)
+    markWide(object, count > MAX_ENTRIES + 1 ? keys.slice(0, MAX_ENTRIES + 1) : keys)
     if (inEntry) return Tag.Cut
   }
   if (lookUp && !lookedUp && !refining && count >= FAMILY_KEYS) {
@@ -646,7 +686,7 @@ const hashKeyed = (object: object, budget: number, depth: number, plain: boolean
 
 const withFamily = (object: object, tag: Tag, family: number, error: ComparedError | undefined, depth: number): number => {
   approximate = true
-  markWide(object)
+  markWide(object, families[family])
   return remember(object, withError(mix(tag, familyHash(object, family)), error, 0, depth), true)
 }
 
@@ -676,6 +716,7 @@ const hashMap = (map: Map<unknown, unknown>, budget: number, depth: number): num
   const h = mix(Tag.Map, size)
   let sum = 0
   if (size > MAX_ENTRIES) {
+    wideCount++
     if (inEntry) return Tag.Cut
     const scanned = size <= MAX_SCANNED_ENTRIES
     mapForEach.call(map, (value: unknown, key: unknown) => {
@@ -703,6 +744,7 @@ const hashSet = (set: Set<unknown>, budget: number, depth: number): number => {
   const size = set.size
   let sum = 0
   if (size > MAX_ENTRIES) {
+    wideCount++
     if (inEntry) return Tag.Cut
     const member = size <= MAX_SCANNED_ENTRIES ? entryHash : shallowHash
     setForEach.call(set, (value: unknown) => {
@@ -727,34 +769,46 @@ const hashing = (refine: boolean, of: number, freshly: boolean, hash: () => numb
   const outerInEntry = inEntry
   const outerOperation = operation
   const outerFresh = fresh
-  const outerUsedMemo = usedMemo
+  const outerMemoUses = memoUses
+  const outerWideCount = wideCount
   refining = refine
   approximate = false
   inEntry = false
   operation = of
   fresh = freshly || !hashSettings.memos
-  usedMemo = false
+  memoUses = undefined
   try {
     return hash()
   } catch {
+    lastNarrow = FALLBACK_HASH
     return FALLBACK_HASH
   } finally {
     lastApproximate = approximate
-    lastUsedMemo = usedMemo
+    lastMemoUses = memoUses
     refining = outerRefining
     approximate = outerApproximate
     inEntry = outerInEntry
     operation = outerOperation
     fresh = outerFresh
-    usedMemo = outerUsedMemo
+    memoUses = outerMemoUses
+    wideCount = outerWideCount
   }
 }
 let lastApproximate = false
-let lastUsedMemo = false
+let lastMemoUses: readonly object[] | undefined
+let lastNarrow = 0
 
+/** Also computes the narrow hash of the list (see lastNarrowHash). */
 const hashList = (args: readonly unknown[]): number => {
   let h = mix(Tag.Array, args.length)
-  for (let index = 0; index < args.length; index++) h = mix(h, hashValue(args[index], BUDGET, 0))
+  let narrow = h
+  for (let index = 0; index < args.length; index++) {
+    const wide = wideCount
+    const value = hashValue(args[index], BUDGET, 0)
+    h = mix(h, value)
+    narrow = mix(narrow, wideCount === wide ? value : Tag.Wide)
+  }
+  lastNarrow = narrow
   return h
 }
 
@@ -775,10 +829,19 @@ export const hashArguments = (args: readonly unknown[], of = newOperation(), fre
 export const lastHashWasApproximate = (): boolean => lastApproximate
 
 /**
- * E18: whether the memo of an earlier operation took part in the last hash: the hash may be stale then (a container
- * that changed since), and a fresh hash may differ.
+ * E18: the containers whose memos of earlier operations took part in the last hash (undefined when none did): the hash
+ * may be stale then (a container that changed since), and a fresh hash may differ.
  */
-export const lastHashUsedMemo = (): boolean => lastUsedMemo
+export const lastHashMemoUses = (): readonly object[] | undefined => lastMemoUses
+
+/**
+ * E18: the narrow hash of the last argument list hashed by hashArguments: the structural hash with every argument that
+ * holds a wide container (where the hash meets it) counted as one tag. It is exact without memos, as the rest of such
+ * an argument is: argument lists that are deep strictly equal now have the same narrow hash, provided that every
+ * container whose memo the hash used is still wide (stillWide). So it tells, without a fresh hash, that no setup or
+ * entry can be equal to a call whose hash used memos.
+ */
+export const lastNarrowHash = (): number => lastNarrow
 
 /** The hash of an argument list without families (E13): it also counts the keys a family leaves out. */
 export const refinedHashArguments = (args: readonly unknown[], of = newOperation(), freshly = false): number =>
