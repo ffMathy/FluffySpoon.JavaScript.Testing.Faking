@@ -45,12 +45,23 @@ const bestOfThree = (run: () => void) => Math.min(millisecondsOf(run), milliseco
  * 16 times slower, quadratic growth up to 256 times. The bound of 48 leaves three times the linear ratio for
  * noise, and fails once the quadratic part dominates the large run: scanning every earlier call on each call
  * gives a ratio of about 150 (2000 calls: 16 ms, 32000 calls: 2.4 s).
+ * E29: the small and the large run by turns, in both orders, and the median of the ratios of five rounds, so that a
+ * busy machine slows both sides of each ratio alike and a round that it slowed on one side does not count.
  */
 const growthOf = (small: number, run: (count: number) => void) => {
   run(small) // warm up
-  const smallTime = bestOfThree(() => run(small))
-  const largeTime = bestOfThree(() => run(small * 16))
-  return { grows: largeTime >= Math.max(smallTime, 2) * 48, report: `${small}: ${smallTime} ms, ${small * 16}: ${largeTime} ms` }
+  const ratios: number[] = []
+  const rounds: string[] = []
+  for (let round = 0; round < 5; round++) {
+    const smallFirst = round % 2 === 0
+    const first = millisecondsOf(() => run(smallFirst ? small : small * 16))
+    const second = millisecondsOf(() => run(smallFirst ? small * 16 : small))
+    const [smallTime, largeTime] = smallFirst ? [first, second] : [second, first]
+    ratios.push(largeTime / Math.max(smallTime, 2))
+    rounds.push(`${smallTime.toFixed(1)} / ${largeTime.toFixed(1)} ms`)
+  }
+  const ratio = [...ratios].sort((a, b) => a - b)[Math.floor(ratios.length / 2)]
+  return { grows: ratio >= 48, report: `${small} vs ${small * 16} operations: ${ratio.toFixed(1)}x (rounds: ${rounds.join(', ')})` }
 }
 
 test('R:RT-8 / D19 the cost of a call does not grow with the number of earlier calls', t => {

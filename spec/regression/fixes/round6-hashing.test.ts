@@ -113,15 +113,18 @@ test.serial('R5-ADV-1 (E13) 50 normalized-state actions with a nested 5,000-entr
 test.serial('R5-ADV-1 (E13) distinct tables of records, Sets of objects and Maps with object keys are told apart: 100 calls each', t => {
   // 45facfb (and ec64181): 3.4 to 4.2 s each, as the objects among the entries of a wide container all counted alike
   const records = (call: number) => Array.from({ length: 5000 }, (_, key) => ({ id: call * 5000 + key, name: `n${key}` }))
-  const shapes: Array<[string, unknown[]]> = [
-    ['100 Sets of 5,000 records', Array.from({ length: 100 }, (_, call) => new Set(records(call)))],
-    ['100 Maps with 5,000 object keys', Array.from({ length: 100 }, (_, call) => new Map(records(call).map((record, key): [object, object] => [{ key }, record])))],
-    ['100 tables of 5,000 records with the same keys', Array.from({ length: 100 }, (_, call) => { const rows = records(call); return wideObject(5000, key => rows[key], key => `user${key}`) })],
+  // E29: the best of three runs, each with values of its own, made right before it (and dropped after it), so that a
+  // busy machine, or a garbage collection of the values of the other shapes, does not count
+  const shapes: Array<[string, (run: number) => unknown[]]> = [
+    ['100 Sets of 5,000 records', run => Array.from({ length: 100 }, (_, call) => new Set(records(run * 100 + call)))],
+    ['100 Maps with 5,000 object keys', run => Array.from({ length: 100 }, (_, call) => new Map(records(run * 100 + call).map((record, key): [object, object] => [{ key }, record])))],
+    ['100 tables of 5,000 records with the same keys', run => Array.from({ length: 100 }, (_, call) => { const rows = records(run * 100 + call); return wideObject(5000, key => rows[key], key => `user${key}`) })],
     // the same keys and ids, other names: snapshots of a normalized state
-    ['100 snapshots of 5,000 records', Array.from({ length: 100 }, (_, call) => wideObject(5000, key => ({ id: key, name: `n${key}`, address: { city: `c${call}` } }), key => `id${key}`))]
+    ['100 snapshots of 5,000 records', run => Array.from({ length: 100 }, (_, call) => wideObject(5000, key => ({ id: key, name: `n${key}`, address: { city: `c${run}_${call}` } }), key => `id${key}`))]
   ]
   for (const [name, values] of shapes) {
-    const elapsed = timeCalls(values)
+    let elapsed = Infinity
+    for (let run = 0; run < 3; run++) elapsed = Math.min(elapsed, timeCalls(values(run)))
     t.log(`${name}: ${elapsed.toFixed(1)} ms`)
     t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
   }
