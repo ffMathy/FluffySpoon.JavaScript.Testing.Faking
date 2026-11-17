@@ -98,6 +98,9 @@ ava runs two groups of tests:
   `nodenext` and `bundler` mode, and the consistency of `package.json`, `package-lock.json` and the workflows.
   The temporary directories are removed afterwards.
 
+No test leaves files in the temporary directory (`os.tmpdir()`). A run leaves only Node.js' module compile cache there
+(`node-compile-cache/`, written when npm, npx or tsc start Node.js) and one empty directory that ava itself creates.
+
 To run a single file or test, use ava's options after building the specs, for example:
 
 ```sh
