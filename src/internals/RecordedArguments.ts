@@ -1,4 +1,4 @@
-import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
+import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
@@ -57,10 +57,21 @@ const containerEntries = (container: object): Array<[PropertyKey, unknown]> => A
   ? Array.from({ length: container.length }, (_, index): [PropertyKey, unknown] => [index, container[index]])
   : ownEnumerableKeys(container).map((key): [PropertyKey, unknown] => [key, (container as any)[key]])
 
-/** The value of an own data property; getters are not run (a matcher behind a getter is not looked for). */
-const dataValue = (object: object, key: PropertyKey): unknown => {
-  const descriptor = Object.getOwnPropertyDescriptor(object, key)
-  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
+// Annex B, in every supported runtime; captured when the library is loaded
+const lookupGetter: (this: object, key: PropertyKey) => Function | undefined = (Object.prototype as any).__lookupGetter__
+
+/**
+ * The value of an own property of an object (keys come from listing its own keys); getters are not run (a matcher behind
+ * a getter is not looked for), and neither are the get traps of a proxy (`proxy`: the object is one). E29: without
+ * creating a property descriptor for every key of an ordinary object, which made the search allocate more than anything
+ * else for arrays of records.
+ */
+const dataValue = (object: object, key: PropertyKey, proxy: boolean): unknown => {
+  if (proxy) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
+  }
+  return lookupGetter.call(object, key) === undefined ? (object as any)[key] : undefined
 }
 
 /*
@@ -160,10 +171,11 @@ const holdsMatcherInside = (container: object, budget: number, depth: number, se
   }
   search.items -= count
   const share = Math.floor((budget - 1) / count)
-  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search, true)) return true
+  const proxy = types.isProxy(container)
+  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index], proxy), share, depth, search, true)) return true
   for (let index = 0; index < symbols.length; index++) {
     const symbol = symbols[index]
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search, true)) return true
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol, proxy), share, depth, search, true)) return true
   }
   if (count > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
   return false
@@ -226,10 +238,11 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
     const symbols = Object.getOwnPropertySymbols(container)
     if (keys.length + symbols.length > MAX_SCANNED_ITEMS) continue
     if ((items -= keys.length + symbols.length) < 0) return false
-    for (let index = 0; index < keys.length; index++) if (!look(dataValue(container, keys[index]), depth + 1)) return false
+    const proxy = types.isProxy(container)
+    for (let index = 0; index < keys.length; index++) if (!look(dataValue(container, keys[index], proxy), depth + 1)) return false
     for (let index = 0; index < symbols.length; index++) {
       const symbol = symbols[index]
-      if (Object.prototype.propertyIsEnumerable.call(container, symbol) && !look(dataValue(container, symbol), depth + 1)) return false
+      if (Object.prototype.propertyIsEnumerable.call(container, symbol) && !look(dataValue(container, symbol, proxy), depth + 1)) return false
     }
   }
   return true

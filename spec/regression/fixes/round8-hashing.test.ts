@@ -2,7 +2,8 @@ import test from 'ava'
 import * as fs from 'fs'
 import * as path from 'path'
 
-import { Substitute, configure } from '../../../src'
+import { Substitute, Arg, configure } from '../../../src'
+import { RecordedArguments } from '../../../src/internals/RecordedArguments'
 
 // Round 8, engine A: the timing-sensitive test run, the memo of wide containers and values that cannot be read (fix
 // spec E29 to E32). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
@@ -239,4 +240,28 @@ test.serial('R7-ADV-4 (E31) 10,000 calls whose small argument holds a shared wid
   for (let index = 0; index < 100; index++) delete shrinking[`k${index}`]
   const copy = sub.g({ id: 1, shrinking: { ...shrinking } })
   t.is(sub.g({ id: 1, shrinking }), copy)
+})
+
+test('E29 the search for nested matchers reads data properties only: no getters, no get traps of proxies', t => {
+  // it no longer asks for a property descriptor of every key (which made arrays of records allocate most of their cost)
+  let getterRuns = 0
+  let trapRuns = 0
+  const withGetter = Object.defineProperty({ id: 1 }, 'lazy', { enumerable: true, get() { getterRuns++; return Arg.any() } })
+  // (the check whether a value is a matcher reads its brand, a symbol, through the trap: only the keys of the object count)
+  const proxy = new Proxy({ id: 2, nested: { value: 1 } }, { get(target, key, receiver) { if (typeof key === 'string') trapRuns++; return Reflect.get(target, key, receiver) } })
+  t.false(RecordedArguments.containsMatchers([withGetter]))
+  t.false(RecordedArguments.containsMatchers([[withGetter, { list: [withGetter] }]]))
+  t.false(RecordedArguments.containsMatchers([{ proxy }]))
+  t.is(getterRuns, 0)
+  t.is(trapRuns, 0)
+  // a matcher in a data property is found, also in a proxy of a plain object, also with a null prototype
+  t.true(RecordedArguments.containsMatchers([{ id: 1, name: Arg.any() }]))
+  t.true(RecordedArguments.containsMatchers([new Proxy({ id: Arg.any() }, {})]))
+  t.true(RecordedArguments.containsMatchers([Object.assign(Object.create(null), { id: Arg.any() })]))
+  // a key named like an accessor of Object.prototype is an own data property like any other
+  t.true(RecordedArguments.containsMatchers([JSON.parse('{"__proto__": 1, "id": 2}'), { __defineGetter__: Arg.any() }]))
+  // an own accessor without a getter reads as undefined, without running anything
+  const setterOnly = Object.defineProperty({}, 'sink', { enumerable: true, set() { getterRuns++ } })
+  t.false(RecordedArguments.containsMatchers([setterOnly]))
+  t.is(getterRuns, 0)
 })
