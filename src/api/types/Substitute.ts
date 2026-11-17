@@ -1,5 +1,5 @@
 import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
-import { CallKind, FunctionSubstitute } from './FunctionSubstitute'
+import { CallKind, FunctionSubstitute, VariantsKind } from './FunctionSubstitute'
 import { GenericKind, IndexKind, IsUnion, ValueKind } from './Utilities'
 
 /**
@@ -123,9 +123,23 @@ type UnionVariantPatchOf<TVariant, T> = TVariant extends unknown ? VariantPatch<
 // to it against the member type of the constraint (`sub.received().total = 1` with `T extends Calculator`, T33), which
 // it never does for a conditional type.
 type AssertionMember<TValue> = {
-  call: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
+  call: AssertionCallMember<TValue>
   plain: TValue
 }[AssertionKind<ValueKind<TValue>, TValue>]
+
+// A member whose type is a union of function types (one per variant of a union `T`, such as lib.dom's
+// `addEventListener` in the union of all elements) is not intersected with that union: TypeScript would distribute
+// the intersection over the variants and compare the signatures of every variant with those of every other one when
+// the member is called, which made checks of such members slow to type-check (R8TD-8, T57). The signatures of the
+// assertion view already take every parameter list of every variant (see `FunctionSubstitute`), and the member's own
+// signatures return what is checked anyway. The member type is kept when it has properties of its own or includes
+// `null | undefined`. (`VariantsKind` is `'single'` in generic code.)
+type AssertionCallMember<TValue> = {
+  single: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
+  [union: number]: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & UnionAssertionRest<TValue>
+}[VariantsKind<NonNullable<TValue>>]
+type UnionAssertionRest<TValue> =
+  [keyof NonNullable<TValue>] extends [never] ? ([Extract<TValue, null | undefined>] extends [never] ? unknown : TValue) : TValue
 
 // For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
 type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
