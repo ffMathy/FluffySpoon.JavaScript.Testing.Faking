@@ -91,11 +91,22 @@ of timings), listed once as `timingSensitive` in `ava.config.js`: `spec/regressi
 `spec/regression/fixes/performance.test.ts`, `spec/regression/fixes/round5.test.ts`,
 `spec/regression/fixes/round8.test.ts` and `spec/regression/fixes/ported-from-a.spec.ts`. The second run,
 `ava --config ava.perf.config.js --serial --concurrency=1`, runs only those, one test at a time, so that other test
-files cannot slow them down. Tests that compare timings take the median of several interleaved rounds. Both runs
+files cannot slow them down. Tests that compare timings take the median of several interleaved rounds. Absolute
+limits (such as 10,000 calls in under 1 s) are checked with `timeLimit()` and `assertWithin()` from
+`spec/helpers/timing.ts`. Right before the measurement, the helper times a fixed CPU-bound workload in the same
+process, and scales the limit by that time over the workload's time on an idle machine (`IDLE_WORKLOAD_MS`, 9 ms),
+clamped to between 1 and 4 (`MAX_FACTOR`). If a measurement exceeds its limit, it is judged once more against the
+larger of that factor and one measured right after it. A busy machine slows the workload as much as the test, so the
+limit grows with the load, while an algorithmic regression still fails, as no limit grows beyond 4 times. Every check
+logs its time, limit and factor. A new timing test must use the helper: a test in
+`spec/regression/fixes/round9-hashing.test.ts` checks that no timing-sensitive file compares a time with a fixed
+number. To reproduce a busy machine, start the busy loops (for example `node -e 'for (;;) {}'`, 12 of them for 4
+cores) in the same shell session as `npm test`: Linux groups the processes of a session for scheduling (autogroup),
+so loops started in another terminal barely slow the tests down. Both runs
 have a stall timeout of 3 minutes (ava's default of 10 seconds is too short for the packaging checks and the long
 serial tests on a busy machine). A new spec file that measures time must be added to `timingSensitive`: a test in
-`spec/regression/fixes/round8-hashing.test.ts` checks that every spec file that reads a clock runs in the second run,
-and that every spec file runs in exactly one of the two.
+`spec/regression/fixes/round8-hashing.test.ts` checks that every spec file that reads a clock or imports
+`spec/helpers/timing.ts` runs in the second run, and that every spec file runs in exactly one of the two.
 
 The tests are of two kinds:
 
@@ -157,8 +168,8 @@ Afterwards the same script runs two more checks with the TypeScript of this repo
 - `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
   compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
   against the built typings and fails when that needs more type instantiations than its budget,
-  `INSTANTIATION_BUDGET` in the script: 470,000 (467,858 with TypeScript 5.9.2 now). Instantiation counts are
-  deterministic, unlike timings. A change to the typings that needs more must make them cheaper, or raise the budget
+  `INSTANTIATION_BUDGET` in the script: 470,000 (469,961 with TypeScript 5.9.2 now, so 39 to spare: a change to the
+  typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change to the typings that needs more must make them cheaper, or raise the budget
   in the same change with a reason in the script's header. To run it alone: `npm run build && node
   spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
 
@@ -183,20 +194,30 @@ not against `src/`, and checks two things:
 
 - `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
   inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
-  after the test function has returned. It also runs three suites that must pass:
+  after the test function has returned. It also runs these suites, which must pass:
   - `test-runners/jest-matchers/` (`npm run validate:jest-matchers`): substitutes used inside jest matchers compare
     by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
     `expect(42).toEqual(substitute)` fails with jest's normal assertion error. It also checks that snapshots
     (`toMatchSnapshot()` against the committed `__snapshots__/`, and `toMatchInlineSnapshot()`) and failure diffs of
-    values that hold substitutes finish quickly, print paths, and do not show substitutes as mock functions.
+    values that hold substitutes finish quickly, print paths, and do not show substitutes as mock functions, and that
+    instances of classes that extend a substitute are ordinary objects in `toEqual()`, `toHaveBeenCalledWith()`,
+    inline snapshots, setups and checks.
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
     vitest's matchers, snapshots and diffs, and how vitest and `util.inspect` see printed, frozen and `in`-probed
     substitutes.
   - `test-runners/jest-modules/` (`npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel`): a
     substitute that stands in for a whole module (a `jest.mock()` factory), imported by the code under test as a
     namespace, with named imports, with a default and named import together, and as a default export through the
-    factory that README "Mocking a whole module" documents. It runs once compiled by ts-jest with `esModuleInterop`
+    factory that README "Mocking a whole module" documents, and a module re-exported by a barrel (`export *`), mocked
+    either through the barrel itself or with a plain object of the substitute's members (`barrel-substitute.spec.ts`,
+    `barrel-members.spec.ts`). It runs once compiled by ts-jest with `esModuleInterop`
     (`jest.modules.ts-jest.config.js`) and once by babel-jest (`jest.modules.babel.config.js`).
+  - Module mocks that need a plain object of a substitute's members, as README "Mocking a whole module" shows:
+    vitest's `vi.mock()` (`test-runners/vitest-modules/`, `npm run validate:vitest-modules`), node:test's
+    `mock.module()` (`test-runners/nodejs-modules/`, `npm run validate:nodejs-modules`, with
+    `--experimental-test-module-mocks`) and jest's `unstable_mockModule()` for native ES modules
+    (`test-runners/jest-esm-modules/`, `npm run validate:jest-modules-esm`, with `--experimental-vm-modules` and
+    `jest.modules.esm.config.js`).
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
@@ -238,7 +259,8 @@ does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
 `mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
-`npm run validate:jest-matchers`, `npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel` are the
+`npm run validate:jest-matchers`, `npm run validate:jest-modules-ts`, `npm run validate:jest-modules-babel`,
+`npm run validate:jest-modules-esm`, `npm run validate:nodejs-modules` and `npm run validate:vitest-modules` are the
 exceptions: they are expected to pass, as is the vitest-matchers suite.
 
 ## Continuous integration
