@@ -4,29 +4,54 @@ import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { coarseHashArguments, hashArguments, identityHashArguments, lastHashWasApproximate, refinedHashArguments } from './utilities'
+import {
+  coarseHashArguments, hashArguments, identityHashArguments, lastHashUsedMemo, lastHashWasApproximate, newOperation,
+  refinedHashArguments
+} from './utilities'
 
 let substitutionOrder = 0
 
 /**
  * The hashes of the actual arguments of one call (see ArgumentHash), computed when first needed and shared by the
- * lookups the call makes (the literal substitutions, then the auto-substitute cache).
+ * lookups the call makes (the literal substitutions, then the auto-substitute cache). They belong to one operation.
+ *
+ * E18: the structural hash may use what earlier operations found out about wide containers among the arguments, and
+ * be stale when one of them changed since. Such a lookup that finds nothing looks again with the fresh hash before it
+ * takes the call as unmatched, wherever a candidate could exist (see CallSubstitutions.match, SubstituteState.callEntry).
+ * The arguments of a setup (`setup`) are hashed fresh to begin with, so that they are filed under their contents.
  */
 export class ArgumentHashes {
+  private readonly _operation = newOperation()
   private _structural?: number
   private _approximate = false
+  private _memoBased = false
+  private _fresh?: number
   private _refined?: number
   private _identity?: number | null
   private _coarse?: number
 
-  constructor(public readonly args: readonly unknown[]) { }
+  constructor(public readonly args: readonly unknown[], private readonly _setup = false) { }
 
   public get structural(): number {
     if (this._structural === undefined) {
-      this._structural = hashArguments(this.args)
+      this._structural = hashArguments(this.args, this._operation, this._setup)
       this._approximate = lastHashWasApproximate()
+      this._memoBased = lastHashUsedMemo()
     }
     return this._structural
+  }
+
+  /** E18: whether the structural hash used what an earlier operation found out (then it may be stale). */
+  public get memoBased(): boolean {
+    void this.structural
+    return this._memoBased
+  }
+
+  /** E18: the structural hash from what this operation finds out alone (the structural hash, unless memoBased). */
+  public get fresh(): number {
+    if (!this.memoBased) return this._structural!
+    if (this._fresh === undefined) this._fresh = hashArguments(this.args, this._operation, true)
+    return this._fresh
   }
 
   /**
@@ -41,13 +66,13 @@ export class ArgumentHashes {
 
   public get refined(): number {
     if (!this.approximate) return this.structural
-    if (this._refined === undefined) this._refined = refinedHashArguments(this.args)
+    if (this._refined === undefined) this._refined = refinedHashArguments(this.args, this._operation, this._setup)
     return this._refined
   }
 
   /** Whether the candidates in a bucket of this hash with these arguments can be equal to these arguments. */
   public mayEqual(candidate: readonly unknown[] | undefined, candidates: number): boolean {
-    return candidates < 2 || candidate === undefined || !this.approximate || refinedHashArguments(candidate) === this.refined
+    return candidates < 2 || candidate === undefined || !this.approximate || refinedHashArguments(candidate, this._operation) === this.refined
   }
 
   /** E9: primitives and functions only (see coarseHashArguments): free to compute. */
@@ -203,6 +228,33 @@ type CallEntryIndex = {
   byHash: Buckets<AutoEntry>
   /** The entries handed out for arguments with objects, by their identity hash. */
   byIdentity?: Buckets<AutoEntry>
+  /**
+   * E18: the coarse hashes of the entries for arguments with objects (whether a call with objects among its arguments
+   * can have a candidate at all), each with the entry that was filed under a hash that used memos without a check, if
+   * there is one (see callEntry).
+   */
+  byCoarse?: Map<number, Unchecked | null>
+}
+
+/** An entry filed under a hash that used memos of earlier operations, and that hash. */
+type Unchecked = { entry: AutoEntry, hash: number }
+
+/**
+ * The entry in the bucket of `hash` whose arguments match the call. `sameHash`: the bucket is that of the call's
+ * structural hash (E13, see mayEqual).
+ */
+const findEntry = (byHash: Buckets<AutoEntry>, hash: number, actual: ArgumentHashes, sameHash: boolean): AutoEntry | undefined => {
+  const bucket = bucketItems(byHash, hash)
+  if (bucket === undefined) return undefined
+  return bucket.find(candidate => (!sameHash || actual.mayEqual(candidate.argumentList, bucket.length)) && candidate.matchesCall(actual.args))
+}
+
+/** E18: files an entry that was filed under a hash with memos of earlier operations under its fresh hash. */
+const refile = (byHash: Buckets<AutoEntry>, unchecked: Unchecked): void => {
+  const current = hashArguments(unchecked.entry.argumentList!, newOperation(), true)
+  if (current === unchecked.hash) return
+  bucketRemove(byHash, unchecked.hash, unchecked.entry)
+  bucketAdd(byHash, current, unchecked.entry)
 }
 
 /**
@@ -233,6 +285,10 @@ const mostRecentMatch = (list: readonly Substitution[], actual: ArgumentHashes, 
  * recent. And a call whose primitive arguments are those of no literal substitution (coarseHashArguments) cannot
  * match one. So a call with a large object as an argument costs the same as any other, whatever literal substitutions
  * there are with other arguments.
+ *
+ * E18: the literal substitutions are filed under the fresh hash of their arguments, and a call whose hash used a memo
+ * of an earlier operation, and finds no literal substitution with it, looks again with its fresh hash, so that a wide
+ * object that changed after it was first hashed still matches a substitution for its current contents.
  */
 class CallSubstitutions {
   /** In configuration order within each bucket. */
@@ -259,7 +315,7 @@ class CallSubstitutions {
       this._withMatchers.push(substitution)
       return
     }
-    const hashes = new ArgumentHashes(args.value!)
+    const hashes = new ArgumentHashes(args.value!, true)
     const hash = hashes.structural
     const bucket = bucketItems(this._literal, hash)
     const replaced = bucket?.find(existing => hashes.mayEqual(existing.args!.value, bucket.length) && existing.args!.equals(args))
@@ -280,7 +336,7 @@ class CallSubstitutions {
   /** The substitution configured with exactly this specification. */
   public withSpecification(args: RecordedArguments): Substitution | undefined {
     if (args.argumentsClass !== 'plain') return this._withMatchers.find(substitution => substitution.args!.equals(args))
-    const hashes = new ArgumentHashes(args.value!)
+    const hashes = new ArgumentHashes(args.value!, true)
     const bucket = bucketItems(this._literal, hashes.structural)
     return bucket?.find(substitution => hashes.mayEqual(substitution.args!.value, bucket.length) && substitution.args!.equals(args))
   }
@@ -297,8 +353,14 @@ class CallSubstitutions {
         if (best !== undefined && best.order === this._latestLiteral) return best
       }
       if (this._coarse.has(hashes.coarse)) {
+        const before = best
         const literal = bucketItems(this._literal, hashes.structural)
         if (literal !== undefined) best = mostRecentMatch(literal, hashes, best, true)
+        // E18: no confirmed match with a hash that may be stale: look again with the fresh one
+        if (best === before && hashes.memoBased) {
+          const current = bucketItems(this._literal, hashes.fresh)
+          if (current !== undefined) best = mostRecentMatch(current, hashes, best, false)
+        }
       }
       if (best !== undefined) return best
     }
@@ -471,6 +533,13 @@ export class SubstituteState {
    * mutated in between (the structural hash has gone stale then), so that after `api.get(request).body.returns(1)`
    * and `request.x = 1`, `api.get(request).body` is still 1: entries for arguments with objects are also found by
    * the identity of those objects, first.
+   *
+   * E18: an entry is filed under the hash its call had, which may have used a memo of an earlier operation (a wide
+   * object passed before). A call that finds no entry looks again, wherever an entry with objects at the same places
+   * exists (the coarse hash, which uses no memos): with its fresh hash, when its own hash used a memo; and it files
+   * the one entry of that coarse hash that was filed under a hash with memos without such a look (the first of its
+   * coarse hash, as the later ones looked) under its fresh hash first. So the auto-substitute for a call is the one it
+   * would be without memos, as long as the arguments of an entry do not change after its call.
    */
   public callEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry {
     const actualArguments = actual.args
@@ -485,12 +554,32 @@ export class SubstituteState {
       if (known !== undefined) return known
     }
 
-    const hash = actual.structural
-    const bucket = bucketItems(index.byHash, hash)
-    let entry = bucket?.find(candidate => actual.mayEqual(candidate.argumentList, bucket.length) && candidate.matchesCall(actualArguments))
+    let hash = actual.structural
+    let entry = findEntry(index.byHash, hash, actual, true)
+    let unchecked = false
+    if (entry === undefined && identity !== undefined) {
+      const groups = index.byCoarse ?? (index.byCoarse = new Map())
+      const coarse = actual.coarse
+      const group = groups.get(coarse)
+      if (group === undefined) {
+        unchecked = actual.memoBased
+        if (!unchecked) groups.set(coarse, null)
+      } else {
+        if (group !== null) {
+          refile(index.byHash, group)
+          groups.set(coarse, null)
+          if (!actual.memoBased) entry = findEntry(index.byHash, hash, actual, false)
+        }
+        if (entry === undefined && actual.memoBased) {
+          hash = actual.fresh
+          entry = findEntry(index.byHash, hash, actual, false)
+        }
+      }
+    }
     if (entry === undefined) {
       entry = new AutoEntry('call', this, key, actualArguments)
       bucketAdd(index.byHash, hash, entry)
+      if (unchecked) index.byCoarse!.set(actual.coarse, { entry, hash })
     }
     if (identity !== undefined) {
       if (index.byIdentity === undefined) index.byIdentity = new Map()
@@ -501,7 +590,7 @@ export class SubstituteState {
 
   /** The auto-substitute for a call specification used in a nested setup (`a(Arg.any()).b.returns(1)`). */
   public specificationEntry(key: PropertyKey, specification: RecordedArguments): AutoEntry {
-    if (specification.argumentsClass === 'plain') return this.callEntry(key, new ArgumentHashes(specification.value!))
+    if (specification.argumentsClass === 'plain') return this.callEntry(key, new ArgumentHashes(specification.value!, true))
     let list = this._specificationEntries.get(key)
     if (list === undefined) {
       list = []
