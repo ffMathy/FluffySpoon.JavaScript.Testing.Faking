@@ -429,7 +429,9 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // earlier one whose parameters it shares, whose result usually takes the same values (see `UnionReturnTypes`).
 type CombinedSignatures<TFunction, TView extends SubstituteView> =
   false extends EachCallable<TFunction> ? unknown :
-  SignaturesOfSlots<CallbackThisTypes<AllParameterLists<TFunction>>, TView, TFunction>
+  SignaturesWithThis<CallbackThisTypes<AllParameterLists<TFunction>>, TView, TFunction>
+type SignaturesWithThis<TThis, V extends SubstituteView, F> =
+  SignaturesOfSlots<TThis, V, F> & OwnThisSignature<TThis, V, F, OwnThisErasedLists<TThis, AllParameterLists<F>>>
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
 // The boxes of the lists of the earlier overloads, of the last overload but one, and of the last overloads
 // (`Overloads` slots), in this order, so that the signatures keep the order of the overloads where it matters most: a
@@ -438,9 +440,9 @@ type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> ex
 // `addEventListener(type: string, listener: EventListenerOrEventListenerObject)`). The overloads before the last two
 // share one group, in which the order is TypeScript's.
 type SignaturesOfSlots<TThis, V extends SubstituteView, F> = SignaturesOfBoxes<[
-  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, EarlierSlot>, TThis, F>, V, F>>>,
-  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, 6>, TThis, F>, V, F>>>,
-  LastBoxes<DistinctParameterLists<SlotParameterLists<F, 7>, TThis, F>, TThis, V, F>
+  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, EarlierSlot>, TThis>, V, F>>>,
+  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, 6>, TThis>, V, F>>>,
+  LastBoxes<DistinctParameterLists<SlotParameterLists<F, 7>, TThis>, TThis, V, F>
 ]>
 type EarlierSlot = 0 | 1 | 2 | 3 | 4 | 5
 // The boxes of the last overloads are made variant by variant (the boxes of the lists of several variants are one
@@ -453,7 +455,7 @@ type LastBoxes<TLists, TThis, V extends SubstituteView, F> = [TLists] extends [n
   true extends IsUnion<TLists, TLists> ? BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>> :
   BoxesOf<UnionToIntersection<ListBox<TLists, V, F>>>
 type VariantBoxes<TVariant, TThis, V extends SubstituteView, F> =
-  TVariant extends unknown ? ListBox<DistinctParameterLists<ParameterListOf<Overloads<TVariant>[7]>, TThis, F>, V, F> : never
+  TVariant extends unknown ? ListBox<DistinctParameterLists<ParameterListOf<Overloads<TVariant>[7]>, TThis>, V, F> : never
 type BoxesOf<TBoxes> = TBoxes extends SignatureBox ? TBoxes : SignatureBox
 type SignaturesOfBoxes<B extends SignatureBox[]> =
   FieldOfBoxes<B, 6> & FieldOfBoxes<B, 5> & FieldOfBoxes<B, 4> & FieldOfBoxes<B, 3> & FieldOfBoxes<B, 2> &
@@ -467,30 +469,14 @@ type SignatureBox = {
 
 // The parameter lists of the overloads of the variants of `TFunction` (in some slots, see above), as tuples without
 // parameter names (`UnnamedArguments`): the same parameter list declared in several interfaces is then one type (since
-// TypeScript 4.0 a tuple with names is told apart by the declarations of its names).
-// Callback parameters that declare a `this` type (`TThis` is the union of the `this` types of all such callbacks of the
-// member, `CallbackThisTypes`) are grouped: lib.dom's elements each declare `addEventListener(type, listener: (this:
-// HTMLAnchorElement, ev: ...) => any)` with their own `this` type, and without this their parameter lists would all
-// be different. The lists that differ only in the `this` types of their callbacks are one list (`ErasedLists`, whose
-// callbacks have the `this` type `CallbackThisMarker`), and its callbacks take a callback with the `this` type of any of
-// these lists (`GroupThisTypes`, `CallbackWithThis`): with `onClick(cb: (this: Btn, n: number) => void)` in one variant
-// and `onClick(cb: (this: Lnk, n: number) => void)` in the other, `onClick` takes `function (this: Btn, n: number)`,
-// `function (this: Lnk, n: number)` and an untyped `function (n) { ... }` (R8TD-3, T56). Lists that differ in other
-// ways keep their own `this` types: with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x: number) =>
-// void)`, `on(function (this: E2, x: string) {})` does not compile.
-type DistinctParameterLists<TLists, TThis, TFunction> = [TThis] extends [never] ? UnnamedLists<TLists> :
-  GroupedLists<ErasedLists<TLists>, AllParameterLists<TFunction>>
-type UnnamedLists<TLists> = TLists extends any[] ? UnnamedArguments<TLists> : never
-type ErasedLists<TLists> = TLists extends any[] ? ErasedList<TLists> : never
-type ErasedList<TList extends any[]> = UnnamedArguments<Extract<WithCallbackThis<TList, CallbackThisMarker>, any[]>>
-// (Every erased list is mapped, also one without callbacks, which stays the same: a check whether `GroupThisTypes` is
-// `never` would be decided too early by TypeScript 4.1 and older, which then kept the `CallbackThisMarker`.)
-type GroupedLists<TErased, TAllLists> =
-  TErased extends any[] ? Extract<WithCallbackThis<TErased, GroupThisTypes<TErased, TAllLists>>, any[]> : never
-// The `this` types of the callbacks of the lists `TAllLists` whose erased list is `TErased`.
-type GroupThisTypes<TErased, TAllLists> =
-  TAllLists extends any[] ? (SameList<ErasedList<TAllLists>, TErased> extends true ? CallbackThisTypes<TAllLists> : never) : never
-type SameList<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+// TypeScript 4.0 a tuple with names is told apart by the declarations of its names). Callback parameters that declare
+// a `this` type get the `this` types of all such callbacks of the member (`CallbackThisTypes`): lib.dom's elements
+// each declare `addEventListener(type, listener: (this: HTMLAnchorElement, ev: ...) => any)` with their own `this`
+// type, and without this their parameter lists would all be different. (A callback without parameter types in a call
+// of a union such as `HTMLInputElement | HTMLSelectElement` then has `this` typed as either element.)
+type DistinctParameterLists<TLists, TThis> = TLists extends any[] ?
+  UnnamedArguments<[TThis] extends [never] ? TLists : Extract<WithCallbackThis<TLists, TThis>, any[]>> :
+  never
 type AllParameterLists<TFunction> =
   SlotParameterLists<TFunction, EarlierSlot> | SlotParameterLists<TFunction, 6> | SlotParameterLists<TFunction, 7>
 type SlotParameterLists<TVariant, TSlot extends number> = TVariant extends unknown ? ParameterListOf<Overloads<TVariant>[TSlot]> : never
@@ -508,10 +494,41 @@ type WithThis<TParameter, TThis> =
   TParameter
 // (A single required parameter, as in most callbacks, without the general conversion.)
 type UnnamedCallbackArguments<A> = A extends [any] ? [A[0]] : UnnamedArguments<Extract<A, any[]>>
-// A separate alias, so that the callbacks of several variants that differ only in their `this` type give one type: a
-// callback with any of the `this` types `TThis`.
-type CallbackWithThis<TThis, A extends any[], R> = TThis extends unknown ? (this: TThis, ...args: A) => R : never
-// The `this` type of the callbacks of an erased list (see `DistinctParameterLists`).
+// A separate alias, so that the callbacks of several variants that differ only in their `this` type give one type.
+type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => R
+
+// A callback whose `this` is annotated with the type of one variant (`function (this: Btn, n: number) {}`) does not fit
+// a callback with all the `this` types of the member (`TThis`, the signatures above), as `this` is compared
+// contravariantly. Such calls resolve to one more signature (R8TD-3, T56), which takes the parameter lists of the
+// member with each callback taking a callback with the `this` type of any variant whose list is the same apart from
+// the `this` types of its callbacks (`OwnThisListsOf`): with `onClick(cb: (this: Btn, n: number) => void)` in one variant
+// and `onClick(cb: (this: Lnk, n: number) => void)` in the other, `onClick` takes `function (this: Btn, n: number)` and
+// `function (this: Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x:
+// number) => void)`, `on(function (this: E2, x: string) {})` does not compile. Its parameter list is the constraint of
+// its type parameter, which TypeScript only computes when a call gets to this signature, and being generic, it is left
+// out when TypeScript compares the signatures of the variants of a union, which made such unions of callbacks very slow
+// to check on TypeScript 3.6 for lib.dom's elements.
+// (The erased lists are passed in, computed beforehand: computing them in the constraint made TypeScript 3.6 and 4.1
+// report "Type instantiation is excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`:
+// TypeScript 4.1 and older decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
+type OwnThisSignature<TThis, V extends SubstituteView, F, TErased> = (TThis & {}) extends never ? unknown :
+  <P extends OwnThisListsOf<TErased, AllParameterLists<F>>>(...args: P) => PrefixCallResult<V, P, P, F>
+type OwnThisErasedLists<TThis, TAllLists> = (TThis & {}) extends never ? never : ErasedLists<TAllLists>
+// The lists with the `this` types of their callbacks replaced by `CallbackThisMarker`.
+type ErasedLists<TLists> = TLists extends any[] ? ErasedList<TLists> : never
+type ErasedList<TList extends any[]> = UnnamedArguments<Extract<WithCallbackThis<TList, CallbackThisMarker>, any[]>>
+type OwnThisListsOf<TErased, TAllLists> =
+  TErased extends any[] ? Extract<WithEachCallbackThis<TErased, GroupThisTypes<TErased, TAllLists>>, any[]> : never
+// The `this` types of the callbacks of the lists `TAllLists` whose erased list is `TErased`.
+type GroupThisTypes<TErased, TAllLists> =
+  TAllLists extends any[] ? (SameList<ErasedList<TAllLists>, TErased> extends true ? CallbackThisTypes<TAllLists> : never) : never
+type SameList<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+type WithEachCallbackThis<TList, TThis> = { [P in keyof TList]: WithEachThis<TList[P], TThis> }
+type WithEachThis<TParameter, TThis> =
+  [TParameter] extends [(this: infer TOwnThis, ...args: infer A) => infer R] ?
+  (unknown extends TOwnThis ? TParameter : EachCallbackWithThis<TThis, Extract<A, any[]>, R>) :
+  TParameter
+type EachCallbackWithThis<TThis, A extends any[], R> = TThis extends unknown ? (this: TThis, ...args: A) => R : never
 interface CallbackThisMarker { readonly substituteCallbackThis: unique symbol }
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
