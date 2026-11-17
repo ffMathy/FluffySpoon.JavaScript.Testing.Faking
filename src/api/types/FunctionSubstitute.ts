@@ -89,12 +89,15 @@ type NoOverload = { readonly noOverload: true }
 type IsSameOverload<TArguments, TReturnType, TNextArguments, TNextReturnType> =
   Equals<TArguments, TNextArguments> extends true ? Equals<TReturnType, TNextReturnType> : false
 type IsEmptySlot<TArguments, TReturnType> = IsSameOverload<TArguments, TReturnType, unknown[], unknown>
-type Slot<TArguments, TReturnType, TNextArguments, TNextReturnType> = TArguments extends any[] ?
+// Not distributive: a parameter list that is a union of lists (a generic rest parameter erased to its constraint, as in
+// `emit<E extends keyof Events>(event: E, ...args: Parameters<Events[E]>)`) stays one overload, whose positional
+// signature checks the arguments against the whole union (R6FE-7, T46).
+type Slot<TArguments, TReturnType, TNextArguments, TNextReturnType> = [TArguments] extends [any[]] ?
   (IsEmptySlot<TArguments, TReturnType> extends true ? NoOverload :
     IsSameOverload<TArguments, TReturnType, TNextArguments, TNextReturnType> extends true ? NoOverload :
-    Overload<TArguments, TReturnType>) :
+    Overload<Extract<TArguments, any[]>, TReturnType>) :
   NoOverload
-type LastSlot<TArguments, TReturnType> = TArguments extends any[] ? Overload<TArguments, TReturnType> : NoOverload
+type LastSlot<TArguments, TReturnType> = [TArguments] extends [any[]] ? Overload<Extract<TArguments, any[]>, TReturnType> : NoOverload
 
 type NoOverloads = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload]
 
@@ -180,7 +183,34 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
 type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
-  OverloadSignatures<Overloads<TVariant>, TView, TFunction>
+  OverloadSignatures<Overloads<TVariant>, TView, TFunction> & GenericCallSignature<TVariant, Overloads<TVariant>, TView>
+
+// Generic methods (R6FE-7, T46): `Overloads` sees a generic signature with its type parameters replaced by their
+// constraints, so `get<K extends keyof Config>(key: K): Config[K]` becomes `get(key: keyof Config): Config[keyof
+// Config]`, and `emit<K>(eventName: Key<K, T>, ...args: Args<K, T>)` of Node's `EventEmitter<T>` has no possible
+// arguments at all (`Args<unknown, T>` is `never`). A member with a single signature that is generic therefore also
+// gets the signature below, after all others. It takes any arguments with which the member itself can be called, as
+// TypeScript checks them against the member's own (generic) signatures, and its result takes what the member returns
+// for them (with the type parameters replaced by their constraints, which is all TypeScript infers here). Coming before
+// the member's own signatures (`SubstituteOf<T>` intersects the member with `T`), it is also what calls with `any`
+// arguments (`Arg.any()`) resolve to: TypeScript first tries the signatures with the subtype relation, under which
+// `any` fits a type parameter, but no other parameter type. (Overloaded members do not get it: there TypeScript takes
+// the return type of the last overload, and `any` arguments resolve to the first overload that accepts them.)
+type GenericCallSignature<F, TOverloads extends any[], V extends SubstituteView> =
+  IsGenericSignature<F, TOverloads> extends true ?
+  <P extends ArgumentValue[]>(...args: P & CallableWith<F, P>) => CallResult<V, P, CallReturnTypeOf<F, P>, never> :
+  unknown
+// `true` for a function type with a single call signature that is not the same as the signature `Overloads` sees, i.e.
+// a generic one (also, harmlessly, a callable type with other members).
+type IsGenericSignature<F, TOverloads extends any[]> =
+  TOverloads[6] extends NoOverload ? (TOverloads[7] extends Overload<any[], any> ?
+    (Equals<F, (...args: TOverloads[7]['arguments']) => TOverloads[7]['returnType']> extends true ? false : true) :
+    false) :
+  false
+// Includes the primitive types, so that TypeScript keeps the literal types of the arguments (`get('port')`).
+type ArgumentValue = string | number | boolean | bigint | symbol | object | null | undefined
+type CallableWith<F, P extends any[]> = F extends (...args: P) => any ? unknown : never
+type CallReturnTypeOf<F, P extends any[]> = F extends (...args: P) => infer R ? R : never
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).

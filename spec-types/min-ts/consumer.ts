@@ -207,6 +207,25 @@ stubByKey(Substitute.for<Record<'a', () => number>>(), 'a')
 stubLoaderByKey(Substitute.for<Record<'a', (id: string) => Promise<number>>>(), 'a')
 stubHandler(Substitute.for<EventHandlers<'saved'>>(), 'saved')
 
+// R6FE-7 / T46: generic methods, configured and checked with their type parameters replaced by their constraints
+interface ChannelEvents { saved: (id: string) => void; failed: (error: Error) => void }
+interface Channel {
+  on<E extends keyof ChannelEvents>(event: E, listener: ChannelEvents[E]): this
+  emit<E extends keyof ChannelEvents>(event: E, ...args: Parameters<ChannelEvents[E]>): boolean
+}
+const channel = Substitute.for<Channel>()
+channel.emit('saved', 'id1').returns(true)
+channel.emit(Arg.all()).returns(false)
+channel[configure]().emit('saved', Arg.any()).returns(true)
+channel.on(Arg.any(), Arg.any()).returns(channel)
+channel.received(1).emit('saved', 'id1')
+interface Settings { port: number; host: string }
+interface SettingsService { get<K extends keyof Settings>(key: K): Settings[K] }
+const settings = Substitute.for<SettingsService>()
+settings.get('port').returns(80)
+settings.get(Arg.any()).returns('localhost')
+settings.received().get(Arg.all())
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()

@@ -104,4 +104,21 @@ const anyElement = Substitute.for<AnyElement>()
 anyElement.addEventListener('click', event => event.preventDefault())
 anyElement.addEventListener('click', (event: Event) => event.preventDefault())
 
+// Generic methods (R6FE-7 / T46) are configured and checked with their type parameters replaced by their constraints
+// (TypeScript cannot carry a method's type parameters over to the substitute's signatures). The arguments of a setup or
+// check are then only checked against the constraints, and the configured value against what the method returns for
+// them, so these compile although the methods themselves reject them. Configure the exact call through the method's
+// own type where it matters.
+interface Settings { port: number; host: string }
+interface SettingsService { get<K extends keyof Settings>(key: K): Settings[K] }
+const settings = Substitute.for<SettingsService>()
+settings.get('port').returns('eighty') // `Settings[keyof Settings]` is `number | string`
+interface SignalEvents { saved: (id: string) => void; failed: (error: Error) => void }
+interface Signals { emit<E extends keyof SignalEvents>(event: E, ...args: Parameters<SignalEvents[E]>): boolean }
+const signals = Substitute.for<Signals>()
+signals.emit('failed', 'id1').returns(true) // the event and its arguments are not matched up
+const asSettings: SettingsService = settings
+// @ts-expect-error the method itself keeps its own signature
+asSettings.get('port').toFixed(0).returns(1)
+
 export { found }
