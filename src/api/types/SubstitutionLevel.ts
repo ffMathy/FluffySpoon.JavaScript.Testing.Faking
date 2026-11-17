@@ -41,9 +41,10 @@ type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ?
 type PromiseValueOf<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
   (TValue extends Promise<any> ? U : Promise<U> extends TReturnType ? U : never) :
   never
+// (`PromiseLike<any>` first: inferring the value of every member type that is not a promise at all costs more.)
 type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>, TReturnType> ? true : false
-type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
-  (TValue extends Promise<any> ? true : Promise<U> extends TReturnType ? true : false) :
+type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<any> ?
+  (TValue extends Promise<any> ? true : TValue extends PromiseLike<infer U> ? (Promise<U> extends TReturnType ? true : false) : false) :
   false
 
 type SymbolSetupMethods<TReturnType, TImplementation> = {

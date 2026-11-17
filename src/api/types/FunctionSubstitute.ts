@@ -431,7 +431,7 @@ type CombinedSignatures<TFunction, TView extends SubstituteView> =
   false extends EachCallable<TFunction> ? unknown :
   SignaturesWithThis<CallbackThisTypes<AllParameterLists<TFunction>>, TView, TFunction>
 type SignaturesWithThis<TThis, V extends SubstituteView, F> =
-  SignaturesOfSlots<TThis, V, F> & OwnThisSignature<TThis, V, F, OwnThisErasedLists<TThis, AllParameterLists<F>>>
+  SignaturesOfSlots<TThis, V, F> & OwnThisSignature<TThis, V, F>
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
 // The boxes of the lists of the earlier overloads, of the last overload but one, and of the last overloads
 // (`Overloads` slots), in this order, so that the signatures keep the order of the overloads where it matters most: a
@@ -508,20 +508,27 @@ type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => 
 // its type parameter, which TypeScript only computes when a call gets to this signature, and being generic, it is left
 // out when TypeScript compares the signatures of the variants of a union, which made such unions of callbacks very slow
 // to check on TypeScript 3.6 for lib.dom's elements.
-// (The erased lists are passed in, computed beforehand: computing them in the constraint made TypeScript 3.6 and 4.1
+// The lists that differ only in the `this` types of their callbacks are the lists of the signatures above
+// (`DistinctParameterLists`, whose callbacks all take the `this` types `TThis`); the `this` types of each group are
+// computed from the parameter lists of the variants.
+// (The lists of the signatures above are passed in: computing them in the constraint made TypeScript 3.6 and 4.1
 // report "Type instantiation is excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`:
 // TypeScript 4.1 and older decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
-type OwnThisSignature<TThis, V extends SubstituteView, F, TErased> = (TThis & {}) extends never ? unknown :
-  <P extends OwnThisListsOf<TErased, AllParameterLists<F>>>(...args: P) => PrefixCallResult<V, P, P, F>
-type OwnThisErasedLists<TThis, TAllLists> = (TThis & {}) extends never ? never : ErasedLists<TAllLists>
-// The lists with the `this` types of their callbacks replaced by `CallbackThisMarker`.
-type ErasedLists<TLists> = TLists extends any[] ? ErasedList<TLists> : never
-type ErasedList<TList extends any[]> = UnnamedArguments<Extract<WithCallbackThis<TList, CallbackThisMarker>, any[]>>
-type OwnThisListsOf<TErased, TAllLists> =
-  TErased extends any[] ? Extract<WithEachCallbackThis<TErased, GroupThisTypes<TErased, TAllLists>>, any[]> : never
-// The `this` types of the callbacks of the lists `TAllLists` whose erased list is `TErased`.
-type GroupThisTypes<TErased, TAllLists> =
-  TAllLists extends any[] ? (SameList<ErasedList<TAllLists>, TErased> extends true ? CallbackThisTypes<TAllLists> : never) : never
+type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends never ? unknown :
+  <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>, TThis>) =>
+    PrefixCallResult<V, P, P, F>
+// The arguments `P` fit one of the lists with the variants' own `this` types. Only checked for calls that pass a
+// callback with a `this` type of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature
+// first, do not compute these lists.
+type OwnThisArguments<P extends any[], TAllLists, TThis> =
+  (CallbackThisTypes<P> & {}) extends never ? never :
+  [P] extends [OwnThisListsOf<DistinctParameterLists<TAllLists, TThis>, TAllLists, TThis>] ? unknown : never
+type OwnThisListsOf<TLists, TAllLists, TThis> =
+  TLists extends any[] ? Extract<WithEachCallbackThis<TLists, GroupThisTypes<TLists, TAllLists, TThis>>, any[]> : never
+// The `this` types of the callbacks of the lists `TAllLists` (of the variants) that are the list `TList` apart from
+// these `this` types.
+type GroupThisTypes<TList, TAllLists, TThis> =
+  TAllLists extends any[] ? (SameList<DistinctParameterLists<TAllLists, TThis>, TList> extends true ? CallbackThisTypes<TAllLists> : never) : never
 type SameList<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
 type WithEachCallbackThis<TList, TThis> = { [P in keyof TList]: WithEachThis<TList[P], TThis> }
 type WithEachThis<TParameter, TThis> =
@@ -529,7 +536,6 @@ type WithEachThis<TParameter, TThis> =
   (unknown extends TOwnThis ? TParameter : EachCallbackWithThis<TThis, Extract<A, any[]>, R>) :
   TParameter
 type EachCallbackWithThis<TThis, A extends any[], R> = TThis extends unknown ? (this: TThis, ...args: A) => R : never
-interface CallbackThisMarker { readonly substituteCallbackThis: unique symbol }
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,
