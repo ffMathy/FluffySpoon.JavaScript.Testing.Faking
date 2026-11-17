@@ -387,8 +387,13 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // then checks that the signature for these arguments returns that: a return type that is conditional on a type
 // parameter (`conv<K>(e: K): K extends string ? number : boolean`, whose `conv('x')` returns a `number` but would be
 // inferred as `boolean`) cannot be inferred, and is `any` (R7TD-1, T53).
+// Arguments that fit the parameter list with the type parameters replaced by their constraints but not the method's own
+// signature (`same(1, 'x')` of `same<T extends string | number>(a: T, b: T): T`, `log(1, 'x')` of `log<T>(a: T, b: T):
+// void`) take what that list returns (`TReturnType`), never `any` (R8TD-1, T54): `same(1, 'x').returns({})` and
+// `log(1, 'x').returns(5)` do not compile.
 type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any
+  F extends (...args: P) => any ? (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
+  TReturnType
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
