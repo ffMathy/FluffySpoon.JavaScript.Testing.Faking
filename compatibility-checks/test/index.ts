@@ -150,6 +150,22 @@ test.describe('Verifies test runner compatibility', () => {
     })
   })
 
+  // Round 8 (E34): a substitute that stands in for a whole module (a jest.mock() factory), imported by the code under
+  // test as a namespace, with named imports, with a mixed default and named import, and (through the documented
+  // factory) as the default export, compiled by ts-jest with esModuleInterop and by babel-jest. These suites must pass.
+  test.describe('jest module mocks', () => {
+    for (const compiler of ['ts', 'babel']) {
+      test.it(`E34 every import form of a module substitute works (${compiler === 'ts' ? 'ts-jest with esModuleInterop' : 'babel-jest'})`, () => {
+        try {
+          execSync(`npm run validate:jest-modules-${compiler}`, { env: testRunnerEnvironment(), stdio: 'pipe' })
+        } catch (error) {
+          // @ts-expect-error
+          assert.fail(`The module mock checks failed:\n${error.stdout.toString()}${error.stderr.toString()}`)
+        }
+      })
+    }
+  })
+
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
       test.it('reports the Substitute exception', () => {

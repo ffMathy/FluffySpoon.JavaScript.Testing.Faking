@@ -1,0 +1,18 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`R8 jest snapshots and diffs of values that hold substitutes E33 toMatchSnapshot finishes quickly and does not take substitutes for mock functions 1`] = `
+{
+  "config": [Function],
+  "context": {
+    "child0": [Function],
+    "child1": [Function],
+    "name": "root",
+  },
+  "status": 200,
+  "user": [Function],
+  "widget": Widget {
+    "onClose": [Function],
+    "onSave": [Function],
+  },
+}
+`;

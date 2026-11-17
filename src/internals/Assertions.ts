@@ -223,6 +223,20 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   return defer(stackStart, createError)
 }
 
+/** The deferred report scheduled last (see cancelLatestDeferredReport). */
+let latestDeferred: DeferredAssertion | undefined
+
+/**
+ * E37: cancels the deferred report scheduled last, if it is still pending. A matcher that refuses its arguments with a
+ * usage error (Arg.any('String'), Arg.is('x')) calls it: in `sub.received(2).log(Arg.any('String'))` the report of
+ * `.log` was scheduled when the member was read, and the invocation that would cancel it never happens, because
+ * evaluating its arguments threw. The usage error is then the only error.
+ */
+export const cancelLatestDeferredReport = (): void => {
+  if (latestDeferred !== undefined) settle(latestDeferred)
+  latestDeferred = undefined
+}
+
 /**
  * Schedules a failure that is only reported if the assertion is not invoked (see assertPropertyRead).
  * The message is only built if the failure is really reported (usually the member is invoked right away).
@@ -240,10 +254,12 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
     }
   }
   deferredReports.schedule(() => {
+    if (latestDeferred === deferred) latestDeferred = undefined
     if (deferred.settled) return
     deferred.settled = true
     throw deferred.error()
   })
+  latestDeferred = deferred
   return deferred
 }
 

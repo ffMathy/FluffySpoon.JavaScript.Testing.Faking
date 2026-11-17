@@ -18,21 +18,25 @@ const messageOf = (assertion: () => unknown): string => {
   throw new Error('expected the assertion to fail')
 }
 
-// ---- E27: __esModule -------------------------------------------------------------------------
+// ---- E27: __esModule (reverted by E34 in round 8) -----------------------------------------------
 
 /** TypeScript's __importDefault (esModuleInterop), as compiled code under test runs it. */
 const importDefault = (mod: any) => (mod && mod.__esModule) ? mod : { default: mod }
 
-test('R6FE-6 (E27) __esModule is a protocol key: an unconfigured read is undefined and is not recorded', t => {
+// Round 8 (E34) reverts E27: '__esModule' is an ordinary member again, as in 2.0.0-beta.4. The first test was changed
+// accordingly (it asserted that an unconfigured read gives undefined and is not recorded); round8.test.ts covers the
+// import forms.
+test('R6FE-6 (E27, reverted by E34) __esModule is an ordinary member: an unconfigured read is a recorded auto-substitute', t => {
   const mailer = Substitute.for<any>()
   mailer.send('a@b.c', 'hi').returns(true)
 
-  t.is(mailer.__esModule, undefined)
+  t.is(typeof mailer.__esModule, 'function')
   const imported = importDefault(mailer)
-  t.is(imported.default, mailer, 'the substitute is its own default export')
-  t.true(imported.default.send('a@b.c', 'hi'))
-  t.false(inspect(mailer).includes('__esModule'), 'the probes are not recorded')
-  t.notThrows(() => mailer.didNotReceive().__esModule)
+  t.is(imported, mailer, 'an unconfigured __esModule is truthy, so the substitute is the module namespace')
+  t.is(imported.default, mailer.default, 'and its default export is the auto-substitute sub.default')
+  t.true(imported.send('a@b.c', 'hi'))
+  t.true(inspect(mailer).includes('__esModule'), 'the read is recorded like any other')
+  t.notThrows(() => mailer.received(2).__esModule)
   t.notThrows(() => mailer.received(1).send('a@b.c', 'hi'))
 })
 

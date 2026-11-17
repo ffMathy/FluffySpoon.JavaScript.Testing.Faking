@@ -1,14 +1,14 @@
-import { inspect } from 'util'
-
 import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
+import { entryPath } from './Paths'
 import {
   coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetUnreadable, lastHashMetWide,
-  lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn,
-  withPrintGuard
+  lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn
 } from './utilities'
+
+export { pathArguments } from './Paths'
 
 let substitutionOrder = 0
 
@@ -272,10 +272,12 @@ export class AutoEntry {
     return this._state
   }
 
-  /** E24: the path of this auto-substitute (`@Substitute.logger`, `@Substitute.getUser(1)`), without creating its state. */
+  /**
+   * E24: the path of this auto-substitute (`@Substitute.logger`, `@Substitute.getUser(1)`), without creating its state.
+   * E33/E35: bounded, and built without recursion (see Paths).
+   */
   public get path(): string {
-    const path = memberPath(this.parent, this.key)
-    return this.kind === 'get' ? path : `${path}${pathArguments(this.argumentList)}`
+    return entryPath(this)
   }
 
   /** Notes that the operation of `record` hands out this entry's proxy. */
@@ -508,19 +510,6 @@ const memberPath = (state: SubstituteState, key: PropertyKey): string =>
   key === SELF ? state.path : `${state.path}.${keyToString(key)}`
 
 /**
- * The arguments of a call as a path shows them: `(1, { id: 1 })`, objects one level deep, substitutes by their paths
- * (printed under the print guard, so that a substitute among the arguments is never printed in full).
- */
-export const pathArguments = (args: readonly unknown[] | undefined): string => {
-  const values = args ?? []
-  try {
-    return `(${withPrintGuard(() => values.map(value => inspect(value, { depth: 0, colors: false, breakLength: Infinity })).join(', '))})`
-  } catch {
-    return '(...)'
-  }
-}
-
-/**
  * Everything the library knows about one substitute (the root, or a cached auto-substitute):
  * the received calls, the configured substitutions, the mimicked instance and the auto-substitutes.
  * Received calls and configured substitutions are kept apart, so that resolving a call never scans
@@ -538,9 +527,68 @@ export class SubstituteState {
   private readonly _callEntries = new Map<PropertyKey, CallEntryIndex>()
   private readonly _specificationEntries = new Map<PropertyKey, AutoEntry[]>()
 
-  public mimicked?: { instance: any }
+  private _mimicked?: { instance: any }
+  /** E35: the keys of this substitute that have a setup: of the member itself, or further down (see noteSetup). */
+  private _configuredKeys?: Set<PropertyKey>
+  /** E35: whether this substitute, or one of its auto-substitutes, has a setup or mimicks an instance. */
+  private _configured?: boolean
+  /** E39: the record of the operation that last answered with this substitute (a configured value), and when. */
+  private _handedOutBy?: CallRecord
+  private _handedOutAt?: number
 
   constructor(public readonly owner?: AutoEntry) { }
+
+  /**
+   * E39: notes that the operation of `record` answered with this substitute, a configured value
+   * (`app.getCalc().returns(calc)`), so that a setup or a check chained to it in the same expression
+   * (`app.getCalc().add(1, 2).returns(3)`) leaves out that operation, as for auto-substitutes (see AutoEntry.handOut).
+   */
+  public handOut(record: CallRecord): void {
+    this._handedOutBy = record
+    this._handedOutAt = currentSequence()
+  }
+
+  /** E39: the record that answered with this substitute, if that was the most recent operation of all. */
+  public adjacentHandOut(): CallRecord | undefined {
+    return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
+  }
+
+  public get mimicked(): { instance: any } | undefined {
+    return this._mimicked
+  }
+
+  public set mimicked(mimicked: { instance: any } | undefined) {
+    this._mimicked = mimicked
+    if (mimicked !== undefined) this.noteSetup(undefined)
+  }
+
+  /**
+   * E35: whether `key in sub` holds for a setup: the member has a setup of its own (a property or a call, not the
+   * 'auto' registrations of nested setups and of matcher chains), or one of its auto-substitutes has one, or mimicks an
+   * instance. O(1): a setup notes its key here and in every substitute above it (noteSetup).
+   */
+  public isConfiguredKey(key: PropertyKey): boolean {
+    return this._configuredKeys !== undefined && this._configuredKeys.has(key)
+  }
+
+  /**
+   * E35: notes a setup of `key` (undefined: a mimicked instance) on this substitute, and that this substitute is
+   * configured on the key of its owner, and so on up to the root. A substitute already noted as configured has noted
+   * that above it before, so the walk stops there.
+   */
+  private noteSetup(key: PropertyKey | undefined): void {
+    let state: SubstituteState = this
+    let configuredKey = key
+    for (;;) {
+      if (configuredKey !== undefined) (state._configuredKeys ?? (state._configuredKeys = new Set())).add(configuredKey)
+      if (state._configured === true) return
+      state._configured = true
+      const owner = state.owner
+      if (owner === undefined) return
+      configuredKey = owner.key
+      state = owner.parent
+    }
+  }
 
   public get path(): string {
     return this.owner === undefined ? '@Substitute' : this.owner.path
@@ -589,17 +637,26 @@ export class SubstituteState {
     return this._records.filter(record => !record.retracted)
   }
 
+  /** Clears the received calls of this substitute and of its auto-substitutes (E35: without recursion). */
   public clearReceivedCalls(): void {
-    this._records.length = 0
-    this._recordsByKey.clear()
-    this._pendingReads.clear()
-    for (const entry of this.entries()) entry.materializedState?.clearReceivedCalls()
+    const pending: SubstituteState[] = [this]
+    while (pending.length > 0) {
+      const state = pending.pop()!
+      state._records.length = 0
+      state._recordsByKey.clear()
+      state._pendingReads.clear()
+      for (const entry of state.entries()) {
+        const nested = entry.materializedState
+        if (nested !== undefined) pending.push(nested)
+      }
+    }
   }
 
   // ---- substitutions --------------------------------------------------------------------------
 
   public setPropertySubstitution(key: PropertyKey, method: SubstitutionMethod, values: readonly any[]): void {
     this._propertySubstitutions.set(key, new Substitution('get', key, undefined, method, values))
+    this.noteSetup(key)
   }
 
   public propertySubstitution(key: PropertyKey): Substitution | undefined {
@@ -618,6 +675,7 @@ export class SubstituteState {
     const inherit = call !== undefined && call.args === args.value && call.sequence === currentSequence() ? call.operation : 0
     if (inherit !== 0) unreadableCall = undefined
     substitutions.add(substitution, inherit)
+    if (method !== 'auto') this.noteSetup(key)
     return substitution
   }
 

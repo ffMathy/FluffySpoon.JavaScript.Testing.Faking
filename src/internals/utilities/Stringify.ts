@@ -1,4 +1,4 @@
-import { inspect, InspectOptions } from 'util'
+import { inspect, InspectOptions, types } from 'util'
 
 let printDepth = 0
 
@@ -18,9 +18,51 @@ export const withPrintGuard = <T>(print: () => T): T => {
 
 export const isPrinting = (): boolean => printDepth > 0
 
+/** Whether a value is an error: a native error, or an object with Error.prototype in its prototype chain. */
+const isError = (value: unknown): value is Error => {
+  // a substitute is a function (proxy), never an error; reading from it would be recorded
+  if (typeof value !== 'object' || value === null) return false
+  try {
+    return types.isNativeError(value) || value instanceof Error
+  } catch {
+    return false // a revoked proxy
+  }
+}
+
+const errorHead = (error: Error): string => {
+  const name = typeof error.name === 'string' && error.name !== '' ? error.name : 'Error'
+  const message = typeof error.message === 'string' ? error.message : String(error.message)
+  return message === '' ? `[${name}]` : `[${name}: ${message}]`
+}
+
+/**
+ * E40: an error as a value in a message or a printout, without its stack (whose frames would look like the "called at"
+ * lines of the calls), as util.inspect shows an error without a stack: `[SyntaxError: Unexpected end of JSON input]`,
+ * and its cause: `[Error: saving failed] { [cause]: [TypeError: x is undefined] }`.
+ */
+const compactError = (error: Error): string => {
+  const head = errorHead(error)
+  if (!Object.prototype.hasOwnProperty.call(error, 'cause')) return head
+  const cause = (error as Error & { cause?: unknown }).cause
+  const causeText = isError(cause) ? errorHead(cause) : withPrintGuard(() => inspect(cause, { depth: 0, colors: false, breakLength: Infinity }))
+  return `${head} { [cause]: ${causeText} }`
+}
+
+/** An argument (or a configured value) as messages and printouts show it: errors compactly (E40), anything else inspected. */
+export const formatArgument = (value: unknown, options: InspectOptions): string => {
+  if (isError(value)) {
+    try {
+      return compactError(value)
+    } catch {
+      // an error whose name or message cannot be read: inspected as usual
+    }
+  }
+  return inspect(value, options)
+}
+
 export const formatValue = (value: unknown, colors: boolean, options?: InspectOptions): string => {
   try {
-    return withPrintGuard(() => inspect(value, { ...options, colors }))
+    return withPrintGuard(() => formatArgument(value, { ...options, colors }))
   } catch {
     return `<${typeof value}>`
   }
