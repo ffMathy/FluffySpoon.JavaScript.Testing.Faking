@@ -520,9 +520,15 @@ type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends
 // The arguments `P` fit one of the lists with the variants' own `this` types. Only checked for calls that pass a
 // callback with a `this` type of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature
 // first, do not compute these lists.
+// (The lists are wrapped in a tuple, so that TypeScript computes them only when it checks the arguments, not when it
+// infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
+// they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
+// `any`, which otherwise made them report "Type instantiation is excessively deep".)
 type OwnThisArguments<P extends any[], TAllLists, TThis> =
   (CallbackThisTypes<P> & {}) extends never ? never :
-  [P] extends [OwnThisListsOf<DistinctParameterLists<TAllLists, TThis>, TAllLists, TThis>] ? unknown : never
+  [P] extends [OwnThisLists<TAllLists, TThis>] ? unknown : never
+type OwnThisLists<TAllLists, TThis> = IsAny<TAllLists> extends true ? any[] :
+  OwnThisListsOf<DistinctParameterLists<TAllLists, TThis>, TAllLists, TThis>
 type OwnThisListsOf<TLists, TAllLists, TThis> =
   TLists extends any[] ? Extract<WithEachCallbackThis<TLists, GroupThisTypes<TLists, TAllLists, TThis>>, any[]> : never
 // The `this` types of the callbacks of the lists `TAllLists` (of the variants) that are the list `TList` apart from
