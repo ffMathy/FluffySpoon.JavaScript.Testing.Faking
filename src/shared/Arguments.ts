@@ -129,7 +129,7 @@ const isThenable = (value: unknown): value is PromiseLike<unknown> => {
  */
 const thenablePredicateError = (argument: AnyArgument, result: PromiseLike<unknown>): TypeError => {
   try {
-    result.then(undefined, () => undefined)
+    result.then(undefined, () => { })
   } catch { /* a thenable whose then throws: nothing to handle */ }
   return new TypeError(
     `${argument.toString()} returned a promise (or another thenable), but an Arg.is predicate must return whether the ` +

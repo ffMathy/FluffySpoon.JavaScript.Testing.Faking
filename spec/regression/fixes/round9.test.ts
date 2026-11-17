@@ -403,7 +403,7 @@ test('R8FE-4 (E49) an Arg.is predicate that returns a promise is a usage error, 
     t.throws(() => repo.received(2).save(Arg.is((async () => false) as any)), usage)
     t.throws(() => repo.didNotReceive().save(Arg.is((async () => true) as any)), usage)
     // a thenable that is no promise, too
-    t.throws(() => Arg.is(() => ({ then: () => undefined }) as any).matches(1), usage)
+    t.throws(() => Arg.is(() => ({ then: () => { } }) as any).matches(1), usage)
     await new Promise(resolve => setTimeout(resolve, 20))
     t.deepEqual(rejections, [], 'the rejected promises were handled')
 
