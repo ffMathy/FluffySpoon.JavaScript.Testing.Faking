@@ -360,9 +360,10 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return Reflect.preventExtensions(target)
   },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
-  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : [],
+  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
+  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
   getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
-    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : undefined,
+    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : mimickedDescriptor(target(), property),
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
@@ -460,6 +461,44 @@ const configuredConversion = (state: SubstituteState, key: string, instance: any
   return resolveCall(state, key, [], state.addRecord('call', key, [], captureStack(start)), NO_SELF)
 }
 
+/*
+ * E51 (R8FE-2): a substitute that mimicks an instance enumerates like it: Object.keys, Object.entries, spread, for-in
+ * and Object.assign see the instance's enumerable own keys (reported as configurable properties, so that no Proxy
+ * invariant can conflict with the substitute's own target, E25), and reading them goes through the substitute as
+ * usual (recorded, configured values first). JSON.stringify uses the instance's toJSON, or serializes the instance
+ * (see toJSONOf). A substitute that mimicks another substitute, and one that the code under test has frozen or given
+ * properties (E25), keep their own keys.
+ */
+const mimickedInstanceOf = (face: Face): any => {
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  const instance = state?.mimicked?.instance
+  return instance === undefined || isSubstituteProxy(instance) ? undefined : instance
+}
+
+const isEnumerableOwn = (instance: object, key: PropertyKey): boolean => Object.prototype.propertyIsEnumerable.call(instance, key)
+
+const mimickedKeys = (face: Face): Array<string | symbol> => {
+  const instance = mimickedInstanceOf(face)
+  return instance === undefined ? [] : Reflect.ownKeys(instance).filter(key => isEnumerableOwn(instance, key))
+}
+
+const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | undefined => {
+  const instance = mimickedInstanceOf(face)
+  if (instance === undefined || !isEnumerableOwn(instance, key)) return undefined
+  const descriptor = Reflect.getOwnPropertyDescriptor(instance, key)
+  return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+}
+
+/** E51: toJSON of a substitute: the mimicked object's (its own toJSON, or the object itself), otherwise the printout. */
+const toJSONOf = (face: Face): Function => {
+  const instance = mimickedInstanceOf(face)
+  if (instance !== undefined && typeof instance === 'object') {
+    const toJSON = instance.toJSON
+    return typeof toJSON === 'function' ? (key: unknown) => Reflect.apply(toJSON, instance, [key]) : () => instance
+  }
+  return () => printFace(face, false)
+}
+
 /** Whether a member has a setup of its own (as a property or as a method), or the mimicked instance has it. */
 const configuresMember = (state: SubstituteState, key: PropertyKey): boolean =>
   state.propertySubstitution(key) !== undefined ||
@@ -525,6 +564,7 @@ const REAL_READ: unique symbol = Symbol('real read')
 /** A member access on a substitute or an auto-substitute, unless it is a real read (then REAL_READ). */
 const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any => {
   if (property === Symbol.toPrimitive) return toPrimitiveOf(face)
+  if (property === 'toJSON') return toJSONOf(face)
   if (isSpecialProperty(property)) return special(property, options => printFace(face, colorsOf(options)), face)
 
   const candidate = adjacentHandOut(face)

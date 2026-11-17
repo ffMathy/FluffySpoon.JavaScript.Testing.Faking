@@ -484,3 +484,52 @@ test('R8FE-6 (E50) a mimicked instance\'s toString(), valueOf() and Symbol.toPri
   fn[mimick](function real() { return 1 })
   t.true(String(fn).startsWith('@Substitute'), String(fn))
 })
+
+// ---- E51: a mimicked substitute enumerates like its instance ------------------------------------------------------
+
+test('R8FE-2 (E51) a mimicked substitute has the instance\'s enumerable own keys: keys, entries, spread, for-in, assign, JSON', t => {
+  const hidden = Symbol('hidden')
+  const shown = Symbol('shown')
+  const options = Object.defineProperty({ port: 80, host: 'localhost', [shown]: true }, 'secret', { value: 's', enumerable: false })
+  Object.defineProperty(options, hidden, { value: 1, enumerable: false })
+  const config = Substitute.for<any>()
+  config[mimick](options)
+  config[configure]().host.returns('example.org') // a setup still comes first
+
+  t.true('port' in config)
+  t.deepEqual(Object.keys(config), ['port', 'host'])
+  t.deepEqual(Reflect.ownKeys(config), ['port', 'host', shown])
+  t.deepEqual(Object.entries(config), [['port', 80], ['host', 'example.org']])
+  t.deepEqual({ ...config }, { port: 80, host: 'example.org', [shown]: true })
+  t.deepEqual(Object.assign({ port: 1, debug: true }, config), { port: 80, host: 'example.org', debug: true, [shown]: true })
+  const forIn: string[] = []
+  for (const key in config) forIn.push(key)
+  t.deepEqual(forIn, ['port', 'host'])
+  t.deepEqual(Object.getOwnPropertyDescriptor(config, 'port'), { value: 80, writable: true, enumerable: true, configurable: true })
+  t.is(Object.getOwnPropertyDescriptor(config, 'secret'), undefined)
+  t.is(JSON.stringify(config), '{"port":80,"host":"localhost"}', 'JSON.stringify serializes the instance')
+  t.notThrows(() => config.received().port, 'the reads of the code under test are recorded as usual')
+
+  // the instance's own toJSON
+  const money = Substitute.for<any>()
+  money[mimick]({ amount: 5, toJSON: () => '5 EUR' })
+  t.is(JSON.stringify({ price: money }), '{"price":"5 EUR"}')
+
+  // a substitute that mimicks nothing, or a function, has no keys, and JSON.stringify gives the printout as before
+  const plainSub = Substitute.for<any>()
+  t.deepEqual(Object.keys(plainSub), [])
+  t.is(JSON.stringify(plainSub), '"@Substitute {\\n}"')
+  const fn = Substitute.for<any>()
+  fn[mimick](Object.assign(() => 1, { flag: true }))
+  t.deepEqual(Object.keys(fn), ['flag'])
+  t.true(JSON.stringify(fn).startsWith('"@Substitute'))
+
+  // freezing and defining properties still work (E25): then the substitute's keys are the ones defined on it
+  const frozen = Substitute.for<any>()
+  frozen[mimick]({ a: 1 })
+  t.deepEqual(Object.keys(frozen), ['a'])
+  Object.freeze(frozen)
+  t.true(Object.isFrozen(frozen))
+  t.deepEqual(Object.keys(frozen), [])
+  t.is(frozen.a, 1)
+})
