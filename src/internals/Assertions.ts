@@ -279,6 +279,53 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
   return deferred
 }
 
+// ---- E48: a check view with nothing after it ----------------------------------------------------------------------
+
+/** How a check view was written: with the exported symbols (`sub[received](2)`) or with the string names (`sub.received(2)`). */
+export type CheckForm = 'symbol' | 'string'
+
+/**
+ * E48: the usage error of a check view that nothing followed (`next.didNotReceive()`, `sub[received](2)` as a
+ * statement): it checks nothing. It names the substitute and shows the complete forms.
+ */
+const danglingCheckError = (state: SubstituteState, form: CheckForm, count: ExpectedCount): SubstituteException => {
+  const name = count === 0 ? 'didNotReceive' : 'received'
+  const call = count === 0 ? '()' : count === undefined ? '()' : `(${count})`
+  const view = (subject: string) => form === 'symbol' ? `${subject}[${name}]${call}` : `${subject}.${name}${call}`
+  const check = view(asExpression(state))
+  let message = `${view(state.path)} checked nothing: it was not followed by a call or a member. ` +
+    `Complete the check: ${check}(Arg.all()) checks the calls of the substitute itself, ` +
+    `${check}.member(...) the calls of one of its members, and ${check}.member its property reads.`
+  if (form === 'string')
+    message += ` If the substituted type has a member called ${name} of its own, configure its calls ` +
+      `(${asExpression(state)}[configure]().${name}(Arg.all()).returns(...)): then such a call is not taken for a check.`
+  return SubstituteException.generic(message)
+}
+
+/**
+ * E48: schedules the usage error of a check view that is created now (`site`: where), thrown from a microtask (as D9)
+ * unless the view is used before (settle the result): a member access, an assignment, a call or `new` on it. For the
+ * string forms, `applies` is asked at that time: the type may have a member of that name of its own.
+ */
+export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, count: ExpectedCount, site: StackHolder, applies?: () => boolean): DeferredAssertion => {
+  const deferred: DeferredAssertion = {
+    settled: false,
+    error: () => {
+      const error = danglingCheckError(state, form, count)
+      const stack = stackText(site)
+      const frames = typeof stack === 'string' ? stack.split('\n').slice(1).join('\n') : ''
+      error.stack = frames !== '' ? `${error.name}: ${error.message}\n${frames}` : `${error.name}: ${error.message}`
+      return error
+    }
+  }
+  deferredReports.schedule(() => {
+    if (deferred.settled) return
+    deferred.settled = true
+    if (applies === undefined || applies()) throw deferred.error()
+  })
+  return deferred
+}
+
 /** What was received, for a failure that does not know yet whether it is about reads or calls. */
 const describeReceived = (reads: number, calls: number): string => {
   if (reads === 0 && calls === 0) return 'none'

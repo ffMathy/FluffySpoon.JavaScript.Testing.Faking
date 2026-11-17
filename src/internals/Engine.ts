@@ -7,9 +7,11 @@ import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
-import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
 import {
-  ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
+  assertCall, assertPropertyRead, assertSet, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
+} from './Assertions'
+import {
+  ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, StringAssertionKey, SubstitutionMethod,
   answersOnlyItself, contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
@@ -64,11 +66,13 @@ const viewChangeError = (operation: string, print: Printer, start: Function) => 
   start
 )
 
-const viewTraps = (print: Printer): ProxyHandler<any> => ({
+const viewTraps = (print: Printer, onUse?: () => void): ProxyHandler<any> => ({
   defineProperty: function defineProperty() {
+    onUse?.()
     throw viewChangeError('Object.defineProperty()', print, defineProperty)
   },
   preventExtensions: function preventExtensions() {
+    onUse?.()
     throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
   },
   deleteProperty: () => true,
@@ -76,8 +80,12 @@ const viewTraps = (print: Printer): ProxyHandler<any> => ({
   getOwnPropertyDescriptor: () => undefined
 })
 
-/** A short-lived proxy (see viewTarget and viewTraps). */
-const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(viewTarget(print), { ...viewTraps(print), ...handler })
+/**
+ * A short-lived proxy (see viewTarget and viewTraps). `onUse` (E48): told when the code changes the view (which is a
+ * usage error), as the handler's own traps are told when it is used.
+ */
+const createView = (print: Printer, handler: ProxyHandler<any>, onUse?: () => void): any =>
+  new Proxy(viewTarget(print), { ...viewTraps(print, onUse), ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -471,11 +479,14 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
     const entry = face
+    const stringCheck = entry.kind === 'call' && isStringAssertionKey(entry.key)
+    // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
+    if (stringCheck) useStringCheck(entry)
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method, chainHead())
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
-    if (entry.kind === 'call' && isStringAssertionKey(entry.key)) {
+    if (stringCheck) {
       const assertion = resolveStringAssertion(entry, chainHead(), stackStart)
       return assertionMember(assertion.state, property, assertion.count, stackStart)
     }
@@ -898,7 +909,60 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
   const entry = state.callEntry(key, hashes)
   entry.handOut(record)
+  if (isStringAssertionKey(key) && self.construct !== true) deferStringCheck(state, key, args, entry, record)
   return entryProxy(entry)
+}
+
+/*
+ * E48: a check view that nothing follows checks nothing (`next.didNotReceive()`, `res.received(2)`, `sub[received]()`
+ * as a statement). It is reported as a usage error from a microtask, as a check that fails later is (D9), unless the
+ * view is used before that: a member access (other than the printing members and `then`), an assignment, a call or
+ * `new`. The symbol forms are always checks (see createAssertionProxy).
+ *
+ * The string forms (`sub.received(2)`, `sub.didNotReceive()`) are calls of a member of that name until something
+ * follows them (D11). Such a call is reported when it has the arguments of a check (none, or a valid count for
+ * received), nothing answered it (no setup, no mimicked instance), and at the time of the report the member still has
+ * no setup and has not been checked as a member (`sub[received](1).received(10)`): a type that has a member called
+ * received or didNotReceive of its own configures it, or checks it with the symbols.
+ */
+
+/** E48: the pending reports of the string-form calls that handed out an auto-substitute, until it is used. */
+const danglingStringChecks = new WeakMap<AutoEntry, DeferredAssertion[]>()
+/** E48: the members called received or didNotReceive that a check named, per substitute (see deferStringCheck). */
+const checkedAssertionMembers = new WeakMap<SubstituteState, Set<PropertyKey>>()
+
+const deferStringCheck = (state: SubstituteState, key: StringAssertionKey, args: any[], entry: AutoEntry, record: CallRecord): void => {
+  let count: ExpectedCount
+  if (key === 'didNotReceive') {
+    if (args.length > 0) return
+    count = 0
+  } else {
+    if (args.length > 1 || (args.length === 1 && !isValidCount(args[0]))) return
+    count = args[0]
+  }
+  const deferred = deferDanglingCheck(state, 'string', count, record.site, () =>
+    !record.retracted && !configuresMember(state, key) && checkedAssertionMembers.get(state)?.has(key) !== true)
+  const pending = danglingStringChecks.get(entry)
+  if (pending === undefined) danglingStringChecks.set(entry, [deferred])
+  else pending.push(deferred)
+}
+
+const isValidCount = (count: unknown): boolean => count === undefined || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
+
+/** E48: the auto-substitute of a string-form call is used: its pending reports are settled. */
+const useStringCheck = (entry: AutoEntry): void => {
+  const pending = danglingStringChecks.get(entry)
+  if (pending === undefined) return
+  danglingStringChecks.delete(entry)
+  for (const deferred of pending) settle(deferred)
+}
+
+/** E48: notes that a check named a member called received or didNotReceive (see deferStringCheck). */
+const noteCheckedMember = (state: SubstituteState, key: PropertyKey): void => {
+  if (!isStringAssertionKey(key)) return
+  const members = checkedAssertionMembers.get(state)
+  if (members === undefined) checkedAssertionMembers.set(state, new Set([key]))
+  else members.add(key)
 }
 
 /** The actual arguments of the call that handed out this auto-substitute, when it is part of the same expression. */
@@ -941,6 +1005,7 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
 }
 
 const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefined, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
+  useStringCheck(entry)
   const args = actualArgumentsOf(entry, chainHead)
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
@@ -959,12 +1024,12 @@ const contextFunction = (context: ContextMethod, getState: () => SubstituteState
       return function received(count?: unknown) {
         const expected = validateExpectedCount(count, received)
         retract(chainHead)
-        return createAssertionProxy(getState(), expected)
+        return createAssertionProxy(getState(), expected, captureStack(received))
       }
     case 'didNotReceive':
       return function didNotReceive() {
         retract(chainHead)
-        return createAssertionProxy(getState(), 0)
+        return createAssertionProxy(getState(), 0, captureStack(didNotReceive))
       }
     case 'clearReceivedCalls':
       return function clearReceivedCalls() {
@@ -1032,27 +1097,33 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
 
 const describeCount = (count: ExpectedCount) => count === undefined ? 'received()' : count === 0 ? 'didNotReceive()' : `received(${count})`
 
-const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any => {
+/** `sub[received](n)` / `sub[didNotReceive]()` (`site`: where). E48: reported later if nothing uses it (see deferStringCheck). */
+const createAssertionProxy = (state: SubstituteState, count: ExpectedCount, site: StackHolder): any => {
   const print: Printer = () => `${state.path}.${describeCount(count)}`
+  const dangling = deferDanglingCheck(state, 'symbol', count, site)
   return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
+      settle(dangling)
       return assertionMember(state, property, count, get)
     },
     set: function set(_target: unknown, property: PropertyKey, value: unknown) {
+      settle(dangling)
       assertSet(state, property, value, count, set)
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      settle(dangling)
       assertDirectCall(state, args, count, apply)
       return undefined
     },
     // E23: a check of `new` is a check of the call
     construct: function construct(_target: unknown, args: any[]) {
+      settle(dangling)
       assertDirectCall(state, args, count, construct)
       return {}
     }
-  })
+  }, () => settle(dangling))
 }
 
 /**
@@ -1068,6 +1139,7 @@ const assertDirectCall = (state: SubstituteState, args: any[], count: ExpectedCo
 
 /** `sub.received(n).member`: a property assertion now, or a method assertion if it is invoked. */
 const assertionMember = (state: SubstituteState, key: PropertyKey, count: ExpectedCount, stackStart: Function): any => {
+  noteCheckedMember(state, key)
   const deferred = assertPropertyRead(state, key, count, stackStart)
   const assertInvocation = (args: any[], start: Function): undefined => {
     settle(deferred)

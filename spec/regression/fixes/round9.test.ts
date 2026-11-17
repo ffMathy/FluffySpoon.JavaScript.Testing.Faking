@@ -219,3 +219,130 @@ test('R8-ADV-3 (E47) a failing property-style check is still reported after a la
     clock.uninstall()
   }
 })
+
+// ---- E48: a check view with nothing after it ---------------------------------------------------------------------
+
+/** The messages of the reports thrown by `tick()`, one tick per report. */
+const reportsOf = (clock: ReturnType<typeof interceptDeferredReports>, count: number): string[] => {
+  const messages: string[] = []
+  for (let index = 0; index < count; index++) {
+    try {
+      clock.tick()
+    } catch (error) {
+      if (!(error instanceof SubstituteException)) throw error
+      messages.push(plain(error.message))
+    }
+  }
+  return messages
+}
+
+test('R8FE-10 (E48) a symbol-form check view that nothing follows is reported from a microtask as checking nothing', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const middleware = (_req: any, res: any, next: any) => { res.status(401); next() } // calls next() after responding
+    const req = Substitute.for<any>()
+    const res = Substitute.for<any>()
+    const next = Substitute.for<any>()
+    middleware(req, res, next)
+
+    t.notThrows(() => next[didNotReceive](), 'not thrown right away')
+    let messages = reportsOf(clock, 1)
+    t.deepEqual(messages, ['@Substitute[didNotReceive]() checked nothing: it was not followed by a call or a member. ' +
+      'Complete the check: sub[didNotReceive]()(Arg.all()) checks the calls of the substitute itself, ' +
+      'sub[didNotReceive]().member(...) the calls of one of its members, and sub[didNotReceive]().member its property reads.'])
+
+    void res[received](2)
+    void req[received]()
+    void req.headers[didNotReceive]()
+    messages = reportsOf(clock, 1)
+    t.is(messages.length, 1, 'one tick throws the first report')
+    t.true(messages[0].startsWith('@Substitute[received](2) checked nothing'), messages[0])
+    t.true(messages[0].includes('sub[received](2)(Arg.all())'), messages[0])
+    t.true(messages[0].includes('sub[received](2).member its property reads'), messages[0])
+    // (the interceptor's tick rethrows the first report; the other two were thrown as well)
+
+    // the complete forms report nothing (and check)
+    t.throws(() => next[didNotReceive]()(Arg.all()), { instanceOf: SubstituteException })
+    t.notThrows(() => res[received](1).status(401))
+    t.notThrows(() => { res[didNotReceive]().statusCode = 200 })
+    t.throws(() => new (next[didNotReceive]() as any)(), { instanceOf: SubstituteException })
+    t.notThrows(() => clock.tick())
+
+    // printing or awaiting the view does not complete it
+    void String(next[received]())
+    void inspect(req.headers[received](1))
+    messages = reportsOf(clock, 1)
+    t.true(messages[0].startsWith('@Substitute[received]() checked nothing'), messages[0])
+  } finally {
+    clock.uninstall()
+  }
+})
+
+test('R8FE-10 (E48) a string-form check view that nothing follows is reported, unless the member of that name is configured or checked', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const next = Substitute.for<any>()
+    const res = Substitute.for<any>()
+    next()
+    res.status(401)
+
+    next.didNotReceive()
+    let messages = reportsOf(clock, 1)
+    t.deepEqual(messages, ['@Substitute.didNotReceive() checked nothing: it was not followed by a call or a member. ' +
+      'Complete the check: sub.didNotReceive()(Arg.all()) checks the calls of the substitute itself, ' +
+      'sub.didNotReceive().member(...) the calls of one of its members, and sub.didNotReceive().member its property reads. ' +
+      'If the substituted type has a member called didNotReceive of its own, configure its calls ' +
+      '(sub[configure]().didNotReceive(Arg.all()).returns(...)): then such a call is not taken for a check.'])
+    next.received(0)
+    t.true(reportsOf(clock, 1)[0].startsWith('@Substitute.didNotReceive() checked nothing'), 'received(0) is didNotReceive()')
+    res.received(2)
+    t.true(reportsOf(clock, 1)[0].startsWith('@Substitute.received(2) checked nothing'))
+    res.logger.received()
+    messages = reportsOf(clock, 1)
+    t.true(messages[0].startsWith('@Substitute.logger.received() checked nothing'), messages[0])
+    t.true(messages[0].includes('sub.logger.received()(Arg.all())'), messages[0])
+    // (the string form is still recorded as a call of a member called received, D11)
+    t.true(printout(res).includes('received(2)'))
+
+    // complete forms and setups report nothing
+    t.throws(() => next.didNotReceive()(Arg.all()), { instanceOf: SubstituteException })
+    t.notThrows(() => res.received(1).status(401))
+    t.notThrows(() => { res.didNotReceive().statusCode = 200 })
+    const ownMember = Substitute.for<any>()
+    ownMember.received(1).returns('one')
+    t.is(ownMember.received(1), 'one', 'a configured call of a member called received is no check')
+    t.notThrows(() => clock.tick())
+
+    // a type with a member of that name of its own: the bare call is not reported when the member gets a setup, is
+    // checked as a member, or the call does not have the arguments of a check
+    const inbox = Substitute.for<any>()
+    inbox.received(5)
+    inbox[configure]().received(Arg.any()).returns([])
+    const outbox = Substitute.for<any>()
+    outbox.didNotReceive()
+    t.notThrows(() => outbox[received](1).didNotReceive())
+    const mailbox = Substitute.for<any>()
+    mailbox.received(new Date(0))
+    mailbox.received(1, 2)
+    mailbox.didNotReceive('x')
+    void mailbox.received
+    const mimicked = Substitute.for<any>()
+    mimicked[mimick]({ received: (n: number) => n })
+    t.is(mimicked.received(3), 3)
+    t.notThrows(() => clock.tick())
+  } finally {
+    clock.uninstall()
+  }
+})
+
+test('R8FE-10 (E48) a usage error on the view itself (freezing it) reports nothing more', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const sub = Substitute.for<any>()
+    t.throws(() => Object.freeze(sub[received]()), { instanceOf: SubstituteException })
+    t.throws(() => Object.defineProperty(sub[didNotReceive](), 'x', { value: 1 }), { instanceOf: SubstituteException })
+    t.notThrows(() => clock.tick())
+  } finally {
+    clock.uninstall()
+  }
+})
