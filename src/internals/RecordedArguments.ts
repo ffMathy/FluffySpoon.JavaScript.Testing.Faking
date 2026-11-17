@@ -73,52 +73,77 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
  * checked for being a matcher themselves.
  * The keys of an object can only be counted by listing them all, which is slow for a wide one (a millisecond for
  * 10,000 keys), so an object found too wide once is remembered (weakly) and never listed again: an object shared by
- * many calls, such as a lookup table, costs nothing after its first call.
+ * many calls, such as a lookup table, costs nothing after its first call. E13: so is a container with more than
+ * REMEMBERED_ITEMS items or keys that was searched in full (no bound left out anything inside it) and holds no matcher.
+ * Mutating an argument after it was passed is not supported (amended D15/D35): a matcher put into such a container
+ * later is not seen.
  */
 const SCAN_BUDGET = 1024
 const MAX_SCAN_DEPTH = 32
 const MAX_SCANNED_ITEMS = FAMILY_KEYS - 1 // 1024
 const SCAN_ITEMS = 32768
+const REMEMBERED_ITEMS = 256
 
-const tooWideToSearch = new WeakSet<object>()
+/** Containers that are never searched again: too wide to be searched, or wide and searched in full without a matcher. */
+const notSearched = new WeakSet<object>()
 
-/** One search: the argument, the containers searched so far (created once a nested one is reached), the items left. */
-type Search = { root: object, visited: Set<object> | undefined, items: number }
+/**
+ * One search: the argument, the containers searched so far (created once a nested one is reached), the items left, and
+ * how often a bound left something out (`cuts`: then the containers around it are not remembered as searched).
+ */
+type Search = { root: object, visited: Set<object> | undefined, items: number, cuts: number }
 
-const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean =>
-  isArgumentMatcher(item) || (budget > 0 && depth < MAX_SCAN_DEPTH && isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search))
+const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean => {
+  if (isArgumentMatcher(item)) return true
+  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search)
+  if (typeof item === 'object' && item !== null) search.cuts++
+  return false
+}
 
 /** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
 const holdsMatcher = (container: object, budget: number, depth: number, search: Search): boolean => {
+  if (notSearched.has(container)) return false
   if (depth > 0) {
     const visited = search.visited ?? (search.visited = new Set([search.root]))
-    if (visited.has(container)) return false // searched already (or being searched further up)
+    if (visited.has(container)) {
+      // searched already (or being searched further up), maybe with less of a budget
+      search.cuts++
+      return false
+    }
     visited.add(container)
   }
+  const cuts = search.cuts
   if (Array.isArray(container)) {
     const length = container.length
-    if (length > MAX_SCANNED_ITEMS || length > search.items) return false
+    if (length > MAX_SCANNED_ITEMS) return false
+    if (length > search.items) {
+      search.cuts++
+      return false
+    }
     search.items -= length
     const share = Math.floor((budget - 1) / length)
     for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search)) return true
+    if (length > REMEMBERED_ITEMS && search.cuts === cuts) notSearched.add(container)
     return false
   }
-  if (tooWideToSearch.has(container)) return false
   // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
   if (isInFamily(container)) {
-    tooWideToSearch.add(container)
+    notSearched.add(container)
     return false
   }
   const keys = Object.keys(container)
   const symbols = Object.getOwnPropertySymbols(container)
   const count = keys.length + symbols.length
   if (count > MAX_SCANNED_ITEMS) {
-    tooWideToSearch.add(container)
+    notSearched.add(container)
     // E13: the hash, which comes next, takes the keys from here
     noteListing(container, symbols.length === 0 ? keys : [...keys, ...symbols.filter(symbol => Object.prototype.propertyIsEnumerable.call(container, symbol))])
     return false
   }
-  if (count > search.items) return false
+  if (count > search.items) {
+    search.cuts++
+    return false
+  }
   search.items -= count
   const share = Math.floor((budget - 1) / count)
   for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search)) return true
@@ -126,6 +151,7 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
     const symbol = symbols[index]
     if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search)) return true
   }
+  if (count > REMEMBERED_ITEMS && search.cuts === cuts) notSearched.add(container)
   return false
 }
 
@@ -136,7 +162,7 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS })
+    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 })
   } catch {
     return false
   }

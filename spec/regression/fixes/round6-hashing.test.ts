@@ -173,32 +173,45 @@ test.serial('R5-ADV-1 (E13) Maps and Sets on both sides of each limit (256 and 6
   }
 })
 
-test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 10,000 calls with one shared 10,000-key table', t => {
-  // 45facfb: about 12 s, as the keys of the table were listed for every call
-  const messages = wideObject(10_000, key => `text ${key}`, key => `message.key.${key}`)
-  const translations = Substitute.for<any>()
-  const elapsed = millisecondsOf(() => {
-    for (let index = 0; index < 10_000; index++) translations.t(`key${index}`, messages)
-  })
-  t.log(`10,000 calls with distinct first arguments and one shared table: ${elapsed.toFixed(1)} ms`)
-  t.true(elapsed < 1000, `10,000 calls with distinct first arguments and one shared table: ${elapsed} ms`)
-  t.is(translations.t('key7', messages), translations.t('key7', { ...messages }))
+test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 10,000 calls with one shared table of 300 to 10,000 keys', t => {
+  // 45facfb: from 0.6 s (300 keys) to about 12 s (10,000 keys), as the keys of the table were listed for every call,
+  // and a table of up to 1,024 keys was also searched for nested matchers on every call
+  for (const size of [300, 1000, 10_000]) {
+    const messages = wideObject(size, key => `text ${key}`, key => `message.key.${key}`)
+    const translations = Substitute.for<any>()
+    const elapsed = millisecondsOf(() => {
+      for (let index = 0; index < 10_000; index++) translations.t(`key${index}`, messages)
+    })
+    t.log(`10,000 calls with distinct first arguments and one shared ${size}-key table: ${elapsed.toFixed(1)} ms`)
+    t.true(elapsed < 1000, `10,000 calls with distinct first arguments and one shared ${size}-key table: ${elapsed} ms`)
+    t.is(translations.t('key7', messages), translations.t('key7', { ...messages }))
+  }
 
   // its keys are listed when it is first seen (to search it for matchers, and to hash it), never again
-  let listings = 0
-  const table = new Proxy(wideObject(5000, key => key, key => `entry.${key}`), {
-    ownKeys: target => {
-      listings++
-      return Reflect.ownKeys(target)
-    }
-  })
+  for (const size of [300, 5000]) {
+    let listings = 0
+    const table = new Proxy(wideObject(size, key => key, key => `entry.${key}`), {
+      ownKeys: target => {
+        listings++
+        return Reflect.ownKeys(target)
+      }
+    })
+    const lookup = Substitute.for<any>()
+    lookup.find(0, table)
+    const firstListings = listings
+    for (let index = 1; index < 1000; index++) lookup.find(index, table)
+    t.is(listings, firstListings, `${size} keys`)
+    t.true(firstListings <= 4, `${size} keys: listed ${firstListings} times`)
+    t.notThrows(() => lookup.received(1).find(999, table))
+  }
+
+  // a matcher nested in a table is still found when the table is first seen, also after an equal one without
+  const tableOf = (value: unknown) => wideObject(300, key => key === 150 ? value : key, key => `entry.${key}`)
   const lookup = Substitute.for<any>()
-  lookup.find(0, table)
-  const firstListings = listings
-  for (let index = 1; index < 1000; index++) lookup.find(index, table)
-  t.is(listings, firstListings)
-  t.true(firstListings <= 4, `listed ${firstListings} times`)
-  t.notThrows(() => lookup.received(1).find(999, table))
+  lookup.find(tableOf(150))
+  lookup.find(tableOf(Arg.any())).returns('configured')
+  t.is(lookup.find(tableOf(-1)), 'configured')
+  t.notThrows(() => lookup.received(1).find(tableOf(Arg.is((value: number) => value < 0))))
 })
 
 test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,000 calls with a throwing getter, with the same results', t => {
