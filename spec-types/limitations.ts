@@ -110,5 +110,7 @@ signals.emit('failed', 'id1').returns(true) // the event and its arguments are n
 const asSettings: SettingsService = settings
 // @ts-expect-error the method itself keeps its own signature
 asSettings.get('port').toFixed(0).returns(1)
+// (The number of arguments is checked, except for Node's `EventEmitter<Events>.emit`: see
+// R6FE-7.T46.generic-methods.ts.)
 
 export { found }

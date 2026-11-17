@@ -228,20 +228,45 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
 type GenericCallSignature<F, TOverloads extends any[], V extends SubstituteView> =
   F extends (...args: any) => any ? GenericCallSignatureOf<F, TOverloads, V> : unknown
 type GenericCallSignatureOf<F, TOverloads extends any[], V extends SubstituteView> =
-  IsGenericSignature<F, TOverloads> extends true ?
-  <P extends ArgumentValue[]>(...args: P & CallableWith<F, P>) => CallResult<V, P, CallReturnTypeOf<F, P>, never> :
-  unknown
-// `true` for a function type with a single call signature that is not the same as the signature `Overloads` sees, i.e.
-// a generic one (also, harmlessly, a callable type with other members).
+  IsGenericSignature<F, TOverloads> extends true ? GenericCallSignatureFor<F, TOverloads[7], V> : unknown
+// When the signature takes at least one argument, the first one is a parameter of its own: a call without arguments
+// would otherwise infer nothing for `P` and check the arguments against its constraint, which accepts none.
+type GenericCallSignatureFor<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
+  [] extends TOverload['arguments'] ?
+  (<P extends ArgumentValue[]>(...args: P & CallableWith<F, P, TOverload['arguments']>) =>
+    CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>) :
+  (<P0 extends ArgumentValue, P extends ArgumentValue[]>(arg0: P0, ...args: P & CallableWith<F, Prepend<P0, P>, TOverload['arguments']>) =>
+    CallResult<V, Prepend<P0, P>, CallReturnTypeOf<F, Prepend<P0, P>, TOverload['returnType']>, never>)
+type Prepend<P0, P extends any[]> = ((arg0: P0, ...args: P) => void) extends ((...args: infer L) => void) ? Extract<L, any[]> : never
+// `true` for a function type with a single call signature that is generic (R7TD-7, T50): a function type that is not
+// the same type as the signature `Overloads` sees (with the type parameters replaced by their constraints), or a
+// callable type with other members (`{ <T>(x: T): T; extra: boolean }`) to which that signature with the other members
+// is not assignable. (A callable type with other members is never the same type as a function type, and a method's
+// parameters are compared both ways, so neither test alone tells generic signatures apart.) A callable type with
+// other members whose signature is not generic (`{ (x: string): number; extra: boolean }`) does not get the signature
+// below.
 type IsGenericSignature<F, TOverloads extends any[]> =
-  TOverloads[6] extends NoOverload ? (TOverloads[7] extends Overload<any[], any> ?
-    (Equals<F, (...args: TOverloads[7]['arguments']) => TOverloads[7]['returnType']> extends true ? false : true) :
-    false) :
+  TOverloads[6] extends NoOverload ? (TOverloads[7] extends Overload<any[], any> ? IsGenericOverload<F, TOverloads[7]> : false) :
   false
+type IsGenericOverload<F, TOverload extends Overload<any[], any>> =
+  [keyof F] extends [never] ?
+  (Equals<F, (...args: TOverload['arguments']) => TOverload['returnType']> extends true ? false : true) :
+  [((...args: TOverload['arguments']) => TOverload['returnType']) & Pick<F, keyof F>] extends [F] ? false : true
 // Includes the primitive types, so that TypeScript keeps the literal types of the arguments (`get('port')`).
 type ArgumentValue = string | number | boolean | bigint | symbol | object | null | undefined
-type CallableWith<F, P extends any[]> = F extends (...args: P) => any ? unknown : never
-type CallReturnTypeOf<F, P extends any[]> = F extends (...args: P) => infer R ? R : never
+// The arguments `P` fit `F`'s own (generic) signature, as TypeScript checks it when it compares the function types,
+// which does not check the number of arguments. That is checked against the parameter list with the type parameters
+// replaced by their constraints (`TArguments`): `get('port', 'extra')` and `get()` of `get<K extends keyof Config>(key:
+// K)` do not compile (R7TD-7, T50). (Where that list has no possible arguments, as for `emit` of Node's
+// `EventEmitter<T>`, whose number of arguments depends on the event, the number is not checked.)
+type CallableWith<F, P extends any[], TArguments> = F extends (...args: P) => any ? ArgumentCountFits<P, TArguments> : never
+type ArgumentCountFits<P extends any[], TArguments> = [TArguments] extends [never] ? unknown :
+  true extends EachArgumentCountFits<P['length'], TArguments> ? unknown : never
+type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCount extends TArguments['length'] ? true : false) : never
+// What `F` returns for the arguments `P`. TypeScript 4.1 and older infer `any` for arguments of type `any`
+// (`Arg.any()`), where the return type with the type parameters replaced by their constraints (`TReturnType`) is taken.
+type CallReturnTypeOf<F, P extends any[], TReturnType> =
+  F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : never
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
