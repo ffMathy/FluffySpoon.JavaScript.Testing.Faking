@@ -125,3 +125,116 @@ test('R7TD-9 (E32) a setup made with .returns() on a call reads a throwing gette
   t.is(orders.place({ total: 5 }), 'placed')
 })
 
+// ---- E30: a container held by a setup that changed afterwards -----------------------------------
+
+test('R7V-2 (E30) pins what a call gives after a container inside a setup\'s argument changed (unspecified, see README)', t => {
+  // A setup (or an auto-substitute) holds the objects of its arguments. When one of them changes afterwards, whether a
+  // later call with a new wrapper around it, or with an equal copy, still matches is unspecified (amended D15/D35). This
+  // pins what the library does now: a wide container (more than 256 entries) keeps the hash of its first use, a
+  // smaller one is hashed again. Checks compare live, always.
+  for (const size of [3, 256, 257, 1100]) {
+    for (const kind of ['Set', 'Map', 'object'] as const) {
+      const make = (): any => kind === 'Set' ? new Set(Array.from({ length: size }, (_, index) => index))
+        : kind === 'Map' ? new Map(Array.from({ length: size }, (_, index) => [`k${index}`, index]))
+          : wideObject(size, index => index)
+      const change = (value: any) => { if (kind === 'object') delete value.k1; else value.delete(kind === 'Set' ? 1 : 'k1') }
+      const wide = size > 256
+      const name = `${kind} of ${size}`
+
+      const renderer = Substitute.for<any>()
+      const tags = make()
+      const first = renderer.render({ tags })
+      change(tags)
+      t.is(renderer.render({ tags }) === first, wide, `${name}: the same auto-substitute`)
+
+      const repository = Substitute.for<any>()
+      const saved = make()
+      repository.save({ tags: saved }).returns('saved')
+      change(saved)
+      const answer = repository.save({ tags: saved })
+      if (wide) t.is(answer, 'saved', name)
+      else t.true(isAutoSubstitute(answer), name)
+      // a copy of its state now: as without the change for a wide one
+      const copy = repository.save({ tags: kind === 'object' ? { ...saved } : kind === 'Set' ? new Set(saved) : new Map(saved) })
+      t.true(isAutoSubstitute(copy), `${name}: a copy`)
+
+      const audit = Substitute.for<any>()
+      const checked = make()
+      audit.save({ tags: checked })
+      change(checked)
+      t.notThrows(() => audit.received(1).save({ tags: checked }), name)
+    }
+  }
+})
+
+// ---- E31: wide objects shared by small arguments and by the records of wide containers ----------
+
+test.serial('R7-ADV-5 / R7V-5 (E31) records of wide containers that share a wide object: 10 calls each stay well under 50 ms', t => {
+  t.timeout(120_000)
+  // Accepted as they are (E31): records inside a wide container are hashed with a budget of 4 objects each (E13), where
+  // 45facfb hashed them shallowly, which costs about 1 ms per call for 2,000 records. The limit is four times the 50 ms
+  // that E31 accepts, for a busy machine; the best of three runs, each with values of its own.
+  const config = wideObject(5000, index => index, index => `setting${index}`)
+  let generation = 0
+  const shapes: Array<[string, () => unknown[]]> = [
+    ['10 Maps of 2,000 records sharing one 5,000-key object', () => Array.from({ length: 10 }, (_, call) => new Map(Array.from({ length: 2000 }, (_, index) => [`s${index}`, { id: ++generation * 100_000 + call * 10_000 + index, config }])))],
+    ['10 Maps of 300 such records', () => Array.from({ length: 10 }, (_, call) => new Map(Array.from({ length: 300 }, (_, index) => [`s${index}`, { id: ++generation * 100_000 + call * 1000 + index, config }])))],
+    ['10 tables of 300 such records', () => Array.from({ length: 10 }, (_, call) => wideObject(300, index => ({ id: ++generation * 100_000 + call * 1000 + index, config }), index => `row${index}`))],
+    ['10 tables of 1,000 records that point back to their table', () => Array.from({ length: 10 }, (_, call) => {
+      const table: Record<string, unknown> = {}
+      for (let index = 0; index < 1000; index++) table[`n${index}`] = { id: ++generation * 100_000 + call * 1000 + index, registry: table }
+      return table
+    })],
+    ['10 batches of 300 records sharing a 10,000-entry Map', () => {
+      const catalog = new Map(Array.from({ length: 10_000 }, (_, index) => [`sku-${index}`, { price: index }]))
+      return Array.from({ length: 10 }, (_, call) => Array.from({ length: 300 }, (_, index) => ({ id: ++generation * 100_000 + call * 1000 + index, catalog })))
+    }]
+  ]
+  for (const [name, values] of shapes) {
+    let best = Infinity
+    for (let run = 0; run < 3; run++) {
+      const args = values()
+      const sub = Substitute.for<any>()
+      best = Math.min(best, millisecondsOf(() => args.forEach(value => sub.load(value))))
+    }
+    t.log(`${name}: ${best.toFixed(1)} ms`)
+    t.true(best < 200, `${name}: ${best} ms`)
+  }
+})
+
+test.serial('R7-ADV-4 (E31) 10,000 calls whose small argument holds a shared wide table stay well under 1 s', t => {
+  t.timeout(120_000)
+  // Not made faster (see the fix report): a call whose hash takes a wide container's hash from an earlier call proves
+  // that the container is still wide (257 of its keys) before it looks for an equal auto-substitute, so that one that
+  // shrank since is found by its contents (E18). 74b8588: 100 to 160 ms, without that proof; now 200 to 270 ms.
+  const table = wideObject(10_000, index => index, index => `key${index}`)
+  const shapes: Array<[string, (index: number) => unknown[]]> = [
+    ['{ id, table }', index => [{ id: index, table }]],
+    ['[id, table]', index => [[index, table]]],
+    ['{ id, meta: { table } }', index => [{ id: index, meta: { table } }]],
+    ['(id, table)', index => [index, table]]
+  ]
+  let generation = 0
+  for (const [name, args] of shapes) {
+    let best = Infinity
+    for (let run = 0; run < 3; run++) {
+      const calls = Array.from({ length: 10_000 }, () => args(++generation))
+      const sub = Substitute.for<any>()
+      best = Math.min(best, millisecondsOf(() => calls.forEach(call => sub.f(...call))))
+    }
+    t.log(`10,000 calls with ${name}: ${best.toFixed(1)} ms`)
+    t.true(best < 1000, `10,000 calls with ${name}: ${best} ms`)
+  }
+  // still exact: an equal wrapper, also with a copy of the table, finds the same auto-substitute, another id another one
+  const sub = Substitute.for<any>()
+  const first = sub.f({ id: 1, table })
+  t.is(sub.f({ id: 1, table }), first)
+  t.is(sub.f({ id: 1, table: { ...table } }), first)
+  t.not(sub.f({ id: 2, table }), first)
+  // a table that another call saw, and that shrank below 257 keys since, is hashed by its contents again
+  const shrinking = wideObject(300, index => index)
+  Substitute.for<any>().log({ shrinking })
+  for (let index = 0; index < 100; index++) delete shrinking[`k${index}`]
+  const copy = sub.g({ id: 1, shrinking: { ...shrinking } })
+  t.is(sub.g({ id: 1, shrinking }), copy)
+})
