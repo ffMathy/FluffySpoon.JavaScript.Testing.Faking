@@ -2,7 +2,7 @@
 // Type-checks spec-types/min-ts/consumer.ts against the BUILT package typings (dist/*.d.ts, resolved through
 // package.json like an installed package) with older TypeScript versions, each installed on the fly with npx.
 //
-//   npm run test:types:min-ts                     # builds dist/, then checks the minimum supported version
+//   npm run test:types:min-ts                     # builds dist/, then checks the minimum supported version and 4.3
 //   node spec-types/min-ts/check.js 3.9 4.0 4.4   # after `npm run build`: check other versions
 //
 // The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on.
@@ -17,9 +17,12 @@ const os = require('os')
 const path = require('path')
 
 const MINIMUM_TYPESCRIPT_VERSION = '3.6'
+// Also checked by default: versions with typing behaviour of their own that the consumer pins (4.3: unions with a
+// string index signature, R7TD-3).
+const PINNED_TYPESCRIPT_VERSIONS = ['4.3']
 
 const root = path.resolve(__dirname, '..', '..')
-const versions = process.argv.slice(2).length > 0 ? process.argv.slice(2) : [MINIMUM_TYPESCRIPT_VERSION]
+const versions = process.argv.slice(2).length > 0 ? process.argv.slice(2) : [MINIMUM_TYPESCRIPT_VERSION].concat(PINNED_TYPESCRIPT_VERSIONS)
 const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx'
 
 const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))

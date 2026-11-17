@@ -1,6 +1,6 @@
 import { AllArguments } from '../../shared'
 import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
-import { Equals, IsAny, ObjectKind, Primitive, UnionToIntersection } from './Utilities'
+import { Equals, GenericKind, IsAny, ObjectKind, Primitive, UnionToIntersection } from './Utilities'
 
 /**
  * What a call returns in each view of a substitute:
@@ -111,6 +111,9 @@ type NoOverloads = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, 
  * known (an object type that merely contains a type parameter would be resolved eagerly, and wrongly).
  * Primitives (also large unions of string literals, such as lib.dom's `AutoFill`) are never callable: they are ruled out
  * first, without distributing the pattern over the union (TD-8).
+ * A generic signature whose return type is conditional on a type parameter (`conv<K>(e: K): K extends string ? number :
+ * boolean`, `listeners` of Node's `EventEmitter<T>`) does not match the pattern (TypeScript compares it with every
+ * slot with its type parameters replaced by `any`); it is matched on its own (R7TD-1, T53).
  */
 type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
   ({ substituteOverloads: TFunction } & TFunction) extends {
@@ -126,6 +129,7 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
     Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
     Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
   ] :
+  TFunction extends (...args: infer A) => infer R ? [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, LastSlot<A, R>] :
   TFunction extends new (...args: infer A) => infer R ? ConstructOverloads<TFunction, A, R> :
   NoOverloads
 
@@ -133,13 +137,33 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
 // of its construct signatures (R6FE-3, T47). At run time `new` on a substitute or a member is recorded and answered
 // like a call (E23), so the substitute offers call signatures with these parameters, whose setup API takes the
 // instance a `new` gives (`Client('u').returns(client)`, `Client.received(1)('u')`), next to the construct signatures
-// of `T` itself. The pattern below cannot use method signatures, which TypeScript compares bivariantly, so on
-// TypeScript 5.0 and older, which fill the slots of missing overloads with `new (...args: unknown[]) => unknown`, it
-// only matches constructors with 8 overloads; there only the last construct signature (`A`, `R`) is taken.
-type ConstructOverloads<TFunction, A, R> = AllConstructOverloads<TFunction> extends NoOverloads ?
-  [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, LastSlot<A, R>] :
-  AllConstructOverloads<TFunction>
-type AllConstructOverloads<TFunction> =
+// of `T` itself. The patterns below cannot use method signatures, which TypeScript compares bivariantly, and
+// TypeScript 5.2 and older fill the slots of missing overloads with `new (...args: unknown[]) => unknown`, which a
+// constructor's own signatures do not match: there a pattern only matches a constructor with as many construct
+// signatures as it has. So the patterns for 8 down to 2 construct signatures are tried in turn (R7TD-2, T53; TypeScript
+// 5.3 and newer match the first), and a constructor with one construct signature (or more than 8) takes the last one.
+// (Only for concrete types, see `GenericKind`: in generic code the patterns below 8 made TypeScript 3.6 give up with
+// "Type instantiation is excessively deep".)
+type ConstructOverloads<TFunction, A, R> =
+  ConstructOverloads8<TFunction> extends NoOverloads ? {
+    generic: LastConstructOverload<A, R>
+    [concrete: number]: ConstructOverloadsBelow8<TFunction, A, R>
+  }[GenericKind<TFunction>] :
+  ConstructOverloads8<TFunction>
+type LastConstructOverload<A, R> = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, LastSlot<A, R>]
+type ConstructOverloadsBelow8<TFunction, A, R> =
+  ConstructOverloads7<TFunction> extends NoOverloads ? ConstructOverloadsBelow7<TFunction, A, R> : ConstructOverloads7<TFunction>
+type ConstructOverloadsBelow7<TFunction, A, R> =
+  ConstructOverloads6<TFunction> extends NoOverloads ? ConstructOverloadsBelow6<TFunction, A, R> : ConstructOverloads6<TFunction>
+type ConstructOverloadsBelow6<TFunction, A, R> =
+  ConstructOverloads5<TFunction> extends NoOverloads ? ConstructOverloadsBelow5<TFunction, A, R> : ConstructOverloads5<TFunction>
+type ConstructOverloadsBelow5<TFunction, A, R> =
+  ConstructOverloads4<TFunction> extends NoOverloads ? ConstructOverloadsBelow4<TFunction, A, R> : ConstructOverloads4<TFunction>
+type ConstructOverloadsBelow4<TFunction, A, R> =
+  ConstructOverloads3<TFunction> extends NoOverloads ? ConstructOverloadsBelow3<TFunction, A, R> : ConstructOverloads3<TFunction>
+type ConstructOverloadsBelow3<TFunction, A, R> =
+  ConstructOverloads2<TFunction> extends NoOverloads ? LastConstructOverload<A, R> : ConstructOverloads2<TFunction>
+type ConstructOverloads8<TFunction> =
   ({ substituteOverloads: TFunction } & TFunction) extends {
     substituteOverloads: {
       new (...args: infer A1): infer R1
@@ -154,6 +178,87 @@ type AllConstructOverloads<TFunction> =
   } ? [
     Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>,
     Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, Slot<A7, R7, A8, R8>, LastSlot<A8, R8>
+  ] :
+  NoOverloads
+type ConstructOverloads7<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+      new (...args: infer A4): infer R4
+      new (...args: infer A5): infer R5
+      new (...args: infer A6): infer R6
+      new (...args: infer A7): infer R7
+    }
+  } ? [
+    NoOverload, Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>,
+    Slot<A4, R4, A5, R5>, Slot<A5, R5, A6, R6>, Slot<A6, R6, A7, R7>, LastSlot<A7, R7>
+  ] :
+  NoOverloads
+type ConstructOverloads6<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+      new (...args: infer A4): infer R4
+      new (...args: infer A5): infer R5
+      new (...args: infer A6): infer R6
+    }
+  } ? [
+    NoOverload, NoOverload, Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>,
+    Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>, Slot<A5, R5, A6, R6>, LastSlot<A6, R6>
+  ] :
+  NoOverloads
+type ConstructOverloads5<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+      new (...args: infer A4): infer R4
+      new (...args: infer A5): infer R5
+    }
+  } ? [
+    NoOverload, NoOverload, NoOverload, Slot<A1, R1, A2, R2>,
+    Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, Slot<A4, R4, A5, R5>, LastSlot<A5, R5>
+  ] :
+  NoOverloads
+type ConstructOverloads4<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+      new (...args: infer A4): infer R4
+    }
+  } ? [
+    NoOverload, NoOverload, NoOverload, NoOverload,
+    Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, Slot<A3, R3, A4, R4>, LastSlot<A4, R4>
+  ] :
+  NoOverloads
+type ConstructOverloads3<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+      new (...args: infer A3): infer R3
+    }
+  } ? [
+    NoOverload, NoOverload, NoOverload, NoOverload,
+    NoOverload, Slot<A1, R1, A2, R2>, Slot<A2, R2, A3, R3>, LastSlot<A3, R3>
+  ] :
+  NoOverloads
+type ConstructOverloads2<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads: {
+      new (...args: infer A1): infer R1
+      new (...args: infer A2): infer R2
+    }
+  } ? [
+    NoOverload, NoOverload, NoOverload, NoOverload,
+    NoOverload, NoOverload, Slot<A1, R1, A2, R2>, LastSlot<A2, R2>
   ] :
   NoOverloads
 
@@ -212,7 +317,11 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
 type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
-  OverloadSignatures<Overloads<TVariant>, TView, TFunction> & GenericCallSignature<TVariant, Overloads<TVariant>, TView>
+  SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
+type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> = TGeneric extends true ?
+  GenericPositionalSignature<F, TOverloads[7], TView> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction> &
+  GenericCallSignatureFor<F, TOverloads[7], TView> :
+  OverloadSignatures<TOverloads, TView, TFunction>
 
 // Generic methods (R6FE-7, T46): `Overloads` sees a generic signature with its type parameters replaced by their
 // constraints, so `get<K extends keyof Config>(key: K): Config[K]` becomes `get(key: keyof Config): Config[keyof
@@ -225,17 +334,21 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
 // arguments (`Arg.any()`) resolve to: TypeScript first tries the signatures with the subtype relation, under which
 // `any` fits a type parameter, but no other parameter type. (Overloaded members do not get it: there TypeScript takes
 // the return type of the last overload, and `any` arguments resolve to the first overload that accepts them.)
-type GenericCallSignature<F, TOverloads extends any[], V extends SubstituteView> =
-  F extends (...args: any) => any ? GenericCallSignatureOf<F, TOverloads, V> : unknown
-type GenericCallSignatureOf<F, TOverloads extends any[], V extends SubstituteView> =
-  IsGenericSignature<F, TOverloads> extends true ? GenericCallSignatureFor<F, TOverloads[7], V> : unknown
-// When the signature takes at least one argument, the first one is a parameter of its own: a call without arguments
-// would otherwise infer nothing for `P` and check the arguments against its constraint, which accepts none.
+type GenericSignatureKind<F, TOverloads extends any[]> = F extends (...args: any) => any ? IsGenericSignature<F, TOverloads> : false
+// The positional signature of a generic method: its parameter list with the type parameters replaced by their
+// constraints, as a constraint of the arguments `P`, so that callbacks are typed from it (R7TD-1, T53). Its result
+// takes what the method returns for the arguments (see `CallReturnTypeOf`).
+type GenericPositionalSignature<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
+  [TOverload['arguments']] extends [never] ? unknown :
+  <P extends TOverload['arguments']>(...args: P) => CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
+// When the signature takes at least one argument, the first one is a parameter of its own, which carries the check of
+// all arguments: a call without arguments would otherwise infer nothing for `P` and check the arguments against its
+// constraint, which accepts none.
 type GenericCallSignatureFor<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
   [] extends TOverload['arguments'] ?
   (<P extends ArgumentValue[]>(...args: P & CallableWith<F, P, TOverload['arguments']>) =>
     CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>) :
-  (<P0 extends ArgumentValue, P extends ArgumentValue[]>(arg0: P0, ...args: P & CallableWith<F, Prepend<P0, P>, TOverload['arguments']>) =>
+  (<P0 extends ArgumentValue, P extends ArgumentValue[]>(arg0: P0 & CallableWith<F, Prepend<P0, P>, TOverload['arguments']>, ...args: P) =>
     CallResult<V, Prepend<P0, P>, CallReturnTypeOf<F, Prepend<P0, P>, TOverload['returnType']>, never>)
 type Prepend<P0, P extends any[]> = ((arg0: P0, ...args: P) => void) extends ((...args: infer L) => void) ? Extract<L, any[]> : never
 // `true` for a function type with a single call signature that is generic (R7TD-7, T50): a function type that is not
@@ -265,8 +378,12 @@ type ArgumentCountFits<P extends any[], TArguments> = [TArguments] extends [neve
 type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCount extends TArguments['length'] ? true : false) : never
 // What `F` returns for the arguments `P`. TypeScript 4.1 and older infer `any` for arguments of type `any`
 // (`Arg.any()`), where the return type with the type parameters replaced by their constraints (`TReturnType`) is taken.
+// TypeScript infers the return type from the signature with the type parameters replaced by their constraints, and
+// then checks that the signature for these arguments returns that: a return type that is conditional on a type
+// parameter (`conv<K>(e: K): K extends string ? number : boolean`, whose `conv('x')` returns a `number` but would be
+// inferred as `boolean`) cannot be inferred, and is `any` (R7TD-1, T53).
 type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : never
+  F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
@@ -306,18 +423,23 @@ type CombinedSignatures<TFunction, TView extends SubstituteView> =
     SlotParameterLists<TFunction, EarlierSlot> | SlotParameterLists<TFunction, 6> | SlotParameterLists<TFunction, 7>
   >, TView, TFunction>
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
-// The boxes of the lists of the last overloads, of the overloads before them, and of all earlier ones (`Overloads`
-// slots), in this order reversed, so that the signatures keep the order of the overloads where it matters most: a call
-// that several overloads accept resolves to the first, as with the variants' own overloads (lib.dom's
+// The boxes of the lists of the earlier overloads, of the last overload but one, and of the last overloads
+// (`Overloads` slots), in this order, so that the signatures keep the order of the overloads where it matters most: a
+// call that several overloads accept resolves to the first, as with the variants' own overloads (lib.dom's
 // `addEventListener(type: keyof HTMLElementEventMap, listener: (this: ..., ev: ...) => any)` before
 // `addEventListener(type: string, listener: EventListenerOrEventListenerObject)`). The overloads before the last two
 // share one group, in which the order is TypeScript's.
 type SignaturesOfSlots<TThis, V extends SubstituteView, F> = SignaturesOfBoxes<[
-  SlotBoxes<TThis, V, F, EarlierSlot>, SlotBoxes<TThis, V, F, 6>, SlotBoxes<TThis, V, F, 7>
+  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, EarlierSlot>, TThis>, V, F>>>,
+  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, 6>, TThis>, V, F>>>,
+  BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>>
 ]>
 type EarlierSlot = 0 | 1 | 2 | 3 | 4 | 5
-type SlotBoxes<TThis, V extends SubstituteView, F, TSlot extends number> =
-  BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, TSlot>, TThis>, V, F>>>
+// The boxes of the last overloads are made variant by variant (the boxes of the lists of several variants are one
+// type), so that they are created, and intersected, in the order of the variants: a call that the lists of several
+// variants accept (with `Arg.any()`) resolves to the first variant's list, as with the boxes per variant before T49.
+type VariantBoxes<TVariant, TThis, V extends SubstituteView, F> =
+  TVariant extends unknown ? ListBox<DistinctParameterLists<ParameterListOf<Overloads<TVariant>[7]>, TThis>, V, F> : never
 type BoxesOf<TBoxes> = TBoxes extends SignatureBox ? TBoxes : SignatureBox
 type SignaturesOfBoxes<B extends SignatureBox[]> =
   FieldOfBoxes<B, 6> & FieldOfBoxes<B, 5> & FieldOfBoxes<B, 4> & FieldOfBoxes<B, 3> & FieldOfBoxes<B, 2> &
@@ -337,7 +459,7 @@ type SignatureBox = {
 // type, and without this their parameter lists would all be different. (A callback without parameter types in a call
 // of a union such as `HTMLInputElement | HTMLSelectElement` then has `this` typed as either element.)
 type DistinctParameterLists<TLists, TThis> = TLists extends any[] ?
-  UnnamedArguments<[CallbackThisTypesOf<TLists>[number]] extends [never] ? TLists : WithCallbackThis<TLists, TThis>> :
+  UnnamedArguments<[CallbackThisTypesOf<TLists>[number]] extends [never] ? TLists : Extract<WithCallbackThis<TLists, TThis>, any[]>> :
   never
 type SlotParameterLists<TVariant, TSlot extends number> = TVariant extends unknown ? ParameterListOf<Overloads<TVariant>[TSlot]> : never
 type ParameterListOf<TOverload> = TOverload extends Overload<any[], any> ? TOverload['arguments'] : never

@@ -36,13 +36,11 @@ type IndexedUnionKind<T> = IsUnion<T> extends true ? any : 'indexed'
 type IndexedUnionMembers<T> = { [P in NamedKeys<T>]: T[P] } & { [key: string]: StringIndexOf<T> }
 type StringIndexOf<T> = T extends { [key: string]: infer V } ? V : never
 // The keys of the members of `T` that are declared by name (`keyof T` of a type with a string index signature is just
-// `string | number`). They are inferred from a mapping of `T` whose values are the keys; TypeScript 4.0 and older
-// infer them from a target mapped over `keyof T`, newer versions from a target with a string index signature.
-type NamedKeys<T> = [NamedKeysFromIndex<T>] extends [never] ? NamedKeysFromMapping<T> : NamedKeysFromIndex<T>
-type NamedKeysFromMapping<T> = { [P in keyof T]: string extends P ? never : number extends P ? never : P } extends
-  { [P in keyof T]: infer K } ? Extract<K, PropertyKey> : never
-type NamedKeysFromIndex<T> = { [P in keyof T]: string extends P ? never : number extends P ? never : P } extends
-  { [key: string]: infer K } ? Extract<K, PropertyKey> : never
+// `string | number`). They are inferred from a mapping of `T` whose values are the keys, with a target mapped over the
+// keys of that mapping, which every TypeScript version infers them from (R7TD-3, T53: a target mapped over `keyof T`
+// worked on 4.2 and older only, a target with a string index signature on 4.4 and newer, and neither on 4.3).
+type NamedKeys<T> = NamedKeyMapping<T> extends { [P in keyof NamedKeyMapping<T>]: infer K } ? Extract<K, PropertyKey> : never
+type NamedKeyMapping<T> = { [P in keyof T]: string extends P ? never : number extends P ? never : P }
 
 // The views are mapped with `-?` and expand calls from the member type without `null | undefined`, so optional members
 // (`prop?`, `method?()`) are configured and asserted like required ones (T:TY-7).
