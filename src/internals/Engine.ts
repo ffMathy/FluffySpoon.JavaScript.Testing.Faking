@@ -1,11 +1,12 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, pathArguments } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { pathArguments, relativePath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
-import { SubstituteException } from './SubstituteException'
+import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
@@ -40,8 +41,9 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
  * It is a bound function: it can be constructed (E23), and it has no non-configurable `prototype`, so that the
  * traps can hide its own properties (E25, see viewTraps).
  */
-const viewFunction = function () { }
-const newTarget = (print: Printer): any => {
+// E40: a neutral name for util.inspect without custom inspection (see returnThis)
+const viewFunction = function substitute() { }
+const viewTarget = (print: Printer): any => {
   const target = viewFunction.bind(undefined)
   Object.defineProperty(target, inspect.custom, {
     value: (_depth: number, options?: InspectOptions) => print(options),
@@ -74,8 +76,8 @@ const viewTraps = (print: Printer): ProxyHandler<any> => ({
   getOwnPropertyDescriptor: () => undefined
 })
 
-/** A short-lived proxy (see newTarget and viewTraps). */
-const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(newTarget(print), { ...viewTraps(print), ...handler })
+/** A short-lived proxy (see viewTarget and viewTraps). */
+const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(viewTarget(print), { ...viewTraps(print), ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -85,30 +87,56 @@ const memberLabel = (key: PropertyKey) => key === SELF ? 'call' : keyToString(ke
 const memberWithin = (prefix: string, key: PropertyKey): string =>
   key === SELF ? prefix : prefix === '' ? keyToString(key) : `${prefix}.${keyToString(key)}`
 
-/** An auto-substitute relative to the printed substitute: `logger`, `getUser(1)`, `logger.child('x')`. */
-const entryWithin = (prefix: string, entry: AutoEntry): string => {
-  const member = memberWithin(prefix, entry.key)
-  return entry.kind === 'get' ? member : `${member}${pathArguments(entry.argumentList)}`
+/**
+ * E35: a printout lists all received calls and setups of the substitute itself, and at most this many of each of its
+ * auto-substitutes (as messages list at most this many calls, D23), then "… and N more".
+ */
+const MAX_NESTED_LINES = MAX_LISTED_CALLS
+
+/** The items to show (all of the printed substitute's own, the first MAX_NESTED_LINES of the others), and how many are left out. */
+const capNested = <T extends { owner: SubstituteState }>(items: T[], state: SubstituteState): { shown: T[], hidden: number } => {
+  const shown: T[] = []
+  let nested = 0
+  for (const item of items) {
+    if (item.owner === state) shown.push(item)
+    else if (nested++ < MAX_NESTED_LINES) shown.push(item)
+  }
+  return { shown, hidden: items.length - shown.length }
 }
+
+const andMore = (hidden: number): string[] => hidden > 0 ? [`    … and ${hidden} more`] : []
 
 /**
  * The received calls and setups of a substitute and (E24) of its auto-substitutes, which are shown under their paths
  * relative to it (`logger.info('started')`, `logger.level => returns(3)`): the calls in the order they were made, the
  * setups in the order they were configured. An empty list means that there is nothing to show.
+ * E35: the auto-substitutes are visited without recursion, at most MAX_NESTED_LINES of their calls and setups are
+ * shown, and only the paths of the lines shown are built (bounded, see Paths), so a deep chain of auto-substitutes (a
+ * list walk, a fluent builder in a loop) prints quickly and small.
  */
 const stateLines = (state: SubstituteState, colors: boolean): string[] => {
-  const records: Array<{ record: CallRecord, prefix: string }> = []
-  const substitutions: Array<{ substitution: Substitution, prefix: string }> = []
-  const visit = (current: SubstituteState, prefix: string) => {
-    for (const record of current.records) records.push({ record, prefix })
+  const records: Array<{ record: CallRecord, owner: SubstituteState }> = []
+  const substitutions: Array<{ substitution: Substitution, owner: SubstituteState }> = []
+  const pending: SubstituteState[] = [state]
+  while (pending.length > 0) {
+    const current = pending.pop()!
+    for (const record of current.records) records.push({ record, owner: current })
     // 'auto' substitutions only register an auto-substitute for a nested setup, which is shown under its path
-    for (const substitution of current.substitutions()) if (substitution.method !== 'auto') substitutions.push({ substitution, prefix })
+    for (const substitution of current.substitutions()) if (substitution.method !== 'auto') substitutions.push({ substitution, owner: current })
     for (const entry of current.entries()) {
       const nested = entry.materializedState
-      if (nested !== undefined) visit(nested, entryWithin(prefix, entry))
+      if (nested !== undefined) pending.push(nested)
     }
   }
-  visit(state, '')
+  const prefixes = new Map<SubstituteState, string>()
+  const prefixOf = (owner: SubstituteState): string => {
+    let prefix = prefixes.get(owner)
+    if (prefix === undefined) {
+      prefix = relativePath(owner, state)
+      prefixes.set(owner, prefix)
+    }
+    return prefix
+  }
 
   const lines: string[] = []
   // D26: an invocation through call/apply is shown once, as its direct-call reading
@@ -117,24 +145,28 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
   if (shown.length > 0) {
     lines.push('  received:')
     shown.sort((a, b) => a.record.seq - b.record.seq)
-    for (const { record, prefix } of shown) {
-      const name = memberWithin(prefix, record.key)
+    const capped = capNested(shown, state)
+    for (const { record, owner } of capped.shown) {
+      const name = memberWithin(prefixOf(owner), record.key)
       const suffix = record.kind === 'call'
         ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
         : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
       // E23: a construction of the substitute itself names it: `new @Substitute(url)`
       lines.push(`    ${record.constructed === true ? `new ${name === '' ? state.path : name}` : name}${suffix}`)
     }
+    lines.push(...andMore(capped.hidden))
   }
   if (substitutions.length > 0) {
     lines.push('  configured:')
     substitutions.sort((a, b) => a.substitution.order - b.substitution.order)
-    for (const { substitution, prefix } of substitutions) {
-      const name = memberWithin(prefix, substitution.key)
+    const capped = capNested(substitutions, state)
+    for (const { substitution, owner } of capped.shown) {
+      const name = memberWithin(prefixOf(owner), substitution.key)
       const args = substitution.kind === 'call' ? formatArguments(substitution.args?.value, colors) : ''
       const values = substitution.values.map(value => formatValue(value, colors)).join(', ')
       lines.push(`    ${name}${args} => ${substitution.method}(${values})`)
     }
+    lines.push(...andMore(capped.hidden))
   }
   return lines
 }
@@ -311,7 +343,13 @@ const faceHandler: ProxyHandler<FaceTarget> = {
 }
 
 // bound to the face: a bound function is smaller than a closure and its context
-const returnThis = function (this: Face): Face { return this }
+/*
+ * E40 (R7FE-7): util.inspect without custom inspection (node:assert's messages) shows the target of a proxy, a bound
+ * function named after the function it is bound to. A neutral name: `[Function: bound substitute]`. (Naming each target
+ * after its path, or renaming the function with defineProperty, costs memory for every auto-substitute: 160 to 240
+ * bytes per unconfigured call, measured on Node.js 22 and 24.)
+ */
+const returnThis = function substitute(this: Face): Face { return this }
 
 /**
  * E26: `key in sub` (and Reflect.has) is true for a key with a setup (as a property or a method, or a nested setup
@@ -322,29 +360,8 @@ const faceHas = (face: Face, key: PropertyKey): boolean => {
   if (isSpecialProperty(key)) return false
   const state = face instanceof AutoEntry ? face.materializedState : face
   if (state === undefined) return false
-  return state.propertySubstitution(key) !== undefined ||
-    state.hasCallSubstitutions(key) ||
-    (state.mimicked !== undefined && hasMember(state.mimicked.instance, key)) ||
-    hasNestedSetup(state, key)
-}
-
-/** Whether an auto-substitute of the member (of the property, or of one of its calls) has a setup of its own. */
-const hasNestedSetup = (state: SubstituteState, key: PropertyKey): boolean => {
-  for (const entry of state.entries()) {
-    const nested = entry.key === key ? entry.materializedState : undefined
-    if (nested !== undefined && isConfigured(nested)) return true
-  }
-  return false
-}
-
-/** Whether a substitute, or one of its auto-substitutes, has a setup or mimicks an instance. */
-const isConfigured = (state: SubstituteState): boolean => {
-  if (state.mimicked !== undefined || state.substitutions().some(substitution => substitution.method !== 'auto')) return true
-  for (const entry of state.entries()) {
-    const nested = entry.materializedState
-    if (nested !== undefined && isConfigured(nested)) return true
-  }
-  return false
+  // E35: O(1); the 'auto' registrations of nested setups and matcher chains are not setups (see isConfiguredKey)
+  return state.isConfiguredKey(key) || (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
 }
 
 const createFaceProxy = (face: Face): any => {

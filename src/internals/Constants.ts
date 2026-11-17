@@ -72,7 +72,13 @@ const protocolKeys = new Set<PropertyKey>([
   // and 13.0 to 13.11 (util.promisify reads that one there)
   Symbol.for('nodejs.util.promisify.custom'),
   (promisify as { custom?: symbol }).custom,
-  'asymmetricMatch'
+  'asymmetricMatch',
+  // E33: the probe of the jest and vitest mock serializers (snapshots, pretty-format). Answered truthy, a substitute was
+  // printed as a jest mock function from its `getMockName()` and `mock.calls`, which vitest followed without end.
+  '_isMockFunction',
+  // E38: DOM event targets call `listener.handleEvent(event)` when it is there (happy-dom checks it first), so a function
+  // substitute added as an event listener records the event as a call of itself in happy-dom, jsdom and Node.js
+  'handleEvent'
   // E34: '__esModule' is NOT a protocol key (E27 is reverted). Code compiled from ES modules reads it to decide how to
   // import a CommonJS module, and a substitute that stands in for a whole module (a jest.mock factory) must answer it
   // truthy, so that namespace imports (`import * as m`), named imports and Babel's mixed imports

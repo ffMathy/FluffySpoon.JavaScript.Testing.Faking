@@ -1,4 +1,6 @@
 import test from 'ava'
+import { spawnSync } from 'child_process'
+import * as path from 'path'
 import { inspect } from 'util'
 
 import { Substitute, Arg, configure, mimick } from '../../../src'
@@ -112,4 +114,113 @@ test('R7V-4 (E34) __esModule reads like any other member: truthy unless configur
   mimicking[mimick]({ send: () => 'real' })
   t.is(mimicking.__esModule, undefined, 'a mimicked instance without the member reads as undefined, like the instance')
   t.is(tsImportDefault(mimicking).default, mimicking)
+})
+
+// ---- E33: printing never recurses or hangs ----------------------------------------------------------------
+
+/**
+ * Runs a script with the library in a child process, so that a hang fails the test (after `timeout` ms) instead of
+ * stopping the run, and returns what it prints, parsed as JSON.
+ */
+const isolated = (script: string, timeout = 8000): any => {
+  const library = path.resolve(__dirname, '../../../src/index.js')
+  const result = spawnSync(process.execPath, ['-e', `
+    const { Substitute, Arg } = require(${JSON.stringify(library)})
+    const { inspect } = require('util')
+    const failureOf = check => { try { check() } catch (error) { return error.message } return 'passed' }
+    ${script}
+  `], { encoding: 'utf8', timeout, env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' } })
+  if (result.error !== undefined) throw new Error(`the script did not finish: ${result.error.message}`)
+  if (result.status !== 0) throw new Error(result.stderr)
+  return JSON.parse(result.stdout)
+}
+
+test('R7V-3 (E33) a factory result stored on the object passed to it prints without recursing (two and ten of them)', t => {
+  const printed = isolated(`
+    const app = Substitute.for()
+    const ctx = { name: 'root' }
+    ctx.child0 = app.create0(ctx)
+    ctx.child1 = app.create1(ctx)
+    const started = Date.now()
+    const outputs = {
+      root: String(app), inspected: inspect(app), child: String(ctx.child0), ctx: inspect(ctx), json: JSON.stringify({ ctx }),
+      message: failureOf(() => app.received(2).create0(ctx))
+    }
+    const many = Substitute.for()
+    const container = { name: 'container' }
+    for (let index = 0; index < 10; index++) container['service' + index] = many['create' + index](container)
+    outputs.many = String(many).length + failureOf(() => many.received(2).create0(container)).length + inspect(container).length
+    outputs.ms = Date.now() - started
+    console.log(JSON.stringify(outputs))
+  `)
+  const child = "@Substitute.create0({ name: 'root', child0: @Substitute.create0(…), child1: @Substitute.create1(…) })"
+  t.is(printed.child, child, 'a repeat of the call being printed shows (…)')
+  t.true(printed.ctx.includes(`child0: ${child}`))
+  t.true(printed.root.startsWith('@Substitute {\n  received:\n    create0({'))
+  t.is(printed.inspected, printed.root)
+  t.true(printed.json.includes('@Substitute.create1('))
+  t.true(printed.message.startsWith('Call count mismatch in @Substitute.create0:\nExpected to receive 2 method calls matching create0({'))
+  t.true(printed.message.includes('but received 1.'))
+  for (const key of ['root', 'child', 'ctx', 'json', 'message']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
+  t.true(printed.many < 100000, `ten factory results: ${printed.many} characters`)
+  t.true(printed.ms < 2000, `${printed.ms} ms`)
+})
+
+test('R7V-3 (E33) handlers bound to the instance that holds them print without recursing (String, inspect, messages)', t => {
+  const printed = isolated(`
+    class Widget { constructor(bus) { this.on0 = bus.handler0.bind(this); this.on1 = bus.handler1.bind(this) } }
+    const bus = Substitute.for()
+    const widget = new Widget(bus)
+    const started = Date.now()
+    const outputs = {
+      bus: String(bus), widget: inspect(widget), handler: String(widget.on0),
+      message: failureOf(() => bus.received(1).handler0('x')), bindMessage: failureOf(() => bus.handler0.received(2).bind(widget))
+    }
+    widget.on1('saved')
+    outputs.called = failureOf(() => bus.received(1).handler1('saved'))
+    outputs.ms = Date.now() - started
+    console.log(JSON.stringify(outputs))
+  `)
+  t.is(printed.handler, '@Substitute.handler0.bind(Widget { on0: @Substitute.handler0.bind(…), on1: @Substitute.handler1.bind(…) })')
+  t.true(printed.bus.includes('    handler0.bind(Widget {'))
+  t.true(printed.widget.startsWith('Widget {\n  on0: @Substitute.handler0.bind(Widget { on0: @Substitute.handler0.bind(…)'))
+  t.true(printed.message.startsWith('Call count mismatch in @Substitute.handler0:'))
+  t.true(printed.bindMessage.startsWith('Call count mismatch in @Substitute.handler0.bind:'))
+  t.is(printed.called, 'passed', 'invoking a bound handler is a call of the member')
+  for (const key of ['bus', 'widget', 'handler', 'message', 'bindMessage']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
+  t.true(printed.ms < 2000, `${printed.ms} ms`)
+})
+
+test('R7V-3 (E33) a substitute inside the arguments of a path keeps primitive arguments, and the guard does not leak', t => {
+  const app = Substitute.for<any>()
+  t.is(String(app.save(app.getUser(1))), '@Substitute.save(@Substitute.getUser(1))')
+  t.is(String(app.save({ user: app.getUser(2) })), '@Substitute.save({ user: @Substitute.getUser(2) })')
+  t.is(String(app.wrap(app.save({ id: 1 }))), '@Substitute.wrap(@Substitute.save(…))', 'objects inside a path inside a path are left out')
+  const ctx: any = { name: 'root' }
+  ctx.child = app.create(ctx)
+  t.is(String(ctx.child), "@Substitute.create({ name: 'root', child: @Substitute.create(…) })")
+  // after printing, paths are shown in full again
+  t.is(String(app.getUser(3)), '@Substitute.getUser(3)')
+  t.is(inspect(app.load({ id: 1 }, 'x')), "@Substitute.load({ id: 1 }, 'x')")
+})
+
+/** The test of the jest and vitest mock serializers (pretty-format plugins), which a substitute must not pass. */
+const isJestMock = (value: any) => !!(value && value._isMockFunction)
+
+test('R7FE-3 (E33) _isMockFunction is a protocol key: undefined and not recorded unless configured, so snapshots do not treat substitutes as mocks', t => {
+  const app = Substitute.for<any>()
+  const user = app.user
+  t.false(isJestMock(app))
+  t.false(isJestMock(user))
+  t.is(app._isMockFunction, undefined)
+  t.false('_isMockFunction' in app)
+  t.is(String(app), '@Substitute {\n  received:\n    user\n}', 'the probe is not recorded')
+  t.notThrows(() => app.didNotReceive()._isMockFunction)
+
+  const configured = Substitute.for<any>()
+  configured[configure]()._isMockFunction.returns(true)
+  t.true(configured._isMockFunction)
+  const mimicking = Substitute.for<any>()
+  mimicking[mimick]({ _isMockFunction: true })
+  t.true(mimicking._isMockFunction)
 })
