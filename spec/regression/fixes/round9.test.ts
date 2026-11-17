@@ -176,3 +176,46 @@ test('R8V-2 (E46) a class that extends a substitute, and objects that inherit fr
   named.toString().returns('named')
   t.is(String(Object.create(named)), 'named')
 })
+
+// ---- E47: a matcher usage error cancels only the report of its own check -----------------------------------------
+
+const anyOf = Arg.any as unknown as (type: string) => unknown
+
+test('R8V-1 (E47) a caught matcher usage error does not cancel the report of an earlier, unrelated check', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const s = Substitute.for<any>()
+    s.m(1)
+    void s.didNotReceive().m // D33: m was only invoked, so this is reported later
+    try { anyOf('Strin') } catch { /* e.g. expect(() => Arg.any('Strin')).toThrow() */ }
+    t.throws(() => clock.tick(), { instanceOf: SubstituteException, message: /m was called 1 time as a method/ })
+
+    // also when the usage error is made on the same line, inside a function of its own
+    void s.didNotReceive().m; t.throws(() => anyOf('Strin'), { instanceOf: TypeError })
+    t.throws(() => clock.tick(), { instanceOf: SubstituteException, message: /m was called 1 time as a method/ })
+  } finally {
+    clock.uninstall()
+  }
+})
+
+test('R8-ADV-3 (E47) a failing property-style check is still reported after a later, caught usage error', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const logger = Substitute.for<any>()
+    logger.log('a')
+    void logger.received(3).log
+    try { Arg.is('not a function' as any) } catch { /* caught */ }
+    t.throws(() => clock.tick(), { instanceOf: SubstituteException, message: /Call count mismatch in @Substitute\.log/ })
+
+    // the check whose own argument has the usage error still reports only that error, also when it is written over
+    // several lines with the arguments on the member's line
+    t.throws(() => logger
+      .received(2)
+      .log(anyOf('String')), { instanceOf: TypeError })
+    t.notThrows(() => clock.tick())
+    t.throws(() => logger.received(2).log((Arg.any.not as any)('Number')), { instanceOf: TypeError })
+    t.notThrows(() => clock.tick())
+  } finally {
+    clock.uninstall()
+  }
+})

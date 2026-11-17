@@ -1,15 +1,17 @@
 import { inspect } from 'util'
 import { Argument, AllArguments, ArgumentOptions, PredicateFunction, isSubstituteProxy } from '../shared'
-import { cancelLatestDeferredReport } from '../internals/Assertions'
+import { cancelDeferredReportOf } from '../internals/Assertions'
 
 // The shape `createInversable` builds at runtime. The public types (`Is`, `Any`) give `.not` its own call signatures
 // with their own documentation, so that editors describe the inverse at `Arg.is.not(...)` (T35).
 type Inversable<T> = T & { not: T }
 type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
 type ReturnArg<T> = Argument<T> & T
-const createInversable = <TArg, TReturn>(target: (arg: TArg, opt?: ArgumentOptions) => TReturn): Inversable<(arg: TArg) => TReturn> => {
-  const inversable = (arg: TArg) => target(arg)
-  inversable.not = (arg: TArg) => target(arg, { inverseMatch: true })
+// `stackStart`: the function the test called (Arg.any, Arg.any.not, ...), where the stack of a usage error starts (E47)
+const createInversable = <TArg, TReturn>(target: (arg: TArg, opt: ArgumentOptions | undefined, stackStart: Function) => TReturn): Inversable<(arg: TArg) => TReturn> => {
+  const inversable = (arg: TArg) => target(arg, undefined, inversable)
+  const not = (arg: TArg) => target(arg, { inverseMatch: true }, not)
+  inversable.not = not
   return inversable
 }
 
@@ -34,18 +36,21 @@ const describeInvalidPredicate = (value: unknown): string => {
 }
 
 /**
- * A usage error of a matcher. E37: the check whose arguments the matcher was meant for (`sub.received(2).log(...)`) is
- * never invoked, so the report that its invocation would have cancelled is cancelled here: the usage error is the only
- * error.
+ * A usage error of a matcher, whose stack starts where the test called the matcher (`stackStart`). E37/E47: the check
+ * whose arguments the matcher was meant for (`sub.received(2).log(...)`) is never invoked, so the report that its
+ * invocation would have cancelled is cancelled here, when it is the report of that check: the usage error is then the
+ * only error (see cancelDeferredReportOf).
  */
-const usageError = (message: string): TypeError => {
-  cancelLatestDeferredReport()
-  return new TypeError(message)
+const usageError = (message: string, stackStart: Function): TypeError => {
+  const error = new TypeError(message)
+  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(error, stackStart)
+  cancelDeferredReportOf(stackStart)
+  return error
 }
 
-const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options?: ArgumentOptions) => {
+const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options: ArgumentOptions | undefined, stackStart: Function) => {
   if (typeof predicate !== 'function')
-    throw usageError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`)
+    throw usageError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`, stackStart)
   return new Argument(`Arg.is{${describePredicate(predicate)}}`, predicate, options)
 }
 type Is = {
@@ -170,12 +175,13 @@ const anyPredicateFor = (type: string): PredicateFunction<unknown> => {
 // `.not` form would match everything, so it is refused right away, as Arg.is refuses a predicate that is not a function.
 const anyTypes: readonly string[] = ['any', 'string', 'number', 'boolean', 'symbol', 'undefined', 'object', 'function', 'array', 'bigint']
 
-const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
+const anyFunction = (type: AnyType = 'any', options: ArgumentOptions | undefined, stackStart: Function) => {
   if (typeof type !== 'string' || anyTypes.indexOf(type) === -1) {
     const name = options?.inverseMatch ? 'Arg.any.not' : 'Arg.any'
     throw usageError(
       `${name} expects one of ${anyTypes.map(name => `'${name}'`).join(', ')} (or no argument for 'any'), ` +
-      `but received ${describeInvalidPredicate(type)}.`
+      `but received ${describeInvalidPredicate(type)}.`,
+      stackStart
     )
   }
   const description = `Arg.any{${type}}`

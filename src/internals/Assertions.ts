@@ -4,6 +4,7 @@ import { SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
+import { StackHolder, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
 import { keyToString } from './Constants'
 import { plural } from './utilities'
 
@@ -223,17 +224,30 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   return defer(stackStart, createError)
 }
 
-/** The deferred report scheduled last (see cancelLatestDeferredReport). */
-let latestDeferred: DeferredAssertion | undefined
+/** The deferred report scheduled last, and the stack captured where its member was read (see cancelDeferredReportOf). */
+let latestDeferred: { deferred: DeferredAssertion, site: StackHolder } | undefined
 
 /**
- * E37: cancels the deferred report scheduled last, if it is still pending. A matcher that refuses its arguments with a
- * usage error (Arg.any('String'), Arg.is('x')) calls it: in `sub.received(2).log(Arg.any('String'))` the report of
+ * E37, E47: cancels the deferred report of the check that a matcher usage error (Arg.any('String'), Arg.is('x')) was
+ * meant for, so that the usage error is the only error: in `sub.received(2).log(Arg.any('String'))` the report of
  * `.log` was scheduled when the member was read, and the invocation that would cancel it never happens, because
- * evaluating its arguments threw. The usage error is then the only error.
+ * evaluating its arguments threw. `matcherStart`: the matcher function that the test called (Arg.any, ...).
+ *
+ * Only the report of that same check is cancelled: the report scheduled last, if it is still pending, and only when its
+ * member was read in the same function (D25), on the same line, before the matcher was called, as V8 reports their
+ * positions (before source maps). The report of an earlier statement (`void sub.received(3).log` on one line, a caught
+ * `Arg.any('Strin')` on the next, or inside `expect(() => ...)`) is still thrown. A check whose matcher is on another
+ * line than its member (`.log(\n  Arg.any('String'))`), or a run without stack traces, keeps its report as well.
  */
-export const cancelLatestDeferredReport = (): void => {
-  if (latestDeferred !== undefined) settle(latestDeferred)
+export const cancelDeferredReportOf = (matcherStart: Function): void => {
+  const latest = latestDeferred
+  if (latest === undefined || latest.deferred.settled) return
+  const read = frameOfStack(latest.site)
+  const matcher = currentFrame(matcherStart)
+  if (read === null || matcher === null || !sameExpression(read, matcher)) return
+  if (typeof read.line !== 'number' || read.line !== matcher.line ||
+    typeof read.column !== 'number' || typeof matcher.column !== 'number' || matcher.column <= read.column) return
+  settle(latest.deferred)
   latestDeferred = undefined
 }
 
@@ -242,24 +256,26 @@ export const cancelLatestDeferredReport = (): void => {
  * The message is only built if the failure is really reported (usually the member is invoked right away).
  */
 const defer = (stackStart: Function | undefined, createError: () => SubstituteException): DeferredAssertion => {
-  const site: { stack?: string } = {}
+  const site: StackHolder = {}
   if (typeof Error.captureStackTrace === 'function' && stackStart !== undefined) Error.captureStackTrace(site, stackStart)
   const deferred: DeferredAssertion = {
     settled: false,
     error: () => {
       const error = createError()
-      const frames = typeof site.stack === 'string' ? site.stack.split('\n').slice(1).join('\n') : ''
+      // (as text: its call sites may have been read, see cancelDeferredReportOf)
+      const stack = stackText(site)
+      const frames = typeof stack === 'string' ? stack.split('\n').slice(1).join('\n') : ''
       if (frames !== '') error.stack = `${error.name}: ${error.message}\n${frames}`
       return error
     }
   }
   deferredReports.schedule(() => {
-    if (latestDeferred === deferred) latestDeferred = undefined
+    if (latestDeferred?.deferred === deferred) latestDeferred = undefined
     if (deferred.settled) return
     deferred.settled = true
     throw deferred.error()
   })
-  latestDeferred = deferred
+  latestDeferred = { deferred, site }
   return deferred
 }
 
