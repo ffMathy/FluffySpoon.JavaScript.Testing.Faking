@@ -4,6 +4,7 @@ import { EXCEPTION, SELF, SubstituteExceptionType, keyToString } from './Constan
 import { colorsEnabled, describeOtherReading, firstStackFrame, formatArguments, formatValue, plural, TextBuilder, TextPart, withPrintGuard } from './utilities'
 import type { CallRecord } from './CallRecord'
 import type { RecordedArguments } from './RecordedArguments'
+import { withRootNumbers } from './Paths'
 
 export type ExpectedKind = 'method' | 'property' | 'set' | 'unknown'
 
@@ -25,6 +26,8 @@ export type ListedCall = {
 export type CallCountMismatch = {
   /** Path of the substitute, e.g. `@Substitute` or `@Substitute.logger`. */
   substitutePath: string
+  /** E52: the substitute itself, whose path is shown with the roots numbered when that tells calls apart. */
+  subject?: { readonly path: string }
   key: PropertyKey
   expected: CallCountExpectation
   /** How many matching calls were received, already phrased (e.g. 'none', '4', '2 property reads and 1 method call'). */
@@ -68,6 +71,15 @@ const describeRecord = (record: CallRecord, colors: boolean): string => {
   }
 }
 
+/** E52: whether the expected call or assignment prints like one that was received but does not match it. */
+const printsAlike = (mismatch: CallCountMismatch): boolean => {
+  const { expected } = mismatch
+  if (expected.kind !== 'method' && expected.kind !== 'set') return false
+  const expectedText = formatArguments(expected.specification?.value ?? [], false)
+  return mismatch.listed.some(({ record, matches }) => !matches && record.kind === (expected.kind === 'method' ? 'call' : 'set') &&
+    formatArguments(record.args ?? [], false) === expectedText)
+}
+
 const describeError = (error: unknown): string => {
   try {
     if (error instanceof Error) return `${error.name}: ${error.message}`
@@ -89,12 +101,22 @@ export class SubstituteException extends Error {
 
   public static forCallCountMismatch(mismatch: CallCountMismatch, stackStart?: Function): SubstituteException {
     const colors = colorsEnabled()
-    const message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors))
+    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors))
+    // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
+    // than one of them
+    if (withPrintGuard(() => printsAlike(mismatch))) {
+      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors)))
+      if (numbered.roots > 1) message = numbered.value + (numbered.value.endsWith('\n') ? '' : '\n') + new TextBuilder()
+        .add('The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', t => t.faint())
+        .newLine()
+        .toString(colors)
+    }
     return new this(message, EXCEPTION.callCountMismatch, stackStart)
   }
 
   private static buildCallCountMismatchMessage(mismatch: CallCountMismatch, colors: boolean): string {
-    const { expected, key, substitutePath } = mismatch
+    const { expected, key } = mismatch
+    const substitutePath = mismatch.subject?.path ?? mismatch.substitutePath
     const memberPath = key === SELF ? substitutePath : `${substitutePath}.${keyToString(key)}`
 
     const textBuilder = new TextBuilder()

@@ -2,7 +2,7 @@ import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { entryPath } from './Paths'
+import { entryPath, rootLabel } from './Paths'
 import {
   coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetUnreadable, lastHashMetWide,
   lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn
@@ -591,7 +591,7 @@ export class SubstituteState {
   }
 
   public get path(): string {
-    return this.owner === undefined ? '@Substitute' : this.owner.path
+    return this.owner === undefined ? rootLabel(this) : this.owner.path
   }
 
   public memberPath(key: PropertyKey): string {

@@ -51,7 +51,9 @@ test('A:RT-8 mutually referencing substitutes give a SubstituteException, not a 
   child.setParent(parent)
 
   const { message } = t.throws(() => parent.received().addChild(parent), { instanceOf: SubstituteException })
-  t.true(withoutCallSites(message).includes('› ✘ @Substitute.addChild(@Substitute)'))
+  // (round 9, E52: the expected and the received call print alike apart from the substitute passed, so the message
+  // numbers the substitutes)
+  t.true(withoutCallSites(message).includes('› ✘ @Substitute#1.addChild(@Substitute#2)'))
   t.notThrows(() => parent.received().addChild(child))
 
   const self = substitute()

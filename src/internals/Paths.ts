@@ -80,8 +80,46 @@ export const pathPieces = (leaf: PathEntry | undefined, ancestor?: PathState): s
   return `${entries.slice(0, PATH_HEAD).map(pieceOf).join('')}.…${entries.slice(count - PATH_TAIL).map(pieceOf).join('')}`
 }
 
+/*
+ * E52 (R8FE-9): every root substitute prints as `@Substitute`. A failure message whose expected call and a received
+ * call print alike, but differ in which substitute is an argument (`use('/admin', @Substitute)` twice), is built again
+ * with the roots numbered in the order they appear in it (`@Substitute#1.use('/admin', @Substitute#2)`), see
+ * SubstituteException. The numbers belong to that message only, so messages stay the same from run to run.
+ */
+let rootNumbers: Map<PathState, number> | undefined
+
+/** How a root substitute is shown: `@Substitute`, or `@Substitute#n` while roots are numbered. */
+export const rootLabel = (root: PathState): string => {
+  if (rootNumbers === undefined) return '@Substitute'
+  let number = rootNumbers.get(root)
+  if (number === undefined) {
+    number = rootNumbers.size + 1
+    rootNumbers.set(root, number)
+  }
+  return `@Substitute#${number}`
+}
+
+/** Runs `print` with the roots numbered (see above), and gives how many roots it showed. */
+export const withRootNumbers = <T>(print: () => T): { value: T, roots: number } => {
+  const outer = rootNumbers
+  rootNumbers = new Map()
+  try {
+    const value = print()
+    return { value, roots: rootNumbers.size }
+  } finally {
+    rootNumbers = outer
+  }
+}
+
+const rootOf = (entry: PathEntry): PathState => {
+  let state = entry.parent
+  while (state.owner !== undefined) state = state.owner.parent
+  return state
+}
+
 /** The path of an auto-substitute: `@Substitute.logger`, `@Substitute.getUser(1)`, `@Substitute('saved')`. */
-export const entryPath = (entry: PathEntry): string => `@Substitute${pathPieces(entry)}`
+export const entryPath = (entry: PathEntry): string =>
+  `${rootNumbers === undefined ? '@Substitute' : rootLabel(rootOf(entry))}${pathPieces(entry)}`
 
 /** The path of a substitute (`@Substitute` for a root) relative to one of its ancestors: `logger`, `getUser(1)`, `('x')`. */
 export const relativePath = (state: PathState, ancestor: PathState): string => {

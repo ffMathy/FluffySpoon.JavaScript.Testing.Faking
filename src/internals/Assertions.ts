@@ -82,6 +82,7 @@ export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[]
   const tooFew = matches < (count ?? 1)
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
+    subject: state,
     key,
     expected: { count, kind: 'method', specification },
     receivedText: receivedText(matches),
@@ -104,6 +105,7 @@ export const assertSet = (state: SubstituteState, key: PropertyKey, value: unkno
   if (countMatches(count, matches)) return
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
+    subject: state,
     key,
     expected: { count, kind: 'set', specification },
     receivedText: receivedText(matches),
@@ -188,6 +190,7 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   if (countMatches(count, reads)) {
     if (count === 0 && reads === 0 && calls > 0) return defer(stackStart, () => SubstituteException.forCallCountMismatch({
       substitutePath: state.path,
+      subject: state,
       key,
       expected: { count, kind: 'unknown' },
       receivedText: `${calls} ${plural('method call', calls)}`,
@@ -208,6 +211,7 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   const kind: ExpectedKind = deferrable || (calls === 0 && reads > 0 && !onlyReadTooFew) ? 'property' : 'unknown'
   const createError = (start?: Function) => SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
+    subject: state,
     key,
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),

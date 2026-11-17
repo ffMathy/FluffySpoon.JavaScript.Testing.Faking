@@ -129,8 +129,11 @@ test('A:RT-8 substitutes that reference each other print without overflowing the
   parent.addChild(child)
   child.setParent(parent)
   const error = t.throws(() => parent.received().addChild(parent), { instanceOf: SubstituteException })
-  t.true(plain(error.message).startsWith('Call count mismatch in @Substitute.addChild:'))
-  t.true(plain(error.message).includes('addChild(@Substitute)'))
+  // (round 9, E52: the expected call and the received one print alike apart from which substitute is the argument, so
+  // the message numbers the substitutes)
+  t.true(plain(error.message).startsWith('Call count mismatch in @Substitute#1.addChild:'))
+  t.true(plain(error.message).includes('matching addChild(@Substitute#1)'))
+  t.true(plain(error.message).includes('@Substitute#1.addChild(@Substitute#2)'))
 
   const self = Substitute.for<any>()
   self.link(self)

@@ -533,3 +533,61 @@ test('R8FE-2 (E51) a mimicked substitute has the instance\'s enumerable own keys
   t.deepEqual(Object.keys(frozen), [])
   t.is(frozen.a, 1)
 })
+
+// ---- E52: different root substitutes in one failure message ------------------------------------------------------
+
+/** A message without its "called at" lines. */
+const withoutCallSites = (message: string) => message.split('\n').filter(line => !/^\s+called at /.test(line)).join('\n')
+
+test('R8FE-9 (E52) a check that fails because another substitute was passed numbers the substitutes in its message', t => {
+  const wire = (app: any, middlewares: any) => { app.use(middlewares.logging); app.use('/admin', middlewares.logging) } // should use auth
+  const app = Substitute.for<any>()
+  const auth = Substitute.for<any>()
+  const logging = Substitute.for<any>()
+  wire(app, { auth, logging })
+  t.is(withoutCallSites(messageOf(() => app.received(1).use('/admin', auth))), [
+    'Call count mismatch in @Substitute#1.use:',
+    "Expected to receive 1 method call matching use('/admin', @Substitute#2), but received none.",
+    'All property or method calls to @Substitute#1.use received so far:',
+    '› ✘ @Substitute#1.use(@Substitute#3)',
+    "› ✘ @Substitute#1.use('/admin', @Substitute#3)",
+    'The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.',
+    ''
+  ].join('\n'))
+
+  // auto-substitutes of different roots, and assignments
+  const bus = Substitute.for<any>()
+  const first = Substitute.for<any>()
+  const second = Substitute.for<any>()
+  bus.subscribe(first.handler)
+  const message = withoutCallSites(messageOf(() => bus.received(1).subscribe(second.handler)))
+  t.true(message.includes('matching subscribe(@Substitute#2.handler)'), message)
+  t.true(message.includes('› ✘ @Substitute#1.subscribe(@Substitute#3.handler)'), message)
+  const settings = Substitute.for<any>()
+  settings.owner = first
+  t.true(messageOf(() => { settings.received(1).owner = second }).includes('matching owner = @Substitute#2'))
+
+  // the numbers belong to that message: printouts and later messages are as before
+  t.true(printout(app).startsWith('@Substitute {'))
+  t.false(printout(app).includes('#'))
+})
+
+test('R8FE-9 (E52) messages whose calls print differently, or that show one substitute only, are not numbered', t => {
+  const app = Substitute.for<any>()
+  const auth = Substitute.for<any>()
+  app.use('/admin', auth)
+  // the expected call prints differently from the received one
+  const different = messageOf(() => app.received(1).use('/api', auth))
+  t.false(different.includes('#'), different)
+  t.true(different.includes("matching use('/api', @Substitute)"), different)
+  // calls that print alike without another substitute in them (two functions with the same name)
+  const handlers = Substitute.for<any>()
+  handlers.on(function handle() { return 1 })
+  const alike = messageOf(() => handlers.received(1).on(function handle() { return 2 }))
+  t.false(alike.includes('#'), alike)
+  // a check with a count, whose expected call prints like the one received
+  const log = Substitute.for<any>()
+  log.write(app)
+  const numbered = messageOf(() => log.received(2).write(auth))
+  t.true(numbered.includes('matching write(@Substitute#2)') && numbered.includes('› ✘ @Substitute#1.write(@Substitute#3)'), numbered)
+})
