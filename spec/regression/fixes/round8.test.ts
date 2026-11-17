@@ -250,13 +250,18 @@ test('R7-ADV-1 (E35) key in sub does not scan the auto-substitutes: 10,000 probe
    * 10,000 reports with the probe and 10,000 without, interleaved report by report (in alternating order), so that both
    * see the same load and the same garbage collections. The time of each one is added up.
    */
-  const round = (): { probed: number, plain: number } => {
+  const median = (values: number[]) => values.slice().sort((a, b) => a - b)[Math.floor(values.length / 2)]
+  /**
+   * The median time of a report with the probe and of one without, over 10,000 each. The median leaves out the
+   * reports that a garbage collection or another process interrupted.
+   */
+  const round = (): { probed: number, plain: number, total: number } => {
     const probedLogger = Substitute.for<any>()
     const plainLogger = Substitute.for<any>()
     const probedReporter = new Reporter(probedLogger)
     const plainReporter = new PlainReporter(plainLogger)
-    let probed = 0
-    let plain = 0
+    const probed: number[] = []
+    const plain: number[] = []
     const time = (report: () => void): number => {
       const started = performance.now()
       report()
@@ -265,23 +270,23 @@ test('R7-ADV-1 (E35) key in sub does not scan the auto-substitutes: 10,000 probe
     for (let index = 0; index < 10000; index++) {
       const item = { id: index }
       if (index % 2 === 0) {
-        probed += time(() => probedReporter.report(item))
-        plain += time(() => plainReporter.report(item))
+        probed.push(time(() => probedReporter.report(item)))
+        plain.push(time(() => plainReporter.report(item)))
       } else {
-        plain += time(() => plainReporter.report(item))
-        probed += time(() => probedReporter.report(item))
+        plain.push(time(() => plainReporter.report(item)))
+        probed.push(time(() => probedReporter.report(item)))
       }
     }
     probedLogger.received(10000).log(Arg.any())
     plainLogger.received(10000).log(Arg.any())
-    return { probed, plain }
+    return { probed: median(probed), plain: median(plain), total: probed.reduce((sum, value) => sum + value, 0) }
   }
   round() // warm-up
   const rounds = [round(), round(), round(), round(), round()]
   const ratios = rounds.map(({ probed, plain }) => probed / plain).sort((a, b) => a - b)
   const ratio = ratios[2]
-  t.log(`10,000 calls with an in probe each against 10,000 without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratio.toFixed(2)}x, ` +
-    `${rounds.map(({ probed }) => probed.toFixed(0)).join(', ')} ms with the probe)`)
+  t.log(`a report with an in probe against one without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratio.toFixed(2)}x; ` +
+    `10,000 reports with the probe in ${rounds.map(({ total }) => total.toFixed(0)).join(', ')} ms)`)
   // at 89e4175 the probes made it 15 to 50 times slower; at 74b8588 (no in trap) they cost nothing
   t.true(ratio < 1.3, `${ratio.toFixed(2)}x`)
 })
@@ -468,7 +473,8 @@ test('R7FE-7 (E40) util.inspect without custom inspection (node:assert) does not
   for (const value of [app, user, app.logger, app[configure](), app.received(), app.getUser.bind(null)]) {
     const shown = inspect(value, { customInspect: false })
     t.false(shown.includes('returnThis'), shown)
-    t.regex(shown, /^\[Function: bound substitute\]/)
+    // (Node.js 26 shows a proxy as `Proxy(...)` here)
+    t.regex(shown, /^(Proxy\()?\[Function: bound substitute\]/)
   }
   const error = t.throws(() => assert.strictEqual(user, 'ann'))
   t.false(error!.message.includes('returnThis'), error!.message)
