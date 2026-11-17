@@ -16,21 +16,35 @@ export const rejects: typeof constants.CONTEXT.rejects.symbol = constants.CONTEX
 export const mimicks: typeof constants.CONTEXT.mimicks.symbol = constants.CONTEXT.mimicks.symbol
 
 type OneArgumentRequiredFunction<TArgs, TReturnType> = (requiredInput: TArgs, ...restInputs: TArgs[]) => TReturnType
+// `returns()` and `resolves()` configure `undefined` when called without a value: that is allowed whenever `undefined`
+// is a valid value (`void`, `any`, `unknown`, `T | undefined`: Koa's `next().resolves()` for `Promise<any>`, R8FE-8,
+// T58). A value type that does not accept `undefined` (and `never`, T:TY-12) still requires a value. (In generic code,
+// where the check cannot be decided, both forms are offered and a call resolves to the one that requires a value.)
+type ValueFunction<TValue> = undefined extends TValue ?
+  (value?: TValue, ...restValues: TValue[]) => void :
+  OneArgumentRequiredFunction<TValue, void>
 
-type ReturnsFunction<TReturnType> = OneArgumentRequiredFunction<TReturnType, void>
+type ReturnsFunction<TReturnType> = ValueFunction<TReturnType>
 type ThrowsFunction = OneArgumentRequiredFunction<any, never>
 type MimicksFunction<TImplementation> = OneArgumentRequiredFunction<TImplementation, void>
-type ResolvesFunction<TResolved> = OneArgumentRequiredFunction<TResolved, void>
+type ResolvesFunction<TResolved> = ValueFunction<TResolved>
 type RejectsFunction = OneArgumentRequiredFunction<any, void>
 
-// A value that may be a promise (a promise or any other thenable such as `PromiseLike<T>`, also as part of a union such
-// as `void | Promise<void>` or `T | Promise<T>`, R7FE-8, T52) offers resolves/rejects, which configure a promise.
+// A value that may be a promise offers resolves/rejects, which configure a native promise (`resolves(x)` is
+// `returns(Promise.resolve(x))`): a `Promise` or a subtype of it, and any other thenable (`PromiseLike<T>`, also as part
+// of a union such as `void | Promise<void>` or `T | Promise<T>`, R7FE-8, T52) of which a native promise of its value is
+// a valid value. A thenable with members of its own (a query builder that `extends PromiseLike<Row[]>` and has
+// `where()`) does not offer them: the promise they configure has no such members (R8TD-2, T55).
 // `null | undefined` are ignored: `Promise<T> | undefined` offers them as well. The value they take is what the
 // promises of the union resolve to.
-type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ? PromiseValueOf<TValue> : never
-type PromiseValueOf<TValue> = TValue extends PromiseLike<infer U> ? U : never
-type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>> ? true : false
-type EachIsPromise<TValue> = TValue extends PromiseLike<any> ? true : false
+type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ? PromiseValueOf<TValue, TReturnType> : never
+type PromiseValueOf<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
+  (TValue extends Promise<any> ? U : Promise<U> extends TReturnType ? U : never) :
+  never
+type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>, TReturnType> ? true : false
+type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
+  (TValue extends Promise<any> ? true : Promise<U> extends TReturnType ? true : false) :
+  false
 
 type SymbolSetupMethods<TReturnType, TImplementation> = {
   /**
