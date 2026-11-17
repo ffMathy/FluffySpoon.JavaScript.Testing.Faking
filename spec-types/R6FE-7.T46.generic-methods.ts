@@ -78,4 +78,21 @@ store.first(Arg.any()).returns(1)
 store.id(Arg.any()).returns('x')
 store.received().first(Arg.all())
 
+// The parameter list of a signature is taken as a whole (T46), so a rest parameter typed as a union of tuples (which
+// `emit(event, ...args: Parameters<Events[E]>)` gives with the constraint) has the setup API too.
+interface Logger { log(...args: [string] | [string, number]): boolean }
+const logger = Substitute.for<Logger>()
+logger.log('a').returns(true)
+logger.log('a', 1).returns(false)
+logger.log(Arg.any()).returns(true)
+logger.log(Arg.all()).returns(true)
+logger[configure]().log('a').returns(true)
+logger.received(1).log('a', 1)
+// @ts-expect-error log returns a boolean
+logger.log('a').returns('yes')
+// @ts-expect-error the second argument is a number
+logger.log('a', 'b')
+// @ts-expect-error the first argument is a string
+logger.received().log(1)
+
 export { asEmitter, notNever }
