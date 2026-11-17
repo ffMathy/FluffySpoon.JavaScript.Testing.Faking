@@ -603,6 +603,24 @@ const actualArgumentsOf = (entry: AutoEntry, chainHead: CallRecord | undefined):
   return entry.args?.value ?? []
 }
 
+/**
+ * E28: mimicks() calls the functions it was given when the member is used, so anything else would only fail later,
+ * inside the code under test. It is refused at the setup instead (`describeTarget`: the member or call configured).
+ */
+const validateSubstitution = (method: SubstitutionMethod, values: readonly unknown[], describeTarget: () => string, stackStart: Function): void => {
+  if (method !== 'mimicks') return
+  const index = values.findIndex(value => typeof value !== 'function')
+  if (values.length > 0 && index === -1) return
+  const received = values.length === 0 ? 'no argument' : formatValue(values[index], false)
+  const error = new TypeError(`mimicks() expects a function to call for ${describeTarget()}, but received ${received}.`)
+  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(error, stackStart)
+  throw error
+}
+
+/** The call a setup configures, as messages show it: `@Substitute.getUser(1)`. */
+const describeCall = (state: SubstituteState, key: PropertyKey, args: readonly unknown[] | undefined): string =>
+  `${state.memberPath(key)}${formatArguments(args ?? [], false)}`
+
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
 const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined): Function => {
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
@@ -610,6 +628,9 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
     : entry.args
   retract(chainHead)
   return function substitution(...values: any[]) {
+    validateSubstitution(method, values, () => entry.kind === 'get'
+      ? entry.parent.memberPath(entry.key)
+      : describeCall(entry.parent, entry.key, specification!.value), substitution)
     if (entry.kind === 'get') entry.parent.setPropertySubstitution(entry.key, method, values)
     else entry.parent.addCallSubstitution(entry.key, specification!, method, values)
   }
@@ -679,6 +700,7 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
       if (method !== undefined) {
         if (record.seq === currentSequence()) retract(continuedChain(record, frameAt(get)))
         return function substitution(...values: any[]) {
+          validateSubstitution(method, values, () => state.memberPath(key), substitution)
           state.setPropertySubstitution(key, method, values)
         }
       }
@@ -842,6 +864,7 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) return function substitution(...values: any[]) {
+        validateSubstitution(method, values, () => state.memberPath(key), substitution)
         state.setPropertySubstitution(key, method, values)
       }
       // D31: through a member that answers with a value already
@@ -906,6 +929,7 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) return function substitution(...values: any[]) {
+        validateSubstitution(method, values, () => describeCall(state, key, specification.value), substitution)
         state.addCallSubstitution(key, specification, method, values)
       }
       if (stringAssertion) return assertionMember(state, property, assertionCount(get), get)

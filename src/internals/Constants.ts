@@ -57,9 +57,9 @@ export const isSpecialProperty = (property: PropertyKey): property is SpecialPro
 
 /**
  * D28: keys that built-in algorithms, Node and test runners read to probe what kind of value they are looking at
- * (is it iterable, a RegExp, a promisify-able function, a jest asymmetric matcher, ...). An unconfigured read of
- * one of them answers undefined and is not recorded, the same way `then` is handled, so that a substitute behaves
- * like a plain function or object to those algorithms. Configuring the key (through sub[configure]()) or mimicking
+ * (is it iterable, a RegExp, a promisify-able function, a jest asymmetric matcher, an ES module namespace, ...). An
+ * unconfigured read of one of them answers undefined and is not recorded, the same way `then` is handled, so that a
+ * substitute behaves like a plain function or object to those algorithms. Configuring the key (through sub[configure]()) or mimicking
  * an instance that has it makes the read answer as usual.
  */
 const wellKnownSymbols = Symbol as unknown as Record<string, symbol | undefined>
@@ -72,7 +72,10 @@ const protocolKeys = new Set<PropertyKey>([
   // and 13.0 to 13.11 (util.promisify reads that one there)
   Symbol.for('nodejs.util.promisify.custom'),
   (promisify as { custom?: symbol }).custom,
-  'asymmetricMatch'
+  'asymmetricMatch',
+  // E27: the module interop probe (TypeScript's __importDefault, Babel's interopRequireDefault, esbuild's __toESM), so
+  // that a substitute used as a whole module (a jest.mock factory, a CommonJS stand-in) is its own default export
+  '__esModule'
 ].filter(key => key !== undefined) as PropertyKey[])
 
 export const isProtocolKey = (property: PropertyKey): boolean => protocolKeys.has(property)
