@@ -226,6 +226,19 @@ settings.get('port').returns(80)
 settings.get(Arg.any()).returns('localhost')
 settings.received().get(Arg.all())
 
+// R6FE-3 / T47: constructor types and constructor members are configured and checked with call syntax
+interface HttpClient { get(path: string): Promise<string> }
+type HttpClientFactory = new (baseUrl: string) => HttpClient
+const HttpClientCtor = Substitute.for<HttpClientFactory>()
+HttpClientCtor('https://api').returns(Substitute.for<HttpClient>())
+HttpClientCtor.received(1)(Arg.any())
+const httpClient: HttpClient = new HttpClientCtor('https://api')
+class Pool { constructor(readonly size: number) { } }
+interface PoolModule { Pool: typeof Pool }
+const poolModule = Substitute.for<PoolModule>()
+poolModule.Pool(4).returns(new Pool(4))
+poolModule.received(1).Pool(Arg.any())
+
 // R3TD-6 / R3-3 / T37: substitutes of function types
 type Listener = (event: string) => string
 const listener = Substitute.for<Listener>()
@@ -292,4 +305,4 @@ try {
   }
 }
 
-export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing }
+export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing, httpClient }
