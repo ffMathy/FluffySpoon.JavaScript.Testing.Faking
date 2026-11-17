@@ -483,7 +483,7 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
     if (stringCheck) useStringCheck(entry)
     const method = substitutionMethodOf(property)
-    if (method !== undefined) return setupFunction(entry, method, chainHead())
+    if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
     if (stringCheck) {
@@ -603,10 +603,9 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     const memberState = faceState(face)
 
     if (RecordedArguments.containsMatchers(rawArgs)) {
-      const specification = RecordedArguments.forSpecification(rawArgs)
       retract(read)
       retract(chainHead)
-      return configureCall(memberState, helper, specification)
+      return configureCall(memberState, helper, RecordedArguments.forSpecification(rawArgs))
     }
 
     // the direct reading takes over the read of the member (`sub.method.call(...)`), as a direct call would
@@ -651,9 +650,8 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         const rawArgs = [thisArg, ...boundArgs]
         const memberState = faceState(face)
         if (RecordedArguments.containsMatchers(rawArgs)) {
-          const specification = RecordedArguments.forSpecification(rawArgs)
           retract(chainHead)
-          return configureCall(memberState, 'bind', specification)
+          return configureCall(memberState, 'bind', RecordedArguments.forSpecification(rawArgs))
         }
         const memberRecord = memberState.addRecord('call', 'bind', rawArgs, captureStack(bind))
         memberRecord.chainPrevious = chainHead
@@ -796,9 +794,10 @@ const invoke = (
   const read = readSource === TAKE_PENDING_READ ? state.takePendingRead(key) : readSource
 
   if (RecordedArguments.containsMatchers(args)) {
-    const specification = RecordedArguments.forSpecification(args)
+    // (retracted first: a usage error in the arguments, E49, leaves no record of the expression behind)
     retract(read)
     retract(continuedChain(chainCandidate, frameAt(stackStart)))
+    const specification = RecordedArguments.forSpecification(args)
     return configureCall(state, key, specification, isStringAssertionKey(key))
   }
 
@@ -990,11 +989,13 @@ const describeCall = (state: SubstituteState, key: PropertyKey, args: readonly u
   `${state.memberPath(key)}${formatArguments(args ?? [], false)}`
 
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
-const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined): Function => {
+const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined, stackStart: Function): Function => {
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
     ? RecordedArguments.from(actualArgumentsOf(entry, chainHead)) // handed out by a matcher setup: configure the actual call
     : entry.args
   retract(chainHead)
+  // E49: `repo.find(Arg.any).returns(user)`, a call without matchers whose argument is a matcher function itself
+  if (specification !== undefined && specification.value !== undefined) RecordedArguments.rejectMatcherFactories(specification.value, stackStart)
   return function substitution(...values: any[]) {
     validateSubstitution(method, values, () => entry.kind === 'get'
       ? entry.parent.memberPath(entry.key)

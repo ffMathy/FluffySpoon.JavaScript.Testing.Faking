@@ -346,3 +346,73 @@ test('R8FE-10 (E48) a usage error on the view itself (freezing it) reports nothi
     clock.uninstall()
   }
 })
+
+// ---- E49: usage errors for JavaScript slips with matchers --------------------------------------------------------
+
+test('R8FE-5 (E49) a matcher function passed without calling it to a setup or a check is a usage error that names it', t => {
+  const uncalled = (name: string, call: string) => ({
+    instanceOf: SubstituteException,
+    message: `${name} was passed as an argument without calling it, so it would only match the function ${name} itself. Did you mean ${call}?`
+  })
+  const anyMatcher = Arg.any as any
+  const repo = Substitute.for<any>()
+  t.throws(() => repo.find(anyMatcher).returns('user'), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => repo.find(Arg.is as any).returns('user'), uncalled('Arg.is', 'Arg.is(predicate)'))
+  t.throws(() => repo.find(1, Arg.any.not as any).returns('user'), uncalled('Arg.any.not', 'Arg.any.not(type)'))
+  t.throws(() => repo.find(Arg.is.not as any).returns('user'), uncalled('Arg.is.not', 'Arg.is.not(predicate)'))
+  t.throws(() => repo.find(Arg.all as any).returns('user'), uncalled('Arg.all', 'Arg.all()'))
+  t.throws(() => repo[configure]().find(anyMatcher), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => repo.find(anyMatcher, Arg.any()).returns('user'), uncalled('Arg.any', 'Arg.any()'))
+  t.false(printout(repo).includes('configured'), 'nothing was configured')
+
+  // checks: positive and, above all, negative ones no longer pass for calls that were made
+  repo.find(2)
+  repo.delete(42)
+  t.throws(() => repo.received(2).find(anyMatcher), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => repo.didNotReceive().delete(anyMatcher), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => repo[didNotReceive]().delete(anyMatcher), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => { repo.received().limit = anyMatcher }, uncalled('Arg.any', 'Arg.any()'))
+  const next = Substitute.for<any>()
+  next(new Error('boom'))
+  t.throws(() => next.didNotReceive()(anyMatcher), uncalled('Arg.any', 'Arg.any()'))
+  t.throws(() => next.didNotReceive()(Arg.all()), { instanceOf: SubstituteException, message: /Call count mismatch/ })
+
+  // the functions are named after the matcher in printouts, and the code under test may still pass them around
+  t.is(Arg.any.name, 'any')
+  t.is(Arg.is.name, 'is')
+  t.is(Arg.any.not.name, 'not')
+  t.false(inspect(Arg.any).includes('inversable'), inspect(Arg.any))
+  const registry = Substitute.for<any>()
+  registry.register(anyMatcher)
+  t.true(printout(registry).includes('register([Function: any]'), printout(registry))
+})
+
+test('R8FE-4 (E49) an Arg.is predicate that returns a promise is a usage error, and leaves no unhandled rejection', async t => {
+  const rejections: unknown[] = []
+  const onRejection = (reason: unknown) => { rejections.push(reason) }
+  process.on('unhandledRejection', onRejection)
+  try {
+    const asyncPredicate = Arg.is((async (user: any) => (await Promise.resolve(user)).profile.name === 'ann') as any)
+    const repo = Substitute.for<any>()
+    repo.save(asyncPredicate).returns('saved')
+    // the call of the code under test: the predicate rejects (no profile), and the call reports the usage error
+    const usage = { instanceOf: TypeError, message: /returned a promise \(or another thenable\), but an Arg\.is predicate must return whether the value matches synchronously/ }
+    t.throws(() => repo.save({ id: 1 }), usage)
+    t.throws(() => repo.save({ id: 2, profile: { name: 'bob' } }), usage)
+    // a check with an async predicate does not pass
+    t.throws(() => repo.received(2).save(Arg.is((async () => false) as any)), usage)
+    t.throws(() => repo.didNotReceive().save(Arg.is((async () => true) as any)), usage)
+    // a thenable that is no promise, too
+    t.throws(() => Arg.is(() => ({ then: () => undefined }) as any).matches(1), usage)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    t.deepEqual(rejections, [], 'the rejected promises were handled')
+
+    // a predicate that returns any other value matches when the value is truthy (as before)
+    const named = Substitute.for<any>()
+    named.greet(Arg.is((user: any) => user.name)).returns('hi')
+    t.is(named.greet({ name: 'ann' }), 'hi')
+    t.not(named.greet({ name: '' }), 'hi')
+  } finally {
+    process.removeListener('unhandledRejection', onRejection)
+  }
+})

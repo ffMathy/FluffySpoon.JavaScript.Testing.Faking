@@ -1,5 +1,5 @@
 import { inspect } from 'util'
-import { Argument, AllArguments, ArgumentOptions, PredicateFunction, isSubstituteProxy } from '../shared'
+import { Argument, AllArguments, ArgumentOptions, PredicateFunction, isSubstituteProxy, registerMatcherFactory } from '../shared'
 import { cancelDeferredReportOf } from '../internals/Assertions'
 
 // The shape `createInversable` builds at runtime. The public types (`Is`, `Any`) give `.not` its own call signatures
@@ -7,10 +7,19 @@ import { cancelDeferredReportOf } from '../internals/Assertions'
 type Inversable<T> = T & { not: T }
 type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
 type ReturnArg<T> = Argument<T> & T
-// `stackStart`: the function the test called (Arg.any, Arg.any.not, ...), where the stack of a usage error starts (E47)
-const createInversable = <TArg, TReturn>(target: (arg: TArg, opt: ArgumentOptions | undefined, stackStart: Function) => TReturn): Inversable<(arg: TArg) => TReturn> => {
+// `stackStart`: the function the test called (Arg.any, Arg.any.not, ...), where the stack of a usage error starts (E47).
+// E49: the functions are named after the matcher (`[Function: any]`, not the internal `inversable`), and registered,
+// so that passing one without calling it (`Arg.any` for `Arg.any()`) is recognised as a usage error.
+const createInversable = <TArg, TReturn>(
+  target: (arg: TArg, opt: ArgumentOptions | undefined, stackStart: Function) => TReturn,
+  name: string, parameter: string, notParameter: string
+): Inversable<(arg: TArg) => TReturn> => {
   const inversable = (arg: TArg) => target(arg, undefined, inversable)
   const not = (arg: TArg) => target(arg, { inverseMatch: true }, not)
+  Object.defineProperty(inversable, 'name', { value: name, configurable: true })
+  Object.defineProperty(not, 'name', { value: 'not', configurable: true })
+  registerMatcherFactory(inversable, `Arg.${name}`, `Arg.${name}(${parameter})`)
+  registerMatcherFactory(not, `Arg.${name}.not`, `Arg.${name}.not(${notParameter})`)
   inversable.not = not
   return inversable
 }
@@ -215,6 +224,7 @@ type ArgMatchers = {
  */
 export const Arg: ArgMatchers = {
   all: <T extends any[]>(): AllArguments<T> => new AllArguments<T>(),
-  is: createInversable<any, unknown>(isFunction) as unknown as Is,
-  any: createInversable<any, unknown>(anyFunction) as unknown as Any
+  is: createInversable<any, unknown>(isFunction, 'is', 'predicate', 'predicate') as unknown as Is,
+  any: createInversable<any, unknown>(anyFunction, 'any', '', 'type') as unknown as Any
 }
+registerMatcherFactory(Arg.all, 'Arg.all', 'Arg.all()')
