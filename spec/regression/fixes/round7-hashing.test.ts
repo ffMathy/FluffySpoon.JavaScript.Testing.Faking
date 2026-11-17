@@ -261,13 +261,14 @@ test('R6V-3 / R6-ADV-3 (E19) families do not slow down small records that share 
     }
     const singles = Substitute => { const sub = Substitute.for(); return time(() => { for (let index = 0; index < 10000; index++) sub.save({ id: ++round, name: 'n', email: 'e', active: true }) }) }
     const times = { plain: { batches: [], singles: [] }, withFamilies: { batches: [], singles: [] } }
-    for (let run = 0; run < 9; run++) {
+    for (let run = 0; run < 15; run++) {
       for (const [name, Substitute] of run % 2 === 0 ? [['plain', plain], ['withFamilies', withFamilies]] : [['withFamilies', withFamilies], ['plain', plain]]) {
         times[name].batches.push(batches(Substitute))
         times[name].singles.push(singles(Substitute))
       }
     }
-    const ratio = kind => median(times.withFamilies[kind].slice(1)) / median(times.plain[kind].slice(1))
+    // E29: the median of the ratios of the rounds (each round measures both copies, one right after the other)
+    const ratio = kind => median(times.withFamilies[kind].map((time, run) => time / times.plain[kind][run]).slice(1))
     console.log(JSON.stringify({ batches: ratio('batches'), singles: ratio('singles') }))
   `)
   const [one, other] = [ratios(true), ratios(false)]

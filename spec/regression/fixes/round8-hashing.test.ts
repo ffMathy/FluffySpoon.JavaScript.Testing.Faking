@@ -51,8 +51,10 @@ test('R7V-6 (E29) the timing-sensitive spec files run in an ava invocation of th
   const perf = require(path.join(root, 'ava.perf.config.js'))
   t.true(perf.serial)
   t.is(perf.concurrency, 1)
+  // a test that runs for more than ava's default of 10 seconds, with no other file reporting meanwhile, is no stall
+  t.is(perf.timeout, '3m')
   // the same options otherwise (the compiled specs, fail-fast)
-  const { files: _perfFiles, serial: _serial, concurrency: _concurrency, ...perfOptions } = perf
+  const { files: _perfFiles, serial: _serial, concurrency: _concurrency, timeout: _timeout, ...perfOptions } = perf
   const { files: _mainFiles, ...mainOptions } = main
   t.deepEqual(perfOptions, mainOptions)
 
