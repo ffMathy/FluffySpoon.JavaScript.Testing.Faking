@@ -4,6 +4,7 @@ import { inspect, isDeepStrictEqual, types } from 'util'
 import { Substitute, Arg } from '../../../src'
 import { FALLBACK_HASH, hashArguments, refinedHashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 4, E3 (R3-ADV-2, R3-1): the structural hash costs a bounded amount per argument, whatever its size or shape,
 // and it still never separates values that the RUNNING Node.js finds deep strictly equal. Only that agreement is
@@ -379,8 +380,9 @@ test('R3-1 (E3) 10k unconfigured calls with Error arguments, cb(err, null) and b
     }]
   ]
   for (const [name, run] of cases) {
+    const elapsedLimit = timeLimit(1000)
     const elapsed = bestOfThree(run)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // the cache still finds equal arguments
@@ -425,8 +427,9 @@ test('R3-ADV-2 (E3) cyclic setups, 1 MB strings, deep DAGs and 150k-element arra
     }]
   ]
   for (const [name, run] of cases) {
+    const elapsedLimit = timeLimit(1000)
     const elapsed = bestOfThree(run)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // 20 calls with 150k-element arrays (the arrays are created beforehand: only the calls are timed)
@@ -435,19 +438,21 @@ test('R3-ADV-2 (E3) cyclic setups, 1 MB strings, deep DAGs and 150k-element arra
     items[149_999] = { item: -index }
     return items
   })
+  const elapsedLimit = timeLimit(1000)
   const elapsed = bestOfThree(() => {
     const sink = Substitute.for<any>()
     for (const items of arrays) sink.consume(items)
   })
-  t.true(elapsed < 1000, `20 calls with 150k-element arrays: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `20 calls with 150k-element arrays`)
 })
 
 test('R3-ADV-2 (E3) the search for nested matchers is bounded as well, and still finds them in ordinary arguments', t => {
   const items = Array.from({ length: 150_000 }, (_, item) => ({ item }))
+  const elapsedLimit = timeLimit(100)
   const elapsed = bestOfThree(() => {
     for (let index = 0; index < 20; index++) RecordedArguments.containsMatchers([items])
   })
-  t.true(elapsed < 100, `${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, '20 searches of a 150,000-item array')
 
   const repository = Substitute.for<any>()
   repository.save({ user: { id: Arg.any(), roles: [Arg.any('string'), 'admin'] } }).returns('saved')

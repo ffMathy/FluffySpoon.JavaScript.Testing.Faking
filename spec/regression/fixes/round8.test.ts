@@ -8,6 +8,7 @@ import { inspect } from 'util'
 import { Substitute, Arg, configure, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 8: the behaviour findings of round 7 (R7V-*, R7FE-*, R7-ADV-*), decided in the fix spec as E33-E41.
 
@@ -139,6 +140,8 @@ const isolated = (script: string, timeout = 8000): any => {
 }
 
 test('R7V-3 (E33) a factory result stored on the object passed to it prints without recursing (two and ten of them)', t => {
+  // E43: the script measures in a process of its own; the load factor is measured right before it starts
+  const limit = timeLimit(2000)
   const printed = isolated(`
     const app = Substitute.for()
     const ctx = { name: 'root' }
@@ -166,10 +169,11 @@ test('R7V-3 (E33) a factory result stored on the object passed to it prints with
   t.true(printed.message.includes('but received 1.'))
   for (const key of ['root', 'child', 'ctx', 'json', 'message']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
   t.true(printed.many < 100000, `ten factory results: ${printed.many} characters`)
-  t.true(printed.ms < 2000, `${printed.ms} ms`)
+  assertWithin(t, printed.ms, limit, 'printing')
 })
 
 test('R7V-3 (E33) handlers bound to the instance that holds them print without recursing (String, inspect, messages)', t => {
+  const limit = timeLimit(2000)
   const printed = isolated(`
     class Widget { constructor(bus) { this.on0 = bus.handler0.bind(this); this.on1 = bus.handler1.bind(this) } }
     const bus = Substitute.for()
@@ -191,7 +195,7 @@ test('R7V-3 (E33) handlers bound to the instance that holds them print without r
   t.true(printed.bindMessage.startsWith('Call count mismatch in @Substitute.handler0.bind:'))
   t.is(printed.called, 'passed', 'invoking a bound handler is a call of the member')
   for (const key of ['bus', 'widget', 'handler', 'message', 'bindMessage']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
-  t.true(printed.ms < 2000, `${printed.ms} ms`)
+  assertWithin(t, printed.ms, limit, 'printing')
 })
 
 test('R7V-3 (E33) a substitute inside the arguments of a path keeps primitive arguments, and the guard does not leak', t => {

@@ -1,11 +1,13 @@
-import test from 'ava'
+import test, { ExecutionContext } from 'ava'
+import * as fs from 'fs'
+import * as path from 'path'
 import { inspect, isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { MAX_LISTED_CHARACTERS, SubstituteException } from '../../../src/internals/SubstituteException'
 import { structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { MESSAGE_BOUNDS, formatValue } from '../../../src/internals/utilities/Stringify'
-import { assertFast } from '../../helpers/timing'
+import { MAX_FACTOR, TimeLimit, assertFast, assertWithin, loadFactor, timeLimit } from '../../helpers/timing'
 
 // Round 9, engine A: the hash of URLs and other values that Node.js compares by internal state or by identity (fix spec
 // E42), timing tests that hold up on a busy machine (E43), and bounded printing (E44, E45). This file runs in the
@@ -343,4 +345,44 @@ test('R8FE-3 (E45) errors that differ only in their own properties print differe
   const repo = Substitute.for<any>()
   repo.load(1).throws(new HttpError(503, 'unavailable'))
   t.true(String(repo).includes('load(1) => throws([HttpError: unavailable] { status: 503 })'), String(repo))
+})
+
+// ---- E43: timing tests that hold up on a busy machine -------------------------------------------------------------
+
+/** The repository (the specs run from their compiled copy in dist-spec/). */
+const root = path.resolve(__dirname, '../../../..')
+
+test('R8-ADV-6 (E43) absolute time limits are scaled by a load factor measured right before the measurement, clamped to [1, 4]', t => {
+  t.is(MAX_FACTOR, 4)
+  const factor = loadFactor()
+  t.true(factor >= 1 && factor <= MAX_FACTOR, `load factor ${factor}`)
+  const limit = timeLimit(1000)
+  t.true(limit.milliseconds >= 1000 && limit.milliseconds <= 4000, String(limit))
+  t.is(new TimeLimit(250, 2).milliseconds, 500)
+
+  // assertWithin: within the limit passes; above four times the base limit fails, whatever the load (the factor measured
+  // again after a measurement that exceeds its limit is clamped as well), so a quadratic blow-up still fails
+  const verdicts: boolean[] = []
+  const recorder = { true: (value: boolean) => { verdicts.push(value) } } as unknown as ExecutionContext
+  assertWithin(recorder, 900, new TimeLimit(1000, 1), 'fast')
+  assertWithin(recorder, 3500, new TimeLimit(1000, 4), 'slow but loaded')
+  assertWithin(recorder, 4001, new TimeLimit(1000, 1), 'too slow for any load')
+  assertWithin(recorder, 16_500, new TimeLimit(1000, 4), 'quadratic')
+  t.deepEqual(verdicts, [true, true, false, false])
+})
+
+test('R8-ADV-6 (E43) every timing-sensitive spec file checks its absolute limits through the load-scaled helper', t => {
+  // d5b96ab: `t.true(elapsed < 1000, ...)` against wall-clock time, which failed 3 of 6 runs at a load average of 12
+  const directory = path.join(root, 'spec/regression/fixes')
+  const timed = fs.readdirSync(directory).filter(file => /\.(spec|test)\.ts$/.test(file))
+    .filter(file => /process\.hrtime|Date\.now\(\)|performance\.now\(\)|helpers\/timing/.test(fs.readFileSync(path.join(directory, file), 'utf8')))
+  t.true(timed.length >= 11, timed.join(', '))
+  // a time (or a product with one) against a bare number: `t.true(elapsed < 1000, ...)`, `t.true(cost * rows * 1000 < 1000, ...)`
+  const absolute = /t\.true\(\s*[\w.()]*(elapsed|Elapsed|ms|best|calls|chains|cost|configured)[\w.()]*\s*(\*[^<,]*)?<\s*[\d_]+\s*,/
+  for (const file of timed) {
+    const source = fs.readFileSync(path.join(directory, file), 'utf8')
+    t.true(source.includes("from '../../helpers/timing'"), `${file} uses the timing helper`)
+    const unscaled = source.split('\n').filter(line => !line.trim().startsWith('//') && absolute.test(line))
+    t.deepEqual(unscaled, [], `${file} compares a time with a fixed limit`)
+  }
 })

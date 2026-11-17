@@ -4,6 +4,7 @@ import * as path from 'path'
 
 import { Substitute, configure } from '../../../src'
 import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 7, engine A: the structural hash, its memos and the call sites (fix spec E18 to E21). Tests that change
 // process-wide state (Error.stackTraceLimit, Error itself, the families of the hash) run in child processes.
@@ -162,9 +163,10 @@ test.serial('R6V-2 (E20) records that share a wide object, or point back to thei
   ]
   for (const [name, values] of shapes) {
     const sub = Substitute.for<any>()
+    const elapsedLimit = timeLimit(1000)
     const elapsed = millisecondsOf(() => values.forEach(value => sub.load(value)))
     t.log(`${name}: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // how often their keys are listed (Object.keys and Object.getOwnPropertySymbols each list them)
@@ -217,6 +219,7 @@ test.serial('R6-ADV-5 (E20) fresh batches of 257 to 1,000 records with nested ob
       // machine slows both sides of each ratio alike and a round that it slowed on one side does not count
       const ratios: number[] = []
       let cost = Infinity
+      const costLimit = timeLimit(1000)
       for (let round = 0; round < 7; round++) {
         const baseFirst = round % 2 === 0
         const before = run(baseFirst ? 256 : rows, 200, record, ++seed)
@@ -229,7 +232,7 @@ test.serial('R6-ADV-5 (E20) fresh batches of 257 to 1,000 records with nested ob
       t.log(`${name}: ${rows} rows cost ${ratio.toFixed(2)}x per record of 256 rows (${(cost * rows * 1000).toFixed(1)} ms for 1,000 calls)`)
       t.true(ratio < limit, `${name}: ${rows} rows cost ${ratio}x per record (rounds: ${ratios.map(value => value.toFixed(2)).join(', ')})`)
       // 1,000 calls with fresh batches of 300 records (45facfb: 0.29 s, 74b8588: 1 s for nested records on Node.js 22)
-      if (rows <= 300) t.true(cost * rows * 1000 < 1000, `${name}: ${rows} rows`)
+      if (rows <= 300) assertWithin(t, cost * rows * 1000, costLimit, `${name}: 1,000 calls with ${rows} rows`)
     }
   }
 })
@@ -327,6 +330,8 @@ test('R6-ADV-6 (E21) a missing or non-number Error.stackTraceLimit gives no fram
     'a limit of 0.5': 'RealError.stackTraceLimit = 0.5'
   }
   for (const [name, setup] of Object.entries(shapes)) {
+    // E43: the script measures in a process of its own; the load factor is measured right before it starts
+    const limit = timeLimit(1000)
     const result = runScript(`
       ${countLimitChanges(setup)}
       const descriptor = JSON.stringify(Object.getOwnPropertyDescriptor(RealError, 'stackTraceLimit') ?? 'none')
@@ -352,7 +357,7 @@ test('R6-ADV-6 (E21) a missing or non-number Error.stackTraceLimit gives no fram
     t.false(result.v8Frames, name)
     t.false(result.calledAt, name)
     t.false(result.kept, name)
-    t.true(result.elapsed < 1000, `${name}: ${result.elapsed} ms`)
+    assertWithin(t, result.elapsed, limit, `${name}: 10,000 calls and 10,000 chains`)
   }
 
   // a limit of at least 1 is lowered for a moment and put back, as before, and keeps the frames

@@ -5,6 +5,7 @@ import { inspect, isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg, configure } from '../../../src'
 import { FALLBACK_HASH, hashArguments, identityHashArguments, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 3, D35: the structural hash behind the auto-substitute cache and the index of literal substitutions.
 
@@ -288,8 +289,9 @@ test('ENG2-2 (D35) 10k unconfigured calls with arguments of any shape finish wel
       for (let index = 0; index < 10_000; index++) repository.save(argument(index))
     }
     run() // warm up
+    const elapsedLimit = timeLimit(1000)
     const elapsed = bestOfThree(run)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // the cache still gives the same auto-substitute for equal arguments
@@ -305,16 +307,18 @@ test('V2-5 (D35) 4000 object-argument setups and 4000 matching calls finish well
     for (let index = 0; index < 4_000; index++) finder.find({ id: -index - 1, tags: [] })
   }
   run() // warm up
+  const elapsedLimit = timeLimit(1000)
   const elapsed = bestOfThree(run)
-  t.true(elapsed < 1000, `took ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, '4,000 object-argument setups and 4,000 matching calls')
 
   // through configure(), and with matcher setups next to the literal ones
   const finder = Substitute.for<any>()
   finder.find(Arg.any()).returns('any')
+  const configuredLimit = timeLimit(1000)
   const configured = millisecondsOf(() => {
     for (let index = 0; index < 4_000; index++) finder[configure]().find([index, { nested: index }]).returns(index)
     for (let index = 0; index < 4_000; index++) if (finder.find([index, { nested: index }]) !== index) throw new Error(`find(${index})`)
   })
-  t.true(configured < 1000, `took ${configured} ms through configure()`)
+  assertWithin(t, configured, configuredLimit, '4,000 setups and calls through configure()')
   t.is(finder.find([1, { nested: 2 }]), 'any')
 })

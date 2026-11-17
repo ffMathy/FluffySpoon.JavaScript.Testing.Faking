@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from 'util'
 import { Substitute, Arg, configure } from '../../../src'
 import { hashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
+import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 6: the structural hash of wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13) and of values that cannot
 // be read (R5V-2; E14). The tests run in order: which wide objects were hashed before matters for how fast a hash is
@@ -51,9 +52,10 @@ test.serial('R5V-1 (E13) distinct wide objects with the same keys are told apart
     ['100 calls with distinct 70,000-key objects', Array.from({ length: 100 }, (_, call) => wideObject(70_000, key => call * 100_000 + key))]
   ]
   for (const [name, values] of shapes) {
+    const elapsedLimit = timeLimit(1000)
     const elapsed = timeCalls(values)
     t.log(`${name}: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // still exact: copies (in another key order) find the same auto-substitute, other values another one
@@ -83,9 +85,10 @@ const eachLimit = (t: ExecutionContext, prefix: string) => {
   for (const size of [255, 256, 257, 1024, 1025, 1026, 4096, 4097, 65_535, 65_536, 65_537]) {
     const calls = size > 10_000 ? 10 : 200
     const values = Array.from({ length: calls }, (_, call) => wideObject(size, key => call * 1_000_000 + key, key => `${prefix}${size}_${key}`))
+    const elapsedLimit = timeLimit(1000)
     const elapsed = timeCalls(values)
     t.log(`${calls} calls with distinct ${size}-key objects: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${calls} calls with distinct ${size}-key objects: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${calls} calls with distinct ${size}-key objects`)
     // a copy in another key order hashes alike, also without families
     t.is(structuralHash(shuffledCopy(values[1], size)), structuralHash(values[1]), `${size} keys`)
     t.is(refinedStructuralHash(shuffledCopy(values[1], size)), refinedStructuralHash(values[1]), `${size} keys (refined)`)
@@ -103,9 +106,10 @@ test.serial('R5-ADV-1 (E13) 50 normalized-state actions with a nested 5,000-entr
     payload: { byId: wideObject(5000, key => ({ id: action * 5000 + key, name: `n${key}` }), key => `u${action * 5000 + key}`) }
   }))
   const store = Substitute.for<any>()
+  const elapsedLimit = timeLimit(1000)
   const elapsed = millisecondsOf(() => actions.forEach(action => store.dispatch(action)))
   t.log(`50 normalized-state actions: ${elapsed.toFixed(1)} ms`)
-  t.true(elapsed < 1000, `50 normalized-state actions: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `50 normalized-state actions`)
   t.is(store.dispatch({ ...actions[7], payload: { byId: { ...actions[7].payload.byId } } }), store.dispatch(actions[7]))
   t.not(store.dispatch(actions[8]), store.dispatch(actions[7]))
 })
@@ -123,10 +127,11 @@ test.serial('R5-ADV-1 (E13) distinct tables of records, Sets of objects and Maps
     ['100 snapshots of 5,000 records', run => Array.from({ length: 100 }, (_, call) => wideObject(5000, key => ({ id: key, name: `n${key}`, address: { city: `c${run}_${call}` } }), key => `id${key}`))]
   ]
   for (const [name, values] of shapes) {
+    const elapsedLimit = timeLimit(1000)
     let elapsed = Infinity
     for (let run = 0; run < 3; run++) elapsed = Math.min(elapsed, timeCalls(values(run)))
     t.log(`${name}: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${name}: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${name}`)
   }
 
   // still exact: equal copies (in another order) find the same auto-substitute, a record that differs anywhere (also
@@ -158,12 +163,13 @@ test.serial('R5-ADV-1 (E13) 200 literal setups and 200 calls with copies of dist
     return { elapsed, objects, copies, sink }
   }
   // only the last run's objects are kept (they take about 80 MB per run)
+  const bestLimit = timeLimit(1000)
   const elapsed = Math.min(run().elapsed, run().elapsed)
   const last = run()
   const best = Math.min(elapsed, last.elapsed)
   t.log(`200 literal setups + 200 calls with copies (best of 3): ${best.toFixed(1)} ms`)
   t.is(wrong, 0)
-  t.true(best < 1000, `200 literal setups + 200 calls with copies: ${best} ms`)
+  assertWithin(t, best, bestLimit, `200 literal setups + 200 calls with copies`)
   // the most recent setup wins, also through configure() with a copy in another key order
   const { objects, copies, sink } = last
   sink[configure]().write(shuffledCopy(objects[5], 5)).returns('again')
@@ -176,9 +182,10 @@ test.serial('R5-ADV-1 (E13) Maps and Sets on both sides of each limit (256 and 6
     const count = size > 1000 ? 5 : 50
     const maps = Array.from({ length: count }, (_, call) => new Map(Array.from({ length: size }, (_, key): [unknown, number] => [key % 2 === 0 ? `m${key}` : { key }, call + key])))
     const sets = Array.from({ length: count }, (_, call) => new Set(Array.from({ length: size }, (_, key) => (key === 0 ? { call } : call * 1_000_000 + key))))
+    const elapsedLimit = timeLimit(1000)
     const elapsed = timeCalls(maps) + timeCalls(sets)
     t.log(`${count} Maps and ${count} Sets with ${size} entries: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `${count} Maps and ${count} Sets with ${size} entries: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `${count} Maps and ${count} Sets with ${size} entries`)
     t.not(structuralHash(maps[1]), structuralHash(maps[2]), `Maps of ${size}`)
     t.not(structuralHash(sets[1]), structuralHash(sets[2]), `Sets of ${size}`)
     // equal ones, in another insertion order, hash alike
@@ -193,11 +200,12 @@ test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 1
   for (const size of [300, 1000, 10_000]) {
     const messages = wideObject(size, key => `text ${key}`, key => `message.key.${key}`)
     const translations = Substitute.for<any>()
+    const elapsedLimit = timeLimit(1000)
     const elapsed = millisecondsOf(() => {
       for (let index = 0; index < 10_000; index++) translations.t(`key${index}`, messages)
     })
     t.log(`10,000 calls with distinct first arguments and one shared ${size}-key table: ${elapsed.toFixed(1)} ms`)
-    t.true(elapsed < 1000, `10,000 calls with distinct first arguments and one shared ${size}-key table: ${elapsed} ms`)
+    assertWithin(t, elapsed, elapsedLimit, `10,000 calls with distinct first arguments and one shared ${size}-key table`)
     t.is(translations.t('key7', messages), translations.t('key7', { ...messages }))
   }
 
@@ -224,11 +232,12 @@ test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 1
   const role = { name: 'admin', permissions: ['read', 'write'] }
   const users = wideObject(600, key => ({ id: key, role }), key => `user${key}`)
   const directory = Substitute.for<any>()
+  const elapsedLimit = timeLimit(1000)
   const elapsed = millisecondsOf(() => {
     for (let index = 0; index < 10_000; index++) directory.t(`key${index}`, users)
   })
   t.log(`10,000 calls with distinct first arguments and one shared table of 600 records with a shared role: ${elapsed.toFixed(1)} ms`)
-  t.true(elapsed < 1000, `10,000 calls with one shared table of 600 records: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `10,000 calls with one shared table of 600 records`)
   // a matcher further inside than the search looks is not recognised there, on every call (as before)
   const hidden = wideObject(600, key => key === 300 ? { id: key, more: { deep: Arg.any() } } : { id: key, role }, key => `user${key}`)
   t.false(RecordedArguments.containsMatchers([hidden]))
@@ -248,10 +257,11 @@ test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,0
   let getterRuns = 0
   const unreadable = (): object => Object.defineProperty({}, 'bad', { enumerable: true, get() { getterRuns++; throw new Error('cannot be read') } })
   const values = Array.from({ length: 4000 }, unreadable)
+  const elapsedLimit = timeLimit(1000)
   const elapsed = timeCalls(values)
   t.log(`4,000 calls with distinct objects whose only property is a throwing getter: ${elapsed.toFixed(1)} ms`)
   // 45facfb: about 65 s, as every such call was compared with every earlier one, running the getter each time
-  t.true(elapsed < 1000, `4,000 calls: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `4,000 calls`)
 
   const [first, second] = [unreadable(), unreadable()]
   const sub = Substitute.for<any>()
@@ -288,9 +298,10 @@ test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,0
 test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with same-size objects whose keys differ', t => {
   // the key sets after the last family are listed and hashed with every key (see ArgumentHash)
   const values = Array.from({ length: 100 }, (_, call) => wideObject(5000, key => key, key => `k${call}_${key}`))
+  const elapsedLimit = timeLimit(1000)
   const elapsed = timeCalls(values)
   t.log(`100 calls with same-size objects whose keys differ: ${elapsed.toFixed(1)} ms`)
-  t.true(elapsed < 1000, `100 calls with same-size objects whose keys differ: ${elapsed} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `100 calls with same-size objects whose keys differ`)
   const sub = Substitute.for<any>()
   const results = values.map(value => sub.put(value))
   values.forEach((value, index) => t.is(sub.put(shuffledCopy(value, index)), results[index]))
