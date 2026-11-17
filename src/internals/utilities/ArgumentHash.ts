@@ -14,7 +14,9 @@ import { isDeepStrictEqual, types } from 'util'
  *   own enumerable string and symbol keys and values, in any key order (prototypes are left out);
  * - Maps and Sets by their entries, in any order; Dates, RegExps and boxed primitives by their value; typed arrays,
  *   DataViews and ArrayBuffers by their bytes; native errors also by the name, message, cause and errors that the
- *   running Node.js compares (found out once, when the library is loaded).
+ *   running Node.js compares (found out once, when the library is loaded);
+ * - E42: URLs also by their href, and promises, WeakMaps and WeakSets by their identity, where the running Node.js
+ *   compares them that way (found out once, when the library is loaded).
  *
  * E3: the cost per argument is bounded, whatever its size, so that every call costs about the same:
  * - each argument has a budget of BUDGET objects. An object takes one and shares the rest evenly among the values it
@@ -87,7 +89,7 @@ const enum Tag {
   Array = 0x6a09e667, Object = 0x3c6ef373, Map = 0x510e527f, Set = 0x9b05688c, Date = 0x1f83d9ac,
   RegExp = 0x5be0cd1a, Bytes = 0x428a2f98, Boxed = 0x71374491, Identity = 0x2a5c4e2b, Arguments = 0x0f1bbcdc,
   Cut = 0x24b6f2d1, Key = 0x63a1b5c7, Error = 0x1d8e4e27, Family = 0x3a8f05c5, Unsampled = 0x7c3b1d95,
-  Unreadable = 0x5f356495, Wide = 0x6b2c97e1
+  Unreadable = 0x5f356495, Wide = 0x6b2c97e1, URL = 0x4a7484aa, Reference = 0x2de92c6f
 }
 
 const mix = (hash: number, value: number): number => {
@@ -244,6 +246,62 @@ const objectToString = Object.prototype.toString
 
 const isComparedAsError = (value: object): value is Error & { cause?: unknown, errors?: unknown } =>
   (types.isNativeError(value) || (errorLikesAreErrors && value instanceof Error)) && objectToString.call(value) !== '[object Object]'
+
+/** Whether the running Node.js finds the values that `create` makes (two each time) unequal, found out once. */
+const alwaysUnequal = (...create: Array<() => [unknown, unknown]>): boolean => {
+  try {
+    return create.every(pair => {
+      const [a, b] = pair()
+      return !isDeepStrictEqual(a, b)
+    })
+  } catch {
+    return false
+  }
+}
+
+// Node.js 10 has no globalThis
+const globalScope: any = typeof globalThis !== 'undefined' ? globalThis : typeof global !== 'undefined' ? global : undefined
+
+/**
+ * E42: WHATWG URLs keep their state where neither the hash nor Node.js's comparison of keys can see it (from Node.js
+ * 20 on, they have no own keys at all), and Node.js compares them by their href. Without the href in the hash, all URLs
+ * would get one hash, and each call with a URL would be compared with every earlier one (and so would each call with a
+ * fetch Request on Node.js 20 and 22, which holds its URL as a URL). So a URL (of the URL class of the library's own
+ * global scope) is hashed by its href too, if the running Node.js finds URLs that differ in host or only in their
+ * fragment unequal: then deep strictly equal URLs have the same href. Found out once, when the library is loaded; the
+ * getter is captured then.
+ */
+const URLClass: (new (url: string) => object) | undefined = typeof globalScope?.URL === 'function' ? globalScope.URL : undefined
+const urlHref: ((this: object) => unknown) | undefined = (() => {
+  if (URLClass === undefined) return undefined
+  try {
+    const getter = Object.getOwnPropertyDescriptor(URLClass.prototype, 'href')?.get
+    if (typeof getter !== 'function') return undefined
+    return alwaysUnequal(
+      () => [new URLClass('http://a.example/'), new URLClass('http://b.example/')],
+      () => [new URLClass('http://a.example/#a'), new URLClass('http://a.example/#b')]
+    ) ? getter : undefined
+  } catch {
+    return undefined
+  }
+})()
+
+/**
+ * E42: kinds of objects that the running Node.js compares by identity (a promise on Node.js 24 and later, a WeakMap or a
+ * WeakSet on Node.js 22 and later): distinct ones are never deep strictly equal, so they are hashed by their identity,
+ * like functions. Before, they all had one hash (they have no own keys). Found out once, when the library is loaded.
+ */
+const promisesByIdentity = alwaysUnequal(
+  () => [Promise.resolve(1), Promise.resolve(1)],
+  () => [new Promise(() => { }), new Promise(() => { })]
+)
+const weakCollectionsByIdentity = alwaysUnequal(
+  () => [new WeakMap(), new WeakMap()],
+  () => [new WeakSet(), new WeakSet()]
+)
+
+const isComparedByIdentity = (value: object): boolean =>
+  (promisesByIdentity && types.isPromise(value)) || (weakCollectionsByIdentity && (types.isWeakMap(value) || types.isWeakSet(value)))
 
 /** Each child's share of an object's budget. */
 const share = (budget: number, children: number): number => children === 0 ? 0 : Math.floor((budget - 1) / children)
@@ -688,8 +746,23 @@ const hashReadable = (object: object, budget: number, depth: number, probe: bool
   if (types.isBooleanObject(object)) return mix(Tag.Boxed, Boolean.prototype.valueOf.call(object) ? Tag.True : Tag.False)
   if (types.isSymbolObject(object)) return mix(Tag.Boxed, hashString(Symbol.prototype.toString.call(object), Tag.Symbol))
   if (isBigIntObject(object)) return mix(Tag.Boxed, hashString(String(object), Tag.BigInt))
+  // E42
+  if (isComparedByIdentity(object)) return mix(Tag.Reference, idOf(object))
+  if (urlHref !== undefined && object instanceof URLClass!) return hashURL(object, budget, depth, probe)
 
   return hashKeyed(object, budget, depth, false, probe)
+}
+
+/** E42: a URL by its own keys (usually none) and its href. */
+const hashURL = (url: object, budget: number, depth: number, probe: boolean): number => {
+  const h = hashKeyed(url, budget, depth, false, probe)
+  let href: unknown
+  try {
+    href = urlHref!.call(url)
+  } catch {
+    return h // not a URL, only an object that inherits from URL.prototype
+  }
+  return typeof href === 'string' ? mix(h, hashString(href, Tag.URL)) : h
 }
 
 /**
