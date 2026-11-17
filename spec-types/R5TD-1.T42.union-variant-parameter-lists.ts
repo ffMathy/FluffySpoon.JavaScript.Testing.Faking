@@ -3,7 +3,7 @@
 // that method, as for variants whose parameter lists are the same (T39, R4TD-1.T39.function-union-members.ts):
 // `.returns()`, `.resolves()`, `.rejects()`, `.throws()`, `.mimicks()` and the configure view take what any variant
 // whose overloads the call can reach returns. Values no variant returns are still rejected.
-import { Substitute, Arg, configure, received, didNotReceive, returns } from '../src'
+import { Substitute, SubstituteOf, Arg, configure, received, didNotReceive, returns } from '../src'
 import { expectType } from './helpers'
 
 // API clients of two versions: the newer `fetch` takes an optional second parameter; same return type.
@@ -141,7 +141,7 @@ interface CatF { kind: 'cat'; raw(): any }
 interface DogF { kind: 'dog'; raw(): string }
 const f = Substitute.for<CatF | DogF>()
 f.raw().returns(1)
-// The same with the variant returning `any` declared second (the call then resolves to the other variant's signature).
+// The same with the variant returning `any` declared second.
 interface DogF2 { kind: 'dog'; raw(): string }
 interface CatF2 { kind: 'cat'; raw(): any }
 const f2 = Substitute.for<CatF2 | DogF2>()
@@ -242,6 +242,19 @@ listeners.onResult('x').returns('y')
 listeners[configure]().onResult('x').returns(2)
 // @ts-expect-error the configured value is a number or a string
 listeners.onResult('x').returns(true)
+
+// A member typed as a union of function types, one of which returns a type parameter.
+interface Picker<T> { pick: (() => T) | ((fallback?: string) => string) }
+export function stubPicker<T>(picker: SubstituteOf<Picker<T>>, value: T) {
+  picker.pick().returns(value)
+  picker.pick().returns('x')
+  picker[configure]().pick().returns(value)
+}
+const picker = Substitute.for<Picker<number>>()
+picker.pick().returns(1)
+picker.pick().returns('x')
+// @ts-expect-error the configured value is a number or a string
+picker.pick().returns(true)
 
 expectType<'purr' | 'wag'>(a.feed('x'))
 export { fetched, asClient, read, fedA, asA, asD }
