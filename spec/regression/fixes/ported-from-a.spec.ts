@@ -401,7 +401,9 @@ test('D14 Arg.all() matches any (possibly empty) remainder; arguments before it 
 
   t.notThrows(() => logger.received(2).log('x', Arg.all()))
   t.notThrows(() => logger.received(4).log(Arg.all()))
-  t.notThrows(() => logger.received(3).log(Arg.any(), Arg.all()))
+  // E22 (round 7): log() has an omitted first argument, which Arg.any() matches (an omitted argument is undefined)
+  t.notThrows(() => logger.received(4).log(Arg.any(), Arg.all()))
+  t.notThrows(() => logger.received(3).log(Arg.any('string'), Arg.all()))
   t.notThrows(() => logger.received(1).log('x', 1, Arg.all()))
   t.notThrows(() => logger.received(0).log('z', Arg.all()))
 

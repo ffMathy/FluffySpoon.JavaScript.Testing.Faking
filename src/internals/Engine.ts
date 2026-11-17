@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, pathArguments } from './SubstituteState'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
@@ -37,9 +37,12 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 /**
  * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
  * target of a proxy (it does not trigger traps), so the target carries the printer as its inspect.custom hook.
+ * It is a bound function: it can be constructed (E23), and it has no non-configurable `prototype`, so that the
+ * traps can hide its own properties (E25, see viewTraps).
  */
+const viewFunction = function () { }
 const newTarget = (print: Printer): any => {
-  const target = function () { }
+  const target = viewFunction.bind(undefined)
   Object.defineProperty(target, inspect.custom, {
     value: (_depth: number, options?: InspectOptions) => print(options),
     configurable: true
@@ -47,46 +50,115 @@ const newTarget = (print: Printer): any => {
   return target
 }
 
+/**
+ * E25: the views (assertions, configure views, bound functions, members configured both as a property and as a method)
+ * have no properties of their own, and refuse to be frozen, sealed or given properties, with a usage error that names
+ * the operation (a later read could not answer as usual otherwise). Substitutes themselves support it (see faceHandler).
+ */
+const viewChangeError = (operation: string, print: Printer, start: Function) => SubstituteException.generic(
+  `${operation} cannot be used on ${print(undefined)}: the values the library hands out for assertions, setups, ` +
+  `bound functions and members configured both as a property and as a method cannot be frozen, sealed or given ` +
+  `properties of their own. Substitutes and their auto-substitutes can.`,
+  start
+)
+
+const viewTraps = (print: Printer): ProxyHandler<any> => ({
+  defineProperty: function defineProperty() {
+    throw viewChangeError('Object.defineProperty()', print, defineProperty)
+  },
+  preventExtensions: function preventExtensions() {
+    throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
+  },
+  deleteProperty: () => true,
+  ownKeys: () => [],
+  getOwnPropertyDescriptor: () => undefined
+})
+
+/** A short-lived proxy (see newTarget and viewTraps). */
+const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(newTarget(print), { ...viewTraps(print), ...handler })
+
 // ---- printing ---------------------------------------------------------------------------------
 
 const memberLabel = (key: PropertyKey) => key === SELF ? 'call' : keyToString(key)
 
+/** A member relative to the printed substitute: `info`, `logger.info`, `getUser(1).name` ('' for the substitute itself). */
+const memberWithin = (prefix: string, key: PropertyKey): string =>
+  key === SELF ? prefix : prefix === '' ? keyToString(key) : `${prefix}.${keyToString(key)}`
+
+/** An auto-substitute relative to the printed substitute: `logger`, `getUser(1)`, `logger.child('x')`. */
+const entryWithin = (prefix: string, entry: AutoEntry): string => {
+  const member = memberWithin(prefix, entry.key)
+  return entry.kind === 'get' ? member : `${member}${pathArguments(entry.argumentList)}`
+}
+
+/**
+ * The received calls and setups of a substitute and (E24) of its auto-substitutes, which are shown under their paths
+ * relative to it (`logger.info('started')`, `logger.level => returns(3)`): the calls in the order they were made, the
+ * setups in the order they were configured. An empty list means that there is nothing to show.
+ */
+const stateLines = (state: SubstituteState, colors: boolean): string[] => {
+  const records: Array<{ record: CallRecord, prefix: string }> = []
+  const substitutions: Array<{ substitution: Substitution, prefix: string }> = []
+  const visit = (current: SubstituteState, prefix: string) => {
+    for (const record of current.records) records.push({ record, prefix })
+    // 'auto' substitutions only register an auto-substitute for a nested setup, which is shown under its path
+    for (const substitution of current.substitutions()) if (substitution.method !== 'auto') substitutions.push({ substitution, prefix })
+    for (const entry of current.entries()) {
+      const nested = entry.materializedState
+      if (nested !== undefined) visit(nested, entryWithin(prefix, entry))
+    }
+  }
+  visit(state, '')
+
+  const lines: string[] = []
+  // D26: an invocation through call/apply is shown once, as its direct-call reading
+  const directReadings = new Set(records.filter(({ record }) => record.directReading === true).map(({ record }) => record))
+  const shown = records.filter(({ record }) => record.twin === undefined || record.directReading === true || !directReadings.has(record.twin))
+  if (shown.length > 0) {
+    lines.push('  received:')
+    shown.sort((a, b) => a.record.seq - b.record.seq)
+    for (const { record, prefix } of shown) {
+      const name = memberWithin(prefix, record.key)
+      const suffix = record.kind === 'call'
+        ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
+        : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
+      // E23: a construction of the substitute itself names it: `new @Substitute(url)`
+      lines.push(`    ${record.constructed === true ? `new ${name === '' ? state.path : name}` : name}${suffix}`)
+    }
+  }
+  if (substitutions.length > 0) {
+    lines.push('  configured:')
+    substitutions.sort((a, b) => a.substitution.order - b.substitution.order)
+    for (const { substitution, prefix } of substitutions) {
+      const name = memberWithin(prefix, substitution.key)
+      const args = substitution.kind === 'call' ? formatArguments(substitution.args?.value, colors) : ''
+      const values = substitution.values.map(value => formatValue(value, colors)).join(', ')
+      lines.push(`    ${name}${args} => ${substitution.method}(${values})`)
+    }
+  }
+  return lines
+}
+
 const printState = (state: SubstituteState, colors: boolean): string => {
   if (isPrinting()) return state.path
   return withPrintGuard(() => {
-    const lines: string[] = []
-    const records = state.records
-    // D26: an invocation through call/apply is shown once, as its direct-call reading
-    const directReadings = new Set(records.filter(record => record.directReading === true))
-    const shown = records.filter(record => record.twin === undefined || record.directReading === true || !directReadings.has(record.twin))
-    if (shown.length > 0) {
-      lines.push('  received:')
-      for (const record of shown) {
-        const name = record.key === SELF ? '' : keyToString(record.key)
-        const suffix = record.kind === 'call'
-          ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
-          : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
-        lines.push(`    ${name}${suffix}`)
-      }
-    }
-    const substitutions = state.substitutions()
-    if (substitutions.length > 0) {
-      lines.push('  configured:')
-      for (const substitution of substitutions) {
-        const name = substitution.key === SELF ? '' : keyToString(substitution.key)
-        const args = substitution.kind === 'call' ? formatArguments(substitution.args?.value, colors) : ''
-        const values = substitution.method === 'auto' ? '' : substitution.values.map(value => formatValue(value, colors)).join(', ')
-        lines.push(`    ${name}${args} => ${substitution.method}(${values})`)
-      }
-    }
+    const lines = stateLines(state, colors)
     return `${state.path} {${lines.length > 0 ? '\n' + lines.join('\n') : ''}\n}`
   })
 }
 
+/**
+ * E24: an auto-substitute prints as its path (`@Substitute.logger`), followed by its received calls and setups when it
+ * has any, like a substitute. Inside another printout (an argument in a message, a nested value) only the path is shown.
+ */
 const printFace = (face: Face, colors: boolean): string => {
   if (!(face instanceof AutoEntry)) return printState(face, colors)
-  if (face.kind === 'get') return `property<${memberLabel(face.key)}>: `
-  return withPrintGuard(() => `method<${memberLabel(face.key)}>: ${formatArguments(face.args?.value, colors)}`)
+  const state = face.materializedState
+  if (state === undefined || isPrinting()) return face.path
+  return withPrintGuard(() => {
+    const lines = stateLines(state, colors)
+    return lines.length === 0 ? face.path : `${face.path} {\n${lines.join('\n')}\n}`
+  })
 }
 
 const special = (property: SpecialProperty, print: Printer, internal: unknown): any => {
@@ -172,29 +244,108 @@ const faceTargetPrototype = Object.create(Function.prototype, {
 })
 
 /*
+ * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
+ * is a bound function whose only own properties, `length` and `name`, the proxy hides (ownKeys and
+ * getOwnPropertyDescriptor report none). The first such change removes them from the target ("takes it over"), so that
+ * from then on the target's own properties are exactly the ones the code under test defined, and the proxy's answers
+ * cannot conflict with them (a frozen target without own properties constrains nothing). A defined property is a real
+ * property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
+ * Taking over is rare, so the hot path only checks a counter.
+ */
+const ownedTargets = new WeakSet<object>()
+let ownedTargetCount = 0
+const hasOwnProperty = Object.prototype.hasOwnProperty
+
+const takeOver = (target: FaceTarget): void => {
+  if (ownedTargets.has(target)) return
+  delete (target as any).length
+  delete (target as any).name
+  ownedTargets.add(target)
+  ownedTargetCount++
+}
+
+const isOwned = (target: FaceTarget): boolean => ownedTargetCount > 0 && ownedTargets.has(target)
+
+/** Whether the code under test defined the property on the substitute (E25). */
+const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwned(target) && hasOwnProperty.call(target, property)
+
+/*
  * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
  * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
  */
 const faceHandler: ProxyHandler<FaceTarget> = {
-  get: function get(target: FaceTarget, property: PropertyKey) {
+  get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
+    if (isDefined(target, property)) return Reflect.get(target, property, receiver)
     const face = target()
     const value = faceGet(face, property, get)
     return value === REAL_READ ? realGet(faceState(face), property, adjacentHandOut(face), captureStack(get)) : value
   },
-  set: function set(target: FaceTarget, property: PropertyKey, value: unknown) {
+  set: function set(target: FaceTarget, property: PropertyKey, value: unknown, receiver: unknown) {
+    if (isDefined(target, property)) return Reflect.set(target, property, value, receiver)
     faceSet(target(), property, value, set)
     return true
   },
+  // E26: `key in sub` (see faceHas)
+  has: (target: FaceTarget, property: PropertyKey) => isDefined(target, property) || faceHas(target(), property),
+  defineProperty: (target: FaceTarget, property: PropertyKey, descriptor: PropertyDescriptor) => {
+    takeOver(target)
+    return Reflect.defineProperty(target, property, descriptor)
+  },
+  preventExtensions: (target: FaceTarget) => {
+    takeOver(target)
+    return Reflect.preventExtensions(target)
+  },
+  deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
+  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : [],
+  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
+    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : undefined,
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
-    return faceApply(face, thisArg, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
+    return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
   },
-  // like constructing the plain function the target used to be: an empty object, nothing recorded
-  construct: () => ({})
+  // E23: `new sub(...)` and `new sub.Member(...)` are invocations, recorded as constructions (see faceApply)
+  construct: function construct(target: FaceTarget, args: any[]) {
+    const face = target()
+    return constructed(faceApply(face, CONSTRUCT, args, construct, recordsInvocation(face) ? captureStack(construct) : undefined))
+  }
 }
 
 // bound to the face: a bound function is smaller than a closure and its context
 const returnThis = function (this: Face): Face { return this }
+
+/**
+ * E26: `key in sub` (and Reflect.has) is true for a key with a setup (as a property or a method, or a nested setup
+ * through it) and for a key that the mimicked instance has (`key in instance`), and false otherwise: for unconfigured
+ * keys, protocol keys and the library's own special members (then, inspect.custom, ...). Nothing is recorded.
+ */
+const faceHas = (face: Face, key: PropertyKey): boolean => {
+  if (isSpecialProperty(key)) return false
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state === undefined) return false
+  return state.propertySubstitution(key) !== undefined ||
+    state.hasCallSubstitutions(key) ||
+    (state.mimicked !== undefined && hasMember(state.mimicked.instance, key)) ||
+    hasNestedSetup(state, key)
+}
+
+/** Whether an auto-substitute of the member (of the property, or of one of its calls) has a setup of its own. */
+const hasNestedSetup = (state: SubstituteState, key: PropertyKey): boolean => {
+  for (const entry of state.entries()) {
+    const nested = entry.key === key ? entry.materializedState : undefined
+    if (nested !== undefined && isConfigured(nested)) return true
+  }
+  return false
+}
+
+/** Whether a substitute, or one of its auto-substitutes, has a setup or mimicks an instance. */
+const isConfigured = (state: SubstituteState): boolean => {
+  if (state.mimicked !== undefined || state.substitutions().some(substitution => substitution.method !== 'auto')) return true
+  for (const entry of state.entries()) {
+    const nested = entry.materializedState
+    if (nested !== undefined && isConfigured(nested)) return true
+  }
+  return false
+}
 
 const createFaceProxy = (face: Face): any => {
   const target: FaceTarget = returnThis.bind(face)
@@ -278,8 +429,7 @@ const recordsInvocation = (face: Face): boolean => !(face instanceof AutoEntry &
  * `obj.add = fnSubstitute; obj.add(1)` runs with `this === obj`. (A mimicked instance's own method keeps running on
  * the instance, D12.)
  */
-const faceApply = (face: Face, thisArg: unknown, args: any[], stackStart: Function, site?: StackHolder): any => {
-  const self = { thisArg, explicit: false }
+const faceApply = (face: Face, self: Self, args: any[], stackStart: Function, site?: StackHolder): any => {
   if (!(face instanceof AutoEntry)) return invoke(face, SELF, args, stackStart, undefined, undefined, self, site)
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self, site)
   // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
@@ -424,7 +574,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
  */
 const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, boundArgs: any[]): any => {
   const print: Printer = options => printFace(bindEntry, colorsOf(options))
-  const proxy: any = new Proxy(newTarget(print), {
+  const proxy: any = createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, bindEntry)
       // a bound function ignores the `this` it is called with
@@ -439,6 +589,11 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       const direct = directReadingOf(face)
       return invoke(direct.state, direct.key, [...boundArgs, ...args], apply, direct.readSource, undefined, { thisArg, explicit: true }, captureStack(apply))
+    },
+    // `new` on a bound function constructs the function it is bound to, with the bound arguments first (E23)
+    construct: function construct(_target: unknown, args: any[]) {
+      const direct = directReadingOf(face)
+      return constructed(invoke(direct.state, direct.key, [...boundArgs, ...args], construct, direct.readSource, undefined, CONSTRUCT, captureStack(construct)))
     }
   })
   return proxy
@@ -468,7 +623,7 @@ const functionHelper = (property: FunctionHelperKey, invokeWith: (args: any[], s
 const hasMember = (instance: any, key: PropertyKey): boolean =>
   ((typeof instance === 'object' && instance !== null) || typeof instance === 'function') && key in instance
 
-const execute = (substitution: Substitution, args?: any[], thisArg?: unknown): any => {
+const execute = (substitution: Substitution, args?: any[], thisArg?: unknown, construct = false): any => {
   const value = substitution.nextValue()
   switch (substitution.method) {
     case 'returns':
@@ -480,7 +635,7 @@ const execute = (substitution: Substitution, args?: any[], thisArg?: unknown): a
     case 'rejects':
       return Promise.reject(value)
     case 'mimicks':
-      return Reflect.apply(value, thisArg, args ?? [])
+      return callOrConstruct(value, thisArg, args ?? [], construct)
     case 'auto':
       return entryProxy(substitution.entry!)
   }
@@ -556,33 +711,67 @@ const invoke = (
     read.convertToCall(args, callSite)
     record = read
   } else record = linkChain(state.addRecord('call', key, args, callSite), chainCandidate)
+  if (self === CONSTRUCT) record.constructed = true
 
   return resolveCall(state, key, args, record, self)
 }
 
 /**
  * The `this` of an invocation. `explicit` when it was given through call/apply/bind: then a mimicked instance's
- * method runs with it as well, instead of with the instance.
+ * method runs with it as well, instead of with the instance. CONSTRUCT for `new` (E23).
  */
 type Self = { thisArg: unknown, explicit: boolean }
 const NO_SELF: Self = { thisArg: undefined, explicit: false }
 
+/*
+ * E23: `new` on a substitute or on a member (`new sub(url)`, `new ns.Client(url)`) is a call like any other: it is
+ * recorded (as a construction, which messages show as `new Client(url)`), and setups and checks written with call
+ * syntax apply to it (`ns.Client(Arg.any()).returns(client)`, `ns.received(1).Client(url)`). It answers with the
+ * configured value when that is an object or a function, and with the auto-substitute of the call otherwise (`new`
+ * always gives an object). A mimicked function, or a function given to mimicks(), is constructed when it is a
+ * constructor (a class or an ordinary function), and called otherwise (an arrow function, a method).
+ */
+const CONSTRUCT: Self = { thisArg: undefined, explicit: false }
+
+const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
+
+/** What `new` gives for the answer of an invocation that is not an object: an empty object (as `new` on a function would). */
+const constructed = (answer: unknown): object => isObjectLike(answer) ? answer : {}
+
+/**
+ * Whether a function can be constructed: a substitute, a class or an ordinary function (they have an own `prototype`;
+ * arrow functions, methods and async functions do not, and generator functions cannot be constructed).
+ */
+const isConstructor = (fn: Function): boolean => {
+  if (isSubstituteProxy(fn)) return true
+  try {
+    return Object.getOwnPropertyDescriptor(fn, 'prototype') !== undefined && !types.isGeneratorFunction(fn)
+  } catch {
+    return false
+  }
+}
+
+/** Runs a mimicked function: constructs it for `new` when it is a constructor, calls it otherwise. */
+const callOrConstruct = (fn: Function, thisArg: unknown, args: any[], construct: boolean): any =>
+  construct && isConstructor(fn) ? Reflect.construct(fn, args) : Reflect.apply(fn, thisArg, args)
+
 /** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
 const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord, self: Self): any => {
+  const construct = self === CONSTRUCT
   const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
-    return execute(substitution, args, self.thisArg)
+    return execute(substitution, args, self.thisArg, construct)
   }
 
   const mimicked = state.mimicked
   if (mimicked !== undefined) {
     const instance = mimicked.instance
     if (key === SELF) {
-      if (typeof instance === 'function') return Reflect.apply(instance, self.thisArg, args)
+      if (typeof instance === 'function') return callOrConstruct(instance, self.thisArg, args, construct)
     } else {
       const member = instance[key]
-      if (typeof member === 'function') return Reflect.apply(member, self.explicit ? self.thisArg : instance, args)
+      if (typeof member === 'function') return callOrConstruct(member, self.explicit ? self.thisArg : instance, args, construct)
     }
   }
   return NOT_CONFIGURED
@@ -591,7 +780,8 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
 const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord, self: Self): any => {
   const hashes = new ArgumentHashes(args)
   const answer = configuredAnswer(state, key, args, hashes, record, self)
-  if (answer !== NOT_CONFIGURED) return answer
+  // E23: `new` answers with an object; for any other configured value it gives the auto-substitute of the call
+  if (answer !== NOT_CONFIGURED && (self !== CONSTRUCT || isObjectLike(answer))) return answer
   const entry = state.callEntry(key, hashes)
   entry.handOut(record)
   return entryProxy(entry)
@@ -603,6 +793,24 @@ const actualArgumentsOf = (entry: AutoEntry, chainHead: CallRecord | undefined):
   return entry.args?.value ?? []
 }
 
+/**
+ * E28: mimicks() calls the functions it was given when the member is used, so anything else would only fail later,
+ * inside the code under test. It is refused at the setup instead (`describeTarget`: the member or call configured).
+ */
+const validateSubstitution = (method: SubstitutionMethod, values: readonly unknown[], describeTarget: () => string, stackStart: Function): void => {
+  if (method !== 'mimicks') return
+  const index = values.findIndex(value => typeof value !== 'function')
+  if (values.length > 0 && index === -1) return
+  const received = values.length === 0 ? 'no argument' : formatValue(values[index], false)
+  const error = new TypeError(`mimicks() expects a function to call for ${describeTarget()}, but received ${received}.`)
+  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(error, stackStart)
+  throw error
+}
+
+/** The call a setup configures, as messages show it: `@Substitute.getUser(1)`. */
+const describeCall = (state: SubstituteState, key: PropertyKey, args: readonly unknown[] | undefined): string =>
+  `${state.memberPath(key)}${formatArguments(args ?? [], false)}`
+
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
 const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined): Function => {
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
@@ -610,6 +818,9 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
     : entry.args
   retract(chainHead)
   return function substitution(...values: any[]) {
+    validateSubstitution(method, values, () => entry.kind === 'get'
+      ? entry.parent.memberPath(entry.key)
+      : describeCall(entry.parent, entry.key, specification!.value), substitution)
     if (entry.kind === 'get') entry.parent.setPropertySubstitution(entry.key, method, values)
     else entry.parent.addCallSubstitution(entry.key, specification!, method, values)
   }
@@ -671,14 +882,15 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     }
     return value
   }
-  const print: Printer = () => `property<${memberLabel(key)}>: `
-  return new Proxy(newTarget(print), {
+  const print: Printer = () => state.memberPath(key)
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) {
         if (record.seq === currentSequence()) retract(continuedChain(record, frameAt(get)))
         return function substitution(...values: any[]) {
+          validateSubstitution(method, values, () => state.memberPath(key), substitution)
           state.setPropertySubstitution(key, method, values)
         }
       }
@@ -695,6 +907,9 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       return invoke(state, key, args, apply, record)
+    },
+    construct: function construct(_target: unknown, args: any[]) {
+      return constructed(invoke(state, key, args, construct, record, undefined, CONSTRUCT))
     }
   })
 }
@@ -705,7 +920,7 @@ const describeCount = (count: ExpectedCount) => count === undefined ? 'received(
 
 const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any => {
   const print: Printer = () => `${state.path}.${describeCount(count)}`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       return assertionMember(state, property, count, get)
@@ -717,6 +932,11 @@ const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       assertDirectCall(state, args, count, apply)
       return undefined
+    },
+    // E23: a check of `new` is a check of the call
+    construct: function construct(_target: unknown, args: any[]) {
+      assertDirectCall(state, args, count, construct)
+      return {}
     }
   })
 }
@@ -753,7 +973,7 @@ const assertionMember = (state: SubstituteState, key: PropertyKey, count: Expect
     )
   }
   const print: Printer = () => `${state.path}.${describeCount(count)}.${memberLabel(key)}`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isFunctionHelperKey(property)) return functionHelper(property, assertInvocation)
@@ -764,6 +984,10 @@ const assertionMember = (state: SubstituteState, key: PropertyKey, count: Expect
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       return assertInvocation(args, apply)
+    },
+    construct: function construct(_target: unknown, args: any[]) {
+      assertInvocation(args, construct)
+      return {}
     }
   })
 }
@@ -777,7 +1001,7 @@ const configureSetError = (start: Function) => SubstituteException.generic(
 
 const createConfigureProxy = (state: SubstituteState): any => {
   const print: Printer = () => `${state.path}[configure]()`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, get)
@@ -787,6 +1011,10 @@ const createConfigureProxy = (state: SubstituteState): any => {
       throw configureSetError(set)
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      return configureCall(state, SELF, RecordedArguments.forSpecification(args))
+    },
+    // E23: a setup of `new` is a setup of the call
+    construct: function construct(_target: unknown, args: any[]) {
       return configureCall(state, SELF, RecordedArguments.forSpecification(args))
     }
   })
@@ -837,11 +1065,12 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
   const context = contextMethodOf(key)
   if (context !== undefined) return contextFunction(context, () => state, undefined)
   const print: Printer = () => `${state.memberPath(key)} (configure)`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) return function substitution(...values: any[]) {
+        validateSubstitution(method, values, () => state.memberPath(key), substitution)
         state.setPropertySubstitution(key, method, values)
       }
       // D31: through a member that answers with a value already
@@ -860,6 +1089,9 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       throw configureSetError(set)
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      return configureCall(state, key, RecordedArguments.forSpecification(args))
+    },
+    construct: function construct(_target: unknown, args: any[]) {
       return configureCall(state, key, RecordedArguments.forSpecification(args))
     }
   })
@@ -898,14 +1130,15 @@ const nestedSetupTarget = (state: SubstituteState, key: PropertyKey, specificati
  * `sub.received(Arg.any()).add(1)` reports the invalid count (D10) instead of configuring something silently.
  */
 const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, stringAssertion = false): any => {
-  const print: Printer = options => withPrintGuard(() => `method<${memberLabel(key)}>: ${formatArguments(specification.value, colorsOf(options))} (configure)`)
+  const print: Printer = () => `${state.memberPath(key)}${pathArguments(specification.value)} (configure)`
   const assertionCount = (start: Function): ExpectedCount =>
     key === 'didNotReceive' ? 0 : validateExpectedCount(specification.value?.[0], start)
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
       if (method !== undefined) return function substitution(...values: any[]) {
+        validateSubstitution(method, values, () => describeCall(state, key, specification.value), substitution)
         state.addCallSubstitution(key, specification, method, values)
       }
       if (stringAssertion) return assertionMember(state, property, assertionCount(get), get)
@@ -922,6 +1155,13 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
         return undefined
       }
       return nestedSetupTarget(state, key, specification, undefined, apply)(...args)
+    },
+    construct: function construct(_target: unknown, args: any[]) {
+      if (stringAssertion) {
+        assertDirectCall(state, args, assertionCount(construct), construct)
+        return {}
+      }
+      return constructed(nestedSetupTarget(state, key, specification, undefined, construct)(...args))
     }
   })
 }

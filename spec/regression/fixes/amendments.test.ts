@@ -314,7 +314,9 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
   calculator.add(Arg.any(), Arg.any()).returns('newer predicate')
   t.is(calculator.add(1, 2), 'literal')
   t.is(calculator.add(5, 2), 'newer predicate')
-  t.is(calculator.add(5), 'wildcard')
+  // E22 (round 7): add(5) has an omitted second argument, which Arg.any() matches, so the predicate class answers it
+  t.is(calculator.add(5), 'newer predicate')
+  t.is(calculator.add(5, 2, 3), 'wildcard')
   calculator[configure]().add(1, 2).returns('newer literal')
   t.is(calculator.add(1, 2), 'newer literal')
 
@@ -337,7 +339,6 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
   values.f(other).returns('substitute')
   values.f(undefined).returns('undefined')
   values.f(null).returns('null')
-  values.f().returns('no arguments')
   values.f([1, 2]).returns('array')
   values.f({ a: 1 }).returns('object')
   values.f(new Date(5)).returns('date')
@@ -345,7 +346,9 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
     [0, -0, NaN, 1, '1', BigInt(1), `${long}a`, `${long}b`, symbol, fn, other, undefined, null].map(value => values.f(value)),
     ['0', '-0', 'NaN', 'number', 'string', 'bigint', 'long a', 'long b', 'symbol', 'function', 'substitute', 'undefined', 'null']
   )
-  t.is(values.f(), 'no arguments')
+  // E22 (round 7): an omitted argument is undefined, so f() is f(undefined), and so is f(1, undefined) f(1)
+  t.is(values.f(), 'undefined')
+  t.is(values.f(1, undefined), 'number')
   t.is(values.f([1, 2]), 'array')
   t.is(values.f({ a: 1 }), 'object')
   t.is(values.f(new Date(5)), 'date')
@@ -353,7 +356,7 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
   t.true(types.isProxy(values.f({ a: 2 })))
   t.true(types.isProxy(values.f(Symbol('s'))))
   t.true(types.isProxy(values.f(() => 1)))
-  t.true(types.isProxy(values.f(1, undefined)))
+  t.true(types.isProxy(values.f(1, null)))
 
   // amended D15 (round 3): mutating an argument object after the setup is not supported, except that the same
   // object still matches; a fresh object equal to the mutated one no longer does, nor one equal to the original

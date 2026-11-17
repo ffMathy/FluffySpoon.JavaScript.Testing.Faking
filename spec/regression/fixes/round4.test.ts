@@ -71,7 +71,8 @@ test('R3-ADV-1 (E1) a method reference that the code under test invokes later is
   const app = Substitute.for<any>()
   app.getCalc().add(1, 2).returns(3)
   app.logger.child('x').info.returns(undefined)
-  t.is(inspect(app), '@Substitute {\n}')
+  // E24 (round 7): the root also shows the setups of its auto-substitutes, under their paths; nothing is recorded
+  t.is(inspect(app), "@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(3)\n    logger.child('x').info => returns(undefined)\n}")
   t.is(app.getCalc().add(1, 2), 3)
   // and a method reference invoked in the test, with another `this`, is a call as well
   const getCalc = app.getCalc
@@ -108,7 +109,12 @@ test('R3-ADV-6 (E2) adjacency alone decides only when neither operation has a fr
     console.log(JSON.stringify({ driver: inspect(driver), app: inspect(app), result: app.getCalc().add(1, 2) }))
   `)
   // without frames, a setup right after the call that returned the value retracts that call (the round-2 rule)
-  t.deepEqual(result, { driver: '@Substitute {\n}', app: '@Substitute {\n}', result: 99 })
+  // (E24, round 7: the setups of the auto-substitutes are shown under their paths)
+  t.deepEqual(result, {
+    driver: "@Substitute {\n  configured:\n    connect('db://x').isOpen => returns(true)\n}",
+    app: '@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(99)\n}',
+    result: 99
+  })
 })
 
 /**
@@ -216,7 +222,8 @@ test('R3-ADV-4 (E5) reading call sites never changes Error.prepareStackTrace for
         (before === undefined ? after === undefined : Object.keys(before).every(key => before[key] === after[key])),
       stackIsText: typeof new Error('y').stack === 'string' && typeof syntaxError.stack === 'string',
       calledAt: message.includes('called at'),
-      setupRecordedNothing: inspect(app) === '@Substitute {\\n  received:\\n    logger\\n}',
+      // E24 (round 7): the setups and calls of the auto-substitutes are shown under their paths
+      setupRecordedNothing: inspect(app) === "@Substitute {\\n  received:\\n    logger\\n    logger.info('x')\\n  configured:\\n    getCalc().add(1, 2) => returns(3)\\n}",
       codeUnderTestCallKept: (() => { try { driver.received(1).connect('db://x'); return true } catch { return false } })(),
       result: app.getCalc().add(1, 2)
     }))

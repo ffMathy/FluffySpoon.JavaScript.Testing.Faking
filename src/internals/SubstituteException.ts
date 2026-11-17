@@ -125,7 +125,7 @@ export class SubstituteException extends Error {
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
-          .add(memberPath, style)
+          .add(listed.record.constructed === true ? `new ${memberPath}` : memberPath, style)
           .add(describeRecord(listed.record, colors), style)
         const frame = firstStackFrame(listed.record.stack)
         if (frame !== undefined) textBuilder.newLine().add(frame.replace('at ', 'called at '), t => t.faint())

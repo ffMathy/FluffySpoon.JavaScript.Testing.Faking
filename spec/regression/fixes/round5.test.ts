@@ -76,7 +76,9 @@ test('R4-ADV-1 (E8) a method read and invoked in the test is still one expressio
   // builtins such as Reflect.apply and Function.prototype.call have no frame of their own: the test invokes the method
   ;(Reflect.apply(app.getUser, app, [2]) as any).name.returns('bob')
   ;(Function.prototype.call.call(app.getUser, app, 3) as any).name.returns('cid')
-  t.is(inspect(app), '@Substitute {\n}', 'the setups recorded nothing')
+  // E24 (round 7): the root also shows the setups of its auto-substitutes, under their paths; nothing is recorded
+  t.is(inspect(app), "@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(3)\n    logger.child('x').info => returns(undefined)\n" +
+    "    getUser(1).name => returns('ann')\n    getUser(2).name => returns('bob')\n    getUser(3).name => returns('cid')\n}", 'the setups recorded nothing')
   t.is(app.getCalc().add(1, 2), 3)
   t.is(app.getUser(1).name, 'ann')
   t.is(app.getUser(2).name, 'bob')

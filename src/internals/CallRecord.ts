@@ -30,6 +30,8 @@ export class CallRecord {
   public twin?: CallRecord
   /** True on the direct-call reading of such an invocation. */
   public directReading?: boolean
+  /** E23: true when the invocation was a construction (`new sub.Client(url)`), which messages show with `new`. */
+  public constructed?: boolean
 
   constructor(
     public kind: RecordKind,

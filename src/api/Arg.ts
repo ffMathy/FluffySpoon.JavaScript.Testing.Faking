@@ -153,7 +153,18 @@ const anyPredicateFor = (type: string): PredicateFunction<unknown> => {
   return predicate
 }
 
+// E28: the type names Arg.any understands at runtime ('bigint' as well). Another name would silently never match, and its
+// `.not` form would match everything, so it is refused right away, as Arg.is refuses a predicate that is not a function.
+const anyTypes: readonly string[] = ['any', 'string', 'number', 'boolean', 'symbol', 'undefined', 'object', 'function', 'array', 'bigint']
+
 const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
+  if (typeof type !== 'string' || anyTypes.indexOf(type) === -1) {
+    const name = options?.inverseMatch ? 'Arg.any.not' : 'Arg.any'
+    throw new TypeError(
+      `${name} expects one of ${anyTypes.map(name => `'${name}'`).join(', ')} (or no argument for 'any'), ` +
+      `but received ${describeInvalidPredicate(type)}.`
+    )
+  }
   const description = `Arg.any{${type}}`
   return new Argument(description, anyPredicateFor(type), options)
 }

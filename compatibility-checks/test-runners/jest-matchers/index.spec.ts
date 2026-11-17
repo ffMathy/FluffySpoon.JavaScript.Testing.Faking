@@ -61,3 +61,43 @@ describe('P28 jest matchers compare a substitute by identity', () => {
     expect([1, logger]).toContainEqual(logger)
   })
 })
+
+// Round 7 (E24-E26): printing, freezing and the `in` operator of substitutes, as jest's matchers and pretty-format see
+// them. jest's equality and pretty-format never use `in` on a function, and pretty-format prints a function as
+// `[Function <its name>]`, so a substitute shows the path of its `name` member.
+describe('R7 jest matchers and pretty-format with printing, frozen substitutes and the in operator', () => {
+  test('E24 a substitute in a failure message is shown by its path, without the old internal label', () => {
+    const app = Substitute.for<{ logger: Logger }>()
+    const message = failureOf(() => expect(app.logger).toBe(42)).message
+    expect(message).toContain('[Function @Substitute.logger.name]')
+    expect(message).not.toContain('property<')
+  })
+
+  test('E25 a frozen substitute still compares by identity and is printed', () => {
+    const logger = Object.freeze(Substitute.for<Logger>())
+    const other = Substitute.for<Logger>()
+    expect(Object.isFrozen(logger)).toBe(true)
+    expect(logger).toEqual(logger)
+    expect({ logger }).toEqual({ logger })
+    expectAssertionFailure(failureOf(() => expect(logger).toEqual(other)), 'toEqual')
+    const fn = jest.fn()
+    fn(logger)
+    expect(fn).toHaveBeenCalledWith(logger)
+    expectAssertionFailure(failureOf(() => expect(fn).toHaveBeenCalledWith(other)), 'toHaveBeenCalledWith')
+  })
+
+  test('E26 configured members are in the substitute, and the matchers behave as before', () => {
+    const settings = Substitute.for<{ level: number, flush(): void }>()
+    settings.level.returns(3)
+    expect('level' in settings).toBe(true)
+    expect('other' in settings).toBe(false)
+    expect(settings).toHaveProperty('level', 3)
+    expect(jest.isMockFunction(settings)).toBe(false)
+    const fn = jest.fn()
+    fn(settings)
+    expect(fn).toHaveBeenCalledWith(settings)
+    expectAssertionFailure(failureOf(() => expect(fn).toHaveBeenCalledWith(Substitute.for())), 'toHaveBeenCalledWith')
+    jest.clearAllMocks()
+    expect(settings.level).toBe(3)
+  })
+})

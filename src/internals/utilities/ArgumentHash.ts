@@ -876,9 +876,20 @@ let lastContentUses: ReadonlySet<object> | undefined
 let lastShapeUses: ReadonlySet<object> | undefined
 let lastWide = false
 
+/**
+ * E22: the number of arguments without the trailing undefined ones. An omitted trailing argument compares as undefined
+ * (see RecordedArguments), so `f(1)` and `f(1, undefined)` are equal argument lists and must hash alike.
+ */
+const argumentCount = (args: readonly unknown[]): number => {
+  let count = args.length
+  while (count > 0 && args[count - 1] === undefined) count--
+  return count
+}
+
 const hashList = (args: readonly unknown[]): number => {
-  let h = mix(Tag.Array, args.length)
-  for (let index = 0; index < args.length; index++) h = mix(h, hashValue(args[index], BUDGET, 0, true))
+  const count = argumentCount(args)
+  let h = mix(Tag.Array, count)
+  for (let index = 0; index < count; index++) h = mix(h, hashValue(args[index], BUDGET, 0, true))
   return h
 }
 
@@ -940,8 +951,9 @@ export const refinedStructuralHash = (value: unknown): number => hashing(true, n
  * substitutions uses it to see that no substitution can match a call before it computes the structural hash.
  */
 export const coarseHashArguments = (args: readonly unknown[]): number => {
-  let h = mix(Tag.Array, args.length)
-  for (let index = 0; index < args.length; index++) {
+  const count = argumentCount(args)
+  let h = mix(Tag.Array, count)
+  for (let index = 0; index < count; index++) {
     const value = args[index]
     h = mix(h, typeof value === 'object' && value !== null ? Tag.Object : shallowHash(value))
   }
@@ -953,9 +965,10 @@ export const coarseHashArguments = (args: readonly unknown[]): number => {
  * arguments (the structural hash already finds the same arguments then).
  */
 export const identityHashArguments = (args: readonly unknown[]): number | undefined => {
-  let h = mix(Tag.Identity, args.length)
+  const count = argumentCount(args)
+  let h = mix(Tag.Identity, count)
   let hasObject = false
-  for (let index = 0; index < args.length; index++) {
+  for (let index = 0; index < count; index++) {
     const value = args[index]
     if (typeof value === 'object' && value !== null) {
       hasObject = true
