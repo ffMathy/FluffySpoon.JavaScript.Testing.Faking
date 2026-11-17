@@ -1,5 +1,5 @@
 import { SELF, keyToString } from './Constants'
-import { formatArgument, withPrintGuard } from './utilities'
+import { PATH_BOUNDS, formatBounded, withPrintGuard } from './utilities'
 
 /*
  * The paths of auto-substitutes (`@Substitute.logger`, `@Substitute.getUser(1).name`), as printouts and messages show
@@ -31,7 +31,8 @@ const isPrimitive = (value: unknown): boolean => value === null || (typeof value
 /**
  * The arguments of a call as a path shows them: `(1, { id: 1 })`, objects one level deep, substitutes by their paths
  * (printed under the print guard, so that a substitute among the arguments is never printed in full), errors without
- * their stack (E40). `entry`: the call whose arguments these are (see above).
+ * their stack (E40, E45), each one bounded (E44, PATH_BOUNDS: a few keys and items, at most 200 characters), at most
+ * 10 of them. `entry`: the call whose arguments these are (see above).
  */
 export const pathArguments = (args: readonly unknown[] | undefined, entry?: object): string => {
   const values = args ?? []
@@ -40,7 +41,10 @@ export const pathArguments = (args: readonly unknown[] | undefined, entry?: obje
   if (entry !== undefined) formatting.add(entry)
   argumentNesting++
   try {
-    return `(${withPrintGuard(() => values.map(value => formatArgument(value, { depth: 0, colors: false, breakLength: Infinity })).join(', '))})`
+    const shown = values.length > PATH_BOUNDS.maxArrayLength ? values.slice(0, PATH_BOUNDS.maxArrayLength) : values
+    const texts = withPrintGuard(() => shown.map(value => formatBounded(value, PATH_BOUNDS, false)))
+    if (values.length > shown.length) texts.push(`... ${values.length - shown.length} more arguments`)
+    return `(${texts.join(', ')})`
   } catch {
     return '(...)'
   } finally {
