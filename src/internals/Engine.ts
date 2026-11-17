@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, pathArguments } from './SubstituteState'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
@@ -51,43 +51,84 @@ const newTarget = (print: Printer): any => {
 
 const memberLabel = (key: PropertyKey) => key === SELF ? 'call' : keyToString(key)
 
+/** A member relative to the printed substitute: `info`, `logger.info`, `getUser(1).name` ('' for the substitute itself). */
+const memberWithin = (prefix: string, key: PropertyKey): string =>
+  key === SELF ? prefix : prefix === '' ? keyToString(key) : `${prefix}.${keyToString(key)}`
+
+/** An auto-substitute relative to the printed substitute: `logger`, `getUser(1)`, `logger.child('x')`. */
+const entryWithin = (prefix: string, entry: AutoEntry): string => {
+  const member = memberWithin(prefix, entry.key)
+  return entry.kind === 'get' ? member : `${member}${pathArguments(entry.argumentList)}`
+}
+
+/**
+ * The received calls and setups of a substitute and (E24) of its auto-substitutes, which are shown under their paths
+ * relative to it (`logger.info('started')`, `logger.level => returns(3)`): the calls in the order they were made, the
+ * setups in the order they were configured. An empty list means that there is nothing to show.
+ */
+const stateLines = (state: SubstituteState, colors: boolean): string[] => {
+  const records: Array<{ record: CallRecord, prefix: string }> = []
+  const substitutions: Array<{ substitution: Substitution, prefix: string }> = []
+  const visit = (current: SubstituteState, prefix: string) => {
+    for (const record of current.records) records.push({ record, prefix })
+    // 'auto' substitutions only register an auto-substitute for a nested setup, which is shown under its path
+    for (const substitution of current.substitutions()) if (substitution.method !== 'auto') substitutions.push({ substitution, prefix })
+    for (const entry of current.entries()) {
+      const nested = entry.materializedState
+      if (nested !== undefined) visit(nested, entryWithin(prefix, entry))
+    }
+  }
+  visit(state, '')
+
+  const lines: string[] = []
+  // D26: an invocation through call/apply is shown once, as its direct-call reading
+  const directReadings = new Set(records.filter(({ record }) => record.directReading === true).map(({ record }) => record))
+  const shown = records.filter(({ record }) => record.twin === undefined || record.directReading === true || !directReadings.has(record.twin))
+  if (shown.length > 0) {
+    lines.push('  received:')
+    shown.sort((a, b) => a.record.seq - b.record.seq)
+    for (const { record, prefix } of shown) {
+      const name = memberWithin(prefix, record.key)
+      const suffix = record.kind === 'call'
+        ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
+        : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
+      // E23: a construction of the substitute itself names it: `new @Substitute(url)`
+      lines.push(`    ${record.constructed === true ? `new ${name === '' ? state.path : name}` : name}${suffix}`)
+    }
+  }
+  if (substitutions.length > 0) {
+    lines.push('  configured:')
+    substitutions.sort((a, b) => a.substitution.order - b.substitution.order)
+    for (const { substitution, prefix } of substitutions) {
+      const name = memberWithin(prefix, substitution.key)
+      const args = substitution.kind === 'call' ? formatArguments(substitution.args?.value, colors) : ''
+      const values = substitution.values.map(value => formatValue(value, colors)).join(', ')
+      lines.push(`    ${name}${args} => ${substitution.method}(${values})`)
+    }
+  }
+  return lines
+}
+
 const printState = (state: SubstituteState, colors: boolean): string => {
   if (isPrinting()) return state.path
   return withPrintGuard(() => {
-    const lines: string[] = []
-    const records = state.records
-    // D26: an invocation through call/apply is shown once, as its direct-call reading
-    const directReadings = new Set(records.filter(record => record.directReading === true))
-    const shown = records.filter(record => record.twin === undefined || record.directReading === true || !directReadings.has(record.twin))
-    if (shown.length > 0) {
-      lines.push('  received:')
-      for (const record of shown) {
-        const name = record.key === SELF ? '' : keyToString(record.key)
-        const suffix = record.kind === 'call'
-          ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
-          : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''
-        // E23: a construction of the substitute itself names it: `new @Substitute(url)`
-        lines.push(`    ${record.constructed === true ? `new ${name === '' ? state.path : name}` : name}${suffix}`)
-      }
-    }
-    const substitutions = state.substitutions()
-    if (substitutions.length > 0) {
-      lines.push('  configured:')
-      for (const substitution of substitutions) {
-        const name = substitution.key === SELF ? '' : keyToString(substitution.key)
-        const args = substitution.kind === 'call' ? formatArguments(substitution.args?.value, colors) : ''
-        const values = substitution.method === 'auto' ? '' : substitution.values.map(value => formatValue(value, colors)).join(', ')
-        lines.push(`    ${name}${args} => ${substitution.method}(${values})`)
-      }
-    }
+    const lines = stateLines(state, colors)
     return `${state.path} {${lines.length > 0 ? '\n' + lines.join('\n') : ''}\n}`
   })
 }
 
+/**
+ * E24: an auto-substitute prints as its path (`@Substitute.logger`), followed by its received calls and setups when it
+ * has any, like a substitute. Inside another printout (an argument in a message, a nested value) only the path is shown.
+ */
 const printFace = (face: Face, colors: boolean): string => {
   if (!(face instanceof AutoEntry)) return printState(face, colors)
-  if (face.kind === 'get') return `property<${memberLabel(face.key)}>: `
-  return withPrintGuard(() => `method<${memberLabel(face.key)}>: ${formatArguments(face.args?.value, colors)}`)
+  const state = face.materializedState
+  if (state === undefined || isPrinting()) return face.path
+  return withPrintGuard(() => {
+    const lines = stateLines(state, colors)
+    return lines.length === 0 ? face.path : `${face.path} {\n${lines.join('\n')}\n}`
+  })
 }
 
 const special = (property: SpecialProperty, print: Printer, internal: unknown): any => {
@@ -735,7 +776,7 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     }
     return value
   }
-  const print: Printer = () => `property<${memberLabel(key)}>: `
+  const print: Printer = () => state.memberPath(key)
   return new Proxy(newTarget(print), {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
@@ -983,7 +1024,7 @@ const nestedSetupTarget = (state: SubstituteState, key: PropertyKey, specificati
  * `sub.received(Arg.any()).add(1)` reports the invalid count (D10) instead of configuring something silently.
  */
 const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, stringAssertion = false): any => {
-  const print: Printer = options => withPrintGuard(() => `method<${memberLabel(key)}>: ${formatArguments(specification.value, colorsOf(options))} (configure)`)
+  const print: Printer = () => `${state.memberPath(key)}${pathArguments(specification.value)} (configure)`
   const assertionCount = (start: Function): ExpectedCount =>
     key === 'didNotReceive' ? 0 : validateExpectedCount(specification.value?.[0], start)
   return new Proxy(newTarget(print), {

@@ -304,5 +304,6 @@ test('D18 assertion messages', t => {
   t.regex(plain(selfError.message), /Expected to receive 1 method call matching @Substitute\(3\), but received none\./)
 
   t.is(inspect(Substitute.for<any>()), '@Substitute {\n}')
-  t.is(`${substitute.someProperty}`, 'property<someProperty>: ')
+  // E24 (round 7): an auto-substitute prints as its path
+  t.is(`${substitute.someProperty}`, '@Substitute.someProperty')
 })

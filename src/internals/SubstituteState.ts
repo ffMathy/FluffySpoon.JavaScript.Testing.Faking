@@ -4,7 +4,7 @@ import { CallRecord, RecordKind, currentSequence } from './CallRecord'
 import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
-import { coarseHashArguments, hashArguments, identityHashArguments, lastHashWasApproximate, refinedHashArguments } from './utilities'
+import { coarseHashArguments, hashArguments, identityHashArguments, lastHashWasApproximate, refinedHashArguments, withPrintGuard } from './utilities'
 
 let substitutionOrder = 0
 
@@ -182,6 +182,12 @@ export class AutoEntry {
     return this._state
   }
 
+  /** E24: the path of this auto-substitute (`@Substitute.logger`, `@Substitute.getUser(1)`), without creating its state. */
+  public get path(): string {
+    const path = memberPath(this.parent, this.key)
+    return this.kind === 'get' ? path : `${path}${pathArguments(this.argumentList)}`
+  }
+
   /** Notes that the operation of `record` hands out this entry's proxy. */
   public handOut(record: CallRecord): void {
     this._handedOutBy = record
@@ -321,12 +327,16 @@ class CallSubstitutions {
 const memberPath = (state: SubstituteState, key: PropertyKey): string =>
   key === SELF ? state.path : `${state.path}.${keyToString(key)}`
 
-const shortArguments = (args: RecordedArguments | undefined): string => {
-  const values = args?.value ?? []
+/**
+ * The arguments of a call as a path shows them: `(1, { id: 1 })`, objects one level deep, substitutes by their paths
+ * (printed under the print guard, so that a substitute among the arguments is never printed in full).
+ */
+export const pathArguments = (args: readonly unknown[] | undefined): string => {
+  const values = args ?? []
   try {
-    return values.map(value => inspect(value, { depth: 0, colors: false, breakLength: Infinity })).join(', ')
+    return `(${withPrintGuard(() => values.map(value => inspect(value, { depth: 0, colors: false, breakLength: Infinity })).join(', '))})`
   } catch {
-    return '...'
+    return '(...)'
   }
 }
 
@@ -353,10 +363,7 @@ export class SubstituteState {
   constructor(public readonly owner?: AutoEntry) { }
 
   public get path(): string {
-    const owner = this.owner
-    if (owner === undefined) return '@Substitute'
-    const path = memberPath(owner.parent, owner.key)
-    return owner.kind === 'get' ? path : `${path}(${shortArguments(owner.args)})`
+    return this.owner === undefined ? '@Substitute' : this.owner.path
   }
 
   public memberPath(key: PropertyKey): string {

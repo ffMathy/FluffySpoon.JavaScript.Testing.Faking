@@ -359,3 +359,78 @@ test('R6FE-3 (E23) a mimicked class, or a class given to mimicks(), is construct
   factories.called(Arg.any()).mimicks(Real as any)
   t.throws(() => factories.called(1), { instanceOf: TypeError }, 'a call of a mimicked class still calls it')
 })
+
+// ---- E24: printing auto-substitutes ---------------------------------------------------------------
+
+/** Code under test that uses a logger it gets from the application. */
+const start = (app: any) => {
+  app.logger.info('started')
+  app.logger.info('x')
+}
+
+test('R6FE-1 (E24) an auto-substitute prints its path, and its setups and received calls when it has any', t => {
+  const app = Substitute.for<any>()
+  app.logger.level.returns(3)
+  start(app)
+  const logger = app.logger
+  const expected = "@Substitute.logger {\n  received:\n    info('started')\n    info('x')\n  configured:\n    level => returns(3)\n}"
+  t.is(String(logger), expected)
+  t.is(inspect(logger), expected)
+  t.is(`${logger}`, expected)
+
+  // nothing to show: only the path, without a dangling ': '
+  t.is(String(app.other), '@Substitute.other')
+  t.is(inspect(app.getUser(1)), '@Substitute.getUser(1)')
+  t.is(`${app.a.b('x', { id: 1 }).c}`, "@Substitute.a.b('x', { id: 1 }).c")
+  const fn = Substitute.for<any>()
+  t.is(String(fn('saved')), "@Substitute('saved')")
+
+  const user = (() => app.getUser(2))()
+  user.name.returns('ann')
+  t.is(inspect(user), "@Substitute.getUser(2) {\n  configured:\n    name => returns('ann')\n}")
+  t.is(inspect({ user, n: 1 }), "{\n  user: @Substitute.getUser(2) {\n    configured:\n      name => returns('ann')\n  },\n  n: 1\n}")
+})
+
+test('R6FE-1 (E24) the root shows the setups and calls of its auto-substitutes under their paths, in order', t => {
+  const app = Substitute.for<any>()
+  app.logger.level.returns(3)
+  app.getUser(1).name.returns('ann')
+  start(app)
+  app.save({ id: 1 })
+  t.is(inspect(app), [
+    '@Substitute {',
+    '  received:',
+    '    logger',
+    "    logger.info('started')",
+    '    logger',
+    "    logger.info('x')",
+    '    save({ id: 1 })',
+    '  configured:',
+    '    logger.level => returns(3)',
+    "    getUser(1).name => returns('ann')",
+    '}'
+  ].join('\n'))
+  t.is(inspect(Substitute.for<any>()), '@Substitute {\n}', 'an empty substitute is unchanged')
+})
+
+test('R6FE-1 (E24) an auto-substitute among the arguments of a failure message, or of another printout, shows its path', t => {
+  const bus = Substitute.for<any>()
+  const user = Substitute.for<any>()
+  const app = Substitute.for<any>()
+  app.child.name.returns('configured, but only the path is shown')
+  bus.emit('created', user)
+  bus.emit('created', app.child)
+  const message = messageOf(() => bus.received(1).emit('deleted', user))
+  t.true(message.includes("› ✘ @Substitute.emit('created', @Substitute)\n"))
+  t.true(message.includes("› ✘ @Substitute.emit('created', @Substitute.child)\n"))
+  t.false(message.includes('property<'))
+  t.is(inspect(bus), "@Substitute {\n  received:\n    emit('created', @Substitute)\n    emit('created', @Substitute.child)\n}")
+  t.is(String(app.save(app.child)), '@Substitute.save(@Substitute.child)')
+
+  // the other views of a member print their paths too
+  const both = Substitute.for<any>()
+  both.value(2).returns(3)
+  both.value.returns(1)
+  t.is(String(both.value), '@Substitute.value', 'a member configured as a property and as a method')
+  t.is(String(both[configure]().make(Arg.any())), '@Substitute.make(Arg.any{any}) (configure)')
+})

@@ -104,7 +104,8 @@ test('ENG2-1 (D25) a chain written over several lines in one function is still o
     .getCalc()
     .add(1, 2)
     .returns(99)
-  t.is(inspect(app), '@Substitute {\n}', 'nothing of the setup is recorded')
+  // E24 (round 7): the root also shows the setups of its auto-substitutes, under their paths
+  t.is(inspect(app), '@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(99)\n}', 'nothing of the setup is recorded')
   t.is(app.getCalc().add(1, 2), 99)
   app.received(1).getCalc()
 
@@ -136,7 +137,7 @@ test('ENG2-1 (D25) chains in a helper function in the same file as the code unde
 
   const app = Substitute.for<any>()
   arrangeCalculator(app)
-  t.is(inspect(app), '@Substitute {\n}')
+  t.is(inspect(app), '@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(99)\n}')
   t.is(app.getCalc().add(1, 2), 99)
 })
 
@@ -161,7 +162,7 @@ test('ENG2-1 (D25) without stack frames (Error.stackTraceLimit = 0) adjacency al
   try {
     const app = Substitute.for<any>()
     app.getCalc().add(1, 2).returns(99)
-    t.is(inspect(app), '@Substitute {\n}')
+    t.is(inspect(app), '@Substitute {\n  configured:\n    getCalc().add(1, 2) => returns(99)\n}')
     t.is(app.getCalc().add(1, 2), 99)
 
     // the fallback: a setup right after the call that returned the value retracts that call...
@@ -264,7 +265,8 @@ test('ENG2-4 (D26) members named call/apply/bind keep their member reading', t =
   t.notThrows(() => shop.rpc[received](1)(1))
   t.throws(() => shop.rpc[received](1)(2), { instanceOf: SubstituteException })
   t.notThrows(() => shop.received(1).socket, 'socket was only read: the bind call is a call of its member bind')
-  t.is(inspect(shop), "@Substitute {\n  received:\n    discount() via .apply({ total: 10 })\n    socket\n    rpc(1) via .call('getUser', 1)\n}")
+  // E24 (round 7): the call of socket's member bind is shown under its path
+  t.is(inspect(shop), "@Substitute {\n  received:\n    discount() via .apply({ total: 10 })\n    socket\n    socket.bind(8080)\n    rpc(1) via .call('getUser', 1)\n}")
   const message = messageOf(() => shop.received(2).rpc(1))
   t.true(message.includes("› ✔ @Substitute.rpc(1) via .call('getUser', 1)"))
 
