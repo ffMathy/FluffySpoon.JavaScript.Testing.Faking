@@ -1,6 +1,7 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
 import { SubstituteException } from './SubstituteException'
+import { FAMILY_KEYS, forgetListings, isInFamily, noteListing } from './utilities/ArgumentHash'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -72,45 +73,86 @@ const dataValue = (object: object, key: PropertyKey): unknown => {
  * checked for being a matcher themselves.
  * The keys of an object can only be counted by listing them all, which is slow for a wide one (a millisecond for
  * 10,000 keys), so an object found too wide once is remembered (weakly) and never listed again: an object shared by
- * many calls, such as a lookup table, costs nothing after its first call.
+ * many calls, such as a lookup table, costs nothing after its first call. E13: so is a container with more than
+ * REMEMBERED_ITEMS items or keys that was searched in full (no bound left out anything inside it) and holds no matcher.
+ * Mutating an argument after it was passed is not supported (amended D15/D35): a matcher put into such a container
+ * later is not seen.
  */
 const SCAN_BUDGET = 1024
 const MAX_SCAN_DEPTH = 32
-const MAX_SCANNED_ITEMS = 1024
+const MAX_SCANNED_ITEMS = FAMILY_KEYS - 1 // 1024
 const SCAN_ITEMS = 32768
+const REMEMBERED_ITEMS = 256
 
-const tooWideToSearch = new WeakSet<object>()
+/** Containers that are never searched again: too wide to be searched, or wide and searched in full without a matcher. */
+const notSearched = new WeakSet<object>()
 
-/** One search: the argument, the containers searched so far (created once a nested one is reached), the items left. */
-type Search = { root: object, visited: Set<object> | undefined, items: number }
+/**
+ * One search: the argument, the containers searched so far (created once a nested one is reached; true for those
+ * searched in full), the items left, and how often a bound left something out (`cuts`: then the containers around it
+ * are not remembered as searched).
+ */
+type Search = { root: object, visited: Map<object, boolean> | undefined, items: number, cuts: number }
 
-const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean =>
-  isArgumentMatcher(item) || (budget > 0 && depth < MAX_SCAN_DEPTH && isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search))
+const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean => {
+  if (isArgumentMatcher(item)) return true
+  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search)
+  if (typeof item === 'object' && item !== null) search.cuts++
+  return false
+}
 
 /** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
 const holdsMatcher = (container: object, budget: number, depth: number, search: Search): boolean => {
+  if (notSearched.has(container)) return false
+  const cuts = search.cuts
   if (depth > 0) {
-    const visited = search.visited ?? (search.visited = new Set([search.root]))
-    if (visited.has(container)) return false // searched already (or being searched further up)
-    visited.add(container)
+    const visited = search.visited ?? (search.visited = new Map([[search.root, false]]))
+    const searched = visited.get(container)
+    if (searched !== undefined) {
+      // searched already (without a matcher), or being searched further up: left out unless it was searched in full
+      if (!searched) search.cuts++
+      return false
+    }
+    visited.set(container, false)
   }
+  const found = holdsMatcherInside(container, budget, depth, search)
+  if (!found && depth > 0 && search.cuts === cuts) search.visited!.set(container, true)
+  return found
+}
+
+const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search): boolean => {
+  const cuts = search.cuts
   if (Array.isArray(container)) {
     const length = container.length
-    if (length > MAX_SCANNED_ITEMS || length > search.items) return false
+    if (length > MAX_SCANNED_ITEMS) return false
+    if (length > search.items) {
+      search.cuts++
+      return false
+    }
     search.items -= length
     const share = Math.floor((budget - 1) / length)
     for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search)) return true
+    if (length > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
     return false
   }
-  if (tooWideToSearch.has(container)) return false
+  // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
+  if (isInFamily(container)) {
+    notSearched.add(container)
+    return false
+  }
   const keys = Object.keys(container)
   const symbols = Object.getOwnPropertySymbols(container)
   const count = keys.length + symbols.length
   if (count > MAX_SCANNED_ITEMS) {
-    tooWideToSearch.add(container)
+    notSearched.add(container)
+    // E13: the hash, which comes next, takes the keys from here
+    noteListing(container, symbols.length === 0 ? keys : [...keys, ...symbols.filter(symbol => Object.prototype.propertyIsEnumerable.call(container, symbol))])
     return false
   }
-  if (count > search.items) return false
+  if (count > search.items) {
+    search.cuts++
+    return false
+  }
   search.items -= count
   const share = Math.floor((budget - 1) / count)
   for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search)) return true
@@ -118,7 +160,63 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
     const symbol = symbols[index]
     if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search)) return true
   }
+  if (count > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
   return false
+}
+
+/** Wide containers whose search left something out, and that cannot be shown to hold no matcher anywhere (see below). */
+const unproven = new WeakSet<object>()
+
+/**
+ * Remembers a wide container that holds no matcher within the bounds of its search. When the bounds left something
+ * out (a record's nested object without a share of the budget), it is searched once more, without budgets (see
+ * holdsNoMatcherAtAll), so that a shared table of records is searched in full once instead of in part on every call.
+ */
+const rememberSearched = (container: object, inFull: boolean): void => {
+  if (inFull) notSearched.add(container)
+  else if (!unproven.has(container)) {
+    if (holdsNoMatcherAtAll(container)) notSearched.add(container)
+    else unproven.add(container)
+  }
+}
+
+/**
+ * Whether no matcher can be found in a container in any search: one that looks at everything inside it that a search
+ * could reach from it (each container once, with no budgets, MAX_SCAN_DEPTH levels below it, containers that are never
+ * searched left out) and finds no matcher, within SCAN_ITEMS items (beyond them, nothing is known).
+ */
+const holdsNoMatcherAtAll = (root: object): boolean => {
+  const seen = new Set<object>([root])
+  const pending: Array<[object, number]> = [[root, 0]]
+  let items = SCAN_ITEMS
+  const look = (value: unknown, depth: number): boolean => {
+    if (isArgumentMatcher(value)) return false
+    if (depth < MAX_SCAN_DEPTH && isPlainContainer(value) && !seen.has(value) && !notSearched.has(value)) {
+      seen.add(value)
+      pending.push([value, depth])
+    }
+    return true
+  }
+  while (pending.length > 0) {
+    const [container, depth] = pending.pop()!
+    if (Array.isArray(container)) {
+      if (container.length > MAX_SCANNED_ITEMS) continue
+      if ((items -= container.length) < 0) return false
+      for (let index = 0; index < container.length; index++) if (!look(container[index], depth + 1)) return false
+      continue
+    }
+    if (isInFamily(container)) continue
+    const keys = Object.keys(container)
+    const symbols = Object.getOwnPropertySymbols(container)
+    if (keys.length + symbols.length > MAX_SCANNED_ITEMS) continue
+    if ((items -= keys.length + symbols.length) < 0) return false
+    for (let index = 0; index < keys.length; index++) if (!look(dataValue(container, keys[index]), depth + 1)) return false
+    for (let index = 0; index < symbols.length; index++) {
+      const symbol = symbols[index]
+      if (Object.prototype.propertyIsEnumerable.call(container, symbol) && !look(dataValue(container, symbol), depth + 1)) return false
+    }
+  }
+  return true
 }
 
 /**
@@ -128,7 +226,7 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS })
+    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 })
   } catch {
     return false
   }
@@ -295,8 +393,12 @@ export class RecordedArguments {
     return true
   }
 
-  /** Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). */
+  /**
+   * Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). The first
+   * look at the arguments of an invocation: it starts the operation's notes of listed keys afresh (see noteListing).
+   */
   static containsMatchers(rawArguments: readonly unknown[]): boolean {
+    forgetListings()
     for (const argument of rawArguments) if (isArgumentMatcher(argument) || containsNestedMatcher(argument)) return true
     return false
   }
