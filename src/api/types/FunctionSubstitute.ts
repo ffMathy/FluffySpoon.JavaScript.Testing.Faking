@@ -374,10 +374,17 @@ type FullSignatures<TOverloads extends any[], TView extends SubstituteView, TFun
   FullSignature<TOverloads[2], TView, TFunction> & FullSignature<TOverloads[3], TView, TFunction> &
   FullSignature<TOverloads[4], TView, TFunction> & FullSignature<TOverloads[5], TView, TFunction> &
   FullSignature<TOverloads[6], TView, TFunction> & FullSignature<TOverloads[7], TView, TFunction>
+// Left out for a list of required parameters: the prefix signature with all its parameters is the same signature, and
+// having it twice made TypeScript 3.7 and 3.8 check a union of 60 variants 8 times slower. (Not for an empty list,
+// whose prefix signature comes last: a call without arguments resolves to the signatures of the variants without
+// parameters first.)
 type FullSignature<TOverload, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
-  PrefixSignatureOf<UnnamedArguments<TOverload['arguments']>, UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
+  (RequiredParametersOnly<TOverload['arguments']> extends true ? unknown :
+    PrefixSignatureOf<UnnamedArguments<TOverload['arguments']>, UnnamedArguments<TOverload['arguments']>, TView, TFunction>) :
   unknown
+type RequiredParametersOnly<A extends any[]> =
+  MaximumArguments<A> extends 0 ? false : MinimumArguments<A> extends MaximumArguments<A> ? true : false
 type ArgumentCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 type ArgumentCounts = [[], [any], [any, any], [any, any, any], [any, any, any, any], [any, any, any, any, any],
   [any, any, any, any, any, any], [any, any, any, any, any, any, any]]
