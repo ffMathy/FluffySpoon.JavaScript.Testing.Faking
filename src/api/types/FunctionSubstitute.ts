@@ -205,10 +205,38 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // with `get()`, and `.returns()` took only what both return. In this order a signature can only be paired with an
 // earlier one that requires as many arguments (`fetch(url, options?)` with `fetch(url)`); as each of the two accepts
 // some calls of the other, their results usually take the same values (see `UnionReturnTypes`).
+//
+// Fast path (T44, R6V-5, R6TD-2): when every overload of every variant returns the same type (`void` for the
+// `addEventListener` of all lib.dom elements, `Promise<string>` for `fetch(url)` and `fetch(url, options?)`), the
+// parameter lists alone tell the calls apart, and every call returns that type. The member then has one positional
+// signature per overload position (`Overloads` slot), whose rest parameter is the union of the parameter lists that
+// the variants declare in that position, plus the `Arg.all()` signatures, all returning that type. TypeScript checks
+// the arguments against that union as a whole, so they keep their combinations. A callback argument without parameter
+// types is typed from the variants' callback types when these differ at most in their `this` type; otherwise it gets
+// no contextual type (spec-types/limitations.ts). These signatures are computed from the whole member type, the same
+// for every variant, without comparing the variants with each other: `UnionToIntersection` below compares every box
+// with every other one, which made large unions slow to check (all lib.dom elements: 1.6 to 1.8 times as long as
+// before T42 on TypeScript 3.6 to 3.8).
 type CombinedSignatures<TFunction, TView extends SubstituteView> =
   false extends EachCallable<TFunction> ? unknown :
+  ReturnsAlike<TFunction> extends true ? SameReturnSignatures<TFunction, AllReturnTypes<TFunction>, TView> :
   SignaturesOfBoxes<UnionToIntersection<EachBox<TFunction, TView, TFunction>>>
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
+type ReturnsAlike<TFunction> = false extends EachReturnsAll<TFunction, AllReturnTypes<TFunction>> ? false : true
+// The parameter lists of the overloads in slot `TSlot` of the variants (all slots for `number`). The parameter names
+// are kept: removing them (`UnnamedArguments`) costs more than the duplicates it would remove.
+type SlotParameterLists<TVariant, TSlot extends number> =
+  TVariant extends unknown ? ParameterListsOf<Overloads<TVariant>[TSlot]> : never
+type ParameterListsOf<TOverload> = TOverload extends Overload<any[], any> ? TOverload['arguments'] : never
+type SameReturnSignatures<F, R, V extends SubstituteView> =
+  SlotSignature<SlotParameterLists<F, 0>, R, V> & SlotSignature<SlotParameterLists<F, 1>, R, V> &
+  SlotSignature<SlotParameterLists<F, 2>, R, V> & SlotSignature<SlotParameterLists<F, 3>, R, V> &
+  SlotSignature<SlotParameterLists<F, 4>, R, V> & SlotSignature<SlotParameterLists<F, 5>, R, V> &
+  SlotSignature<SlotParameterLists<F, 6>, R, V> & SlotSignature<SlotParameterLists<F, 7>, R, V> &
+  AllArgumentsSignaturesFor<Extract<SlotParameterLists<F, number>, any[]>, R, V, never>
+// Not distributive: one signature for the whole union of parameter lists.
+type SlotSignature<A, R, V extends SubstituteView> =
+  [A] extends [never] ? unknown : PositionalSignatureOf<Extract<A, any[]>, R, V, never>
 type SignaturesOfBoxes<TBoxes> = TBoxes extends SignatureBox ?
   TBoxes[6] & TBoxes[5] & TBoxes[4] & TBoxes[3] & TBoxes[2] & TBoxes[1] & TBoxes[0] & TBoxes['allArguments'] :
   never

@@ -90,4 +90,14 @@ drawing.draw(1, 2, 3).returns('solid')
 drawing.draw(1, 2, 3).returns('flat')
 ;(drawing as SubstituteOf<Plot>).draw(1, 2, 3).returns('flat')
 
+// Concrete unions whose variants declare a method with different parameter lists but the same return type (T44, R6V-5,
+// R6TD-2): a callback argument whose parameters have no type annotation gets no contextual type when the variants'
+// callback types differ in more than their `this` type (the media and body elements of lib.dom have their own event
+// maps). Annotate the callback's parameters.
+type AnyElement = HTMLElementTagNameMap[keyof HTMLElementTagNameMap]
+const anyElement = Substitute.for<AnyElement>()
+// @ts-expect-error `event` implicitly has an `any` type
+anyElement.addEventListener('click', event => event.preventDefault())
+anyElement.addEventListener('click', (event: Event) => event.preventDefault())
+
 export { found }
