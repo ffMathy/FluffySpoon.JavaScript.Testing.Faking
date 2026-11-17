@@ -793,14 +793,16 @@ const NO_SELF: Self = { thisArg: undefined, explicit: false }
  * (Reflect.construct(RealBase, args, newTarget)), and a construction that nothing answers with an object gives a new
  * object with newTarget.prototype (not the cached auto-substitute of the call). The call is recorded either way.
  */
-const constructing = (newTarget: unknown): Self => ({
-  thisArg: undefined,
-  explicit: false,
-  construct: true,
-  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another). A subclass of a substitute
-  // inherits its marker, but it is not a proxy.
-  newTarget: typeof newTarget === 'function' && !(types.isProxy(newTarget) && isSubstituteProxy(newTarget)) ? newTarget : undefined
-})
+const CONSTRUCT: Self = { thisArg: undefined, explicit: false, construct: true }
+
+const constructing = (newTarget: unknown): Self => {
+  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its prototype
+  // first (a substitute or an auto-substitute), then by its marker (the other values the library hands out). A subclass
+  // of a substitute inherits the marker, but it is not a proxy.
+  if (typeof newTarget !== 'function' || Object.getPrototypeOf(newTarget) === faceTargetPrototype ||
+    (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
+  return { thisArg: undefined, explicit: false, construct: true, newTarget }
+}
 
 const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
