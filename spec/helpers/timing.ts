@@ -85,7 +85,9 @@ export const assertWithin = (t: ExecutionContext, elapsed: number, limit: TimeLi
     const after = loadFactor()
     if (after > limit.factor) judged = new TimeLimit(limit.base, after)
   }
-  t.true(elapsed < judged.milliseconds, `${label}: ${elapsed.toFixed(1)} ms (${judged})`)
+  const text = `${label}: ${elapsed.toFixed(1)} ms (${judged})`
+  if (typeof t.log === 'function') t.log(text)
+  t.true(elapsed < judged.milliseconds, text)
 }
 
 /** The time `run` takes, in milliseconds. */
