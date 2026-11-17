@@ -72,10 +72,12 @@ const protocolKeys = new Set<PropertyKey>([
   // and 13.0 to 13.11 (util.promisify reads that one there)
   Symbol.for('nodejs.util.promisify.custom'),
   (promisify as { custom?: symbol }).custom,
-  'asymmetricMatch',
-  // E27: the module interop probe (TypeScript's __importDefault, Babel's interopRequireDefault, esbuild's __toESM), so
-  // that a substitute used as a whole module (a jest.mock factory, a CommonJS stand-in) is its own default export
-  '__esModule'
+  'asymmetricMatch'
+  // E34: '__esModule' is NOT a protocol key (E27 is reverted). Code compiled from ES modules reads it to decide how to
+  // import a CommonJS module, and a substitute that stands in for a whole module (a jest.mock factory) must answer it
+  // truthy, so that namespace imports (`import * as m`), named imports and Babel's mixed imports
+  // (`import m, { named }`) reach its members. Its default import is then the auto-substitute `sub.default`; a factory
+  // that returns `{ __esModule: true, default: sub }` makes it the substitute itself.
 ].filter(key => key !== undefined) as PropertyKey[])
 
 export const isProtocolKey = (property: PropertyKey): boolean => protocolKeys.has(property)

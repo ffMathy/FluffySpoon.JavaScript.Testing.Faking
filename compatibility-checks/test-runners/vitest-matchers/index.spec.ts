@@ -2,7 +2,7 @@ import { describe, expect, test, vi } from 'vitest'
 import { inspect } from 'util'
 import { Substitute, configure } from '@fluffy-spoon/substitute'
 
-// Round 7 (E24-E27): printing, freezing, the `in` operator and the __esModule probe of substitutes, as vitest's
+// Round 7 (E24-E27, E27 reverted by E34): printing, freezing, the `in` operator and the __esModule member of substitutes, as vitest's
 // matchers, its pretty-format and util.inspect see them. Unlike test-runners/vitest, this suite is expected to pass;
 // test/index.ts runs it.
 
@@ -57,12 +57,13 @@ describe('R7 vitest matchers with substitutes', () => {
     failureOf(() => expect(fn).toHaveBeenCalledWith(Substitute.for()))
   })
 
-  test('E27 a substitute is its own default export under the module interop', () => {
+  // Round 8 (E34) reverted E27: __esModule is an ordinary member again (this test asserted that it reads as undefined)
+  test('E34 __esModule is an ordinary member, so the module interop takes a substitute as a module namespace', () => {
     const mailer = Substitute.for<{ send(to: string): boolean }>()
     mailer.send('a@b.c').returns(true)
-    expect((mailer as any).__esModule).toBeUndefined()
+    expect(typeof (mailer as any).__esModule).toBe('function')
     const configured = Substitute.for<any>()
-    configured[configure]().__esModule.returns(true)
-    expect(configured.__esModule).toBe(true)
+    configured[configure]().__esModule.returns(false)
+    expect(configured.__esModule).toBe(false)
   })
 })

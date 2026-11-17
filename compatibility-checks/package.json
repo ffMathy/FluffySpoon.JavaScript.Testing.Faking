@@ -20,6 +20,8 @@
         "validate:ava": "ava test-runners/ava/**.ts",
         "validate:jest": "jest test-runners/jest/**.ts",
         "validate:jest-matchers": "jest test-runners/jest-matchers/**.ts",
+        "validate:jest-modules-ts": "jest -c jest.modules.ts-jest.config.js",
+        "validate:jest-modules-babel": "jest -c jest.modules.babel.config.js",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",
@@ -28,6 +30,9 @@
         "test": "node --require tsx/cjs --test test/index.ts test/bundlers.ts"
     },
     "devDependencies": {
+        "@babel/core": "^7.29.13",
+        "@babel/plugin-transform-modules-commonjs": "^7.29.14",
+        "@babel/preset-typescript": "^7.29.7",
         "@jest/globals": "^30.5.2",
         "@rollup/plugin-commonjs": "^29.0.3",
         "@rollup/plugin-node-resolve": "^16.0.3",
@@ -35,6 +40,7 @@
         "@types/node": "^22.20.5",
         "ansi-regex": "^6.0.1",
         "ava": "^6.4.1",
+        "babel-jest": "^30.5.2",
         "esbuild": "^0.28.2",
         "jest": "^30.5.2",
         "mocha": "^12.0.3",
