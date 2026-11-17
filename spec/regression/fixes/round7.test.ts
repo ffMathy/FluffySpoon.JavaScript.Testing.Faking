@@ -434,3 +434,153 @@ test('R6FE-1 (E24) an auto-substitute among the arguments of a failure message, 
   t.is(String(both.value), '@Substitute.value', 'a member configured as a property and as a method')
   t.is(String(both[configure]().make(Arg.any())), '@Substitute.make(Arg.any{any}) (configure)')
 })
+
+// ---- E25: freeze, seal, preventExtensions, defineProperty ------------------------------------------
+
+/** Code under test that freezes the options it is given (the case of the finding). */
+class FrozenOptionsService {
+  private readonly options: any
+  constructor(options: any) { this.options = Object.freeze(options) }
+  label() { return `${this.options.name} (${this.options.timeout})` }
+}
+
+test('R6FE-4 (E25) a frozen, sealed or non-extensible substitute keeps working', t => {
+  const options = Substitute.for<any>()
+  options.name.returns('billing')
+  options.timeout.returns(30)
+  t.is(new FrozenOptionsService(options).label(), 'billing (30)')
+  t.true(Object.isFrozen(options))
+  t.notThrows(() => options.received(1).name)
+
+  for (const [operation, change] of [['freeze', Object.freeze], ['seal', Object.seal], ['preventExtensions', Object.preventExtensions]] as const) {
+    const sub = Substitute.for<any>()
+    t.false(Object.isFrozen(sub), operation)
+    t.true(Object.isExtensible(sub), operation)
+    t.is((change as (value: unknown) => unknown)(sub), sub, operation)
+    t.false(Object.isExtensible(sub), operation)
+    t.true(Object.isFrozen(sub) && Object.isSealed(sub), `${operation}: a substitute without own properties counts as frozen`)
+    t.is(String(sub.name), '@Substitute.name', operation)
+    t.is(String(sub.length), '@Substitute.length', operation)
+    sub.f(1).returns(2)
+    t.is(sub.f(1), 2, operation)
+    sub.child.value.returns('nested')
+    t.is(sub.child.value, 'nested', operation)
+    sub.x = 1
+    t.notThrows(() => sub.received(1).x = 1, operation)
+    t.notThrows(() => sub.received(1).f(1), operation)
+    t.is(inspect(sub).split('\n')[0], '@Substitute {', operation)
+  }
+
+  // an auto-substitute can be frozen as well
+  const app = Substitute.for<any>()
+  const logger = app.logger
+  Object.freeze(logger)
+  logger.level.returns(3)
+  t.is(app.logger.level, 3)
+})
+
+test('R6FE-4 (E25) a property defined with Object.defineProperty is a real property that reads and assignments use, not recorded', t => {
+  const sub = Substitute.for<any>()
+  Object.defineProperty(sub, 'tag', { value: 1, configurable: true, writable: true, enumerable: true })
+  Object.defineProperty(sub, 'computed', { get: () => 7, configurable: true })
+  Object.defineProperty(sub, 'fixed', { value: 'f' })
+  t.is(sub.tag, 1)
+  t.is(sub.computed, 7)
+  t.is(sub.fixed, 'f')
+  sub.tag = 2
+  t.is(sub.tag, 2)
+  t.deepEqual(Object.keys(sub), ['tag'])
+  t.deepEqual(Reflect.ownKeys(sub), ['tag', 'computed', 'fixed'])
+  t.deepEqual(Object.getOwnPropertyDescriptor(sub, 'tag'), { value: 2, writable: true, enumerable: true, configurable: true })
+  t.deepEqual({ ...sub }, { tag: 2 })
+  t.true('tag' in sub)
+  t.is(inspect(sub), '@Substitute {\n}', 'reads and assignments of defined properties are not recorded')
+  t.notThrows(() => sub.didNotReceive().tag)
+  t.true(delete sub.tag)
+  t.false('tag' in sub)
+  t.is(typeof sub.tag, 'function', 'after delete, the member is an ordinary member again')
+
+  // freezing keeps the defined values, and the rules of a frozen object apply to them
+  Object.freeze(sub)
+  t.is(sub.fixed, 'f')
+  t.is(sub.computed, 7)
+  t.throws(() => { sub.fixed = 'changed' }, { instanceOf: TypeError })
+  t.is(sub.fixed, 'f')
+  t.false(Reflect.deleteProperty(sub, 'fixed'))
+})
+
+test('R6FE-4 (E25) a substitute has no own properties of its own, so nothing internal shows', t => {
+  const sub = Substitute.for<any>()
+  t.deepEqual(Reflect.ownKeys(sub), [])
+  t.deepEqual(Object.getOwnPropertyNames(sub), [])
+  t.is(Object.getOwnPropertyDescriptor(sub, 'name'), undefined)
+  t.is(Object.getOwnPropertyDescriptor(sub, 'length'), undefined)
+  t.false(Object.prototype.hasOwnProperty.call(sub, 'name'))
+  t.true(delete sub.name)
+  t.is(String(sub.name), '@Substitute.name')
+
+  // the views the library hands out refuse the change with a usage error that names the operation
+  const bound = sub.method.bind(null)
+  const freezeError = t.throws(() => Object.freeze(bound), { instanceOf: SubstituteException })
+  t.regex(freezeError.message, /^Object\.preventExtensions\(\) \(or Object\.freeze\(\), Object\.seal\(\)\) cannot be used on @Substitute\.method\.bind\(null\)/)
+  t.throws(() => Object.defineProperty(sub[configure](), 'x', { value: 1 }), { instanceOf: SubstituteException, message: /^Object\.defineProperty\(\) cannot be used on @Substitute\[configure\]\(\)/ })
+  t.throws(() => Object.seal(sub[received]()), { instanceOf: SubstituteException })
+  t.deepEqual(Reflect.ownKeys(bound), [])
+  t.is(bound(1), sub.method(1), 'the bound function still works')
+})
+
+// ---- E26: the in operator ----------------------------------------------------------------------------
+
+/** Code under test that feature-detects a member (the case of the finding). */
+const close = (stream: any) => {
+  if ('destroy' in stream) stream.destroy()
+  else stream.end()
+}
+
+test('R6FE-8 (E26) key in sub is true for keys with a setup and for keys of a mimicked instance', t => {
+  const sub = Substitute.for<any>()
+  sub.flush().returns(1)
+  sub.level.returns(3)
+  sub.cfg.port.returns(8080)
+  sub.getUser(1).name.returns('ann')
+  sub[configure]().nested(Arg.any()).value.returns(1)
+  for (const key of ['flush', 'level', 'cfg', 'getUser', 'nested']) t.true(key in sub, key)
+  t.true(Reflect.has(sub, 'flush'))
+  t.true('port' in sub.cfg)
+  t.false('other' in sub.cfg)
+
+  const stream = Substitute.for<any>()
+  stream.destroy().returns(undefined)
+  close(stream)
+  t.notThrows(() => stream.received(1).destroy())
+  t.notThrows(() => stream.didNotReceive().end())
+
+  const mimicking = Substitute.for<any>()
+  mimicking[mimick]({ flush() { return 2 } })
+  t.true('flush' in mimicking)
+  t.true('toString' in mimicking, 'key in instance, inherited members included')
+  t.false('other' in mimicking)
+  t.is(mimicking.flush(), 2)
+  const fn = Substitute.for<any>()
+  fn[mimick](function named() { })
+  t.true('call' in fn)
+})
+
+test('R6FE-8 (E26) key in sub is false for unconfigured keys, protocol keys and the library\'s own members, and records nothing', t => {
+  const sub = Substitute.for<any>()
+  sub.logger.info('x') // used, but not configured
+  void sub.read
+  for (const key of ['logger', 'read', 'other', 'then', 'toJSON', 'call', 'apply', 'bind', 'toString', 'constructor', 'name', 'length',
+    '__esModule', 'asymmetricMatch', 'received', 'didNotReceive', 'returns'])
+    t.false(key in sub, key)
+  for (const key of [Symbol.iterator, Symbol.asyncIterator, Symbol.hasInstance, Symbol.toPrimitive, inspect.custom, received, configure, mimick])
+    t.false(key in sub, String(key))
+  t.is(inspect(sub), "@Substitute {\n  received:\n    logger\n    logger.info('x')\n    read\n}", 'in records nothing')
+  t.false('anything' in sub.logger)
+
+  // a protocol key is present once it is configured
+  sub[configure]()[Symbol.iterator].returns(function* () { yield 1 })
+  t.true(Symbol.iterator in sub)
+  sub[configure]().__esModule.returns(true)
+  t.true('__esModule' in sub)
+})

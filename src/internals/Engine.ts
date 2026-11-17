@@ -37,15 +37,45 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 /**
  * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
  * target of a proxy (it does not trigger traps), so the target carries the printer as its inspect.custom hook.
+ * It is a bound function: it can be constructed (E23), and it has no non-configurable `prototype`, so that the
+ * traps can hide its own properties (E25, see viewTraps).
  */
+const viewFunction = function () { }
 const newTarget = (print: Printer): any => {
-  const target = function () { }
+  const target = viewFunction.bind(undefined)
   Object.defineProperty(target, inspect.custom, {
     value: (_depth: number, options?: InspectOptions) => print(options),
     configurable: true
   })
   return target
 }
+
+/**
+ * E25: the views (assertions, configure views, bound functions, members configured both as a property and as a method)
+ * have no properties of their own, and refuse to be frozen, sealed or given properties, with a usage error that names
+ * the operation (a later read could not answer as usual otherwise). Substitutes themselves support it (see faceHandler).
+ */
+const viewChangeError = (operation: string, print: Printer, start: Function) => SubstituteException.generic(
+  `${operation} cannot be used on ${print(undefined)}: the values the library hands out for assertions, setups, ` +
+  `bound functions and members configured both as a property and as a method cannot be frozen, sealed or given ` +
+  `properties of their own. Substitutes and their auto-substitutes can.`,
+  start
+)
+
+const viewTraps = (print: Printer): ProxyHandler<any> => ({
+  defineProperty: function defineProperty() {
+    throw viewChangeError('Object.defineProperty()', print, defineProperty)
+  },
+  preventExtensions: function preventExtensions() {
+    throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
+  },
+  deleteProperty: () => true,
+  ownKeys: () => [],
+  getOwnPropertyDescriptor: () => undefined
+})
+
+/** A short-lived proxy (see newTarget and viewTraps). */
+const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(newTarget(print), { ...viewTraps(print), ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -214,19 +244,61 @@ const faceTargetPrototype = Object.create(Function.prototype, {
 })
 
 /*
+ * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
+ * is a bound function whose only own properties, `length` and `name`, the proxy hides (ownKeys and
+ * getOwnPropertyDescriptor report none). The first such change removes them from the target ("takes it over"), so that
+ * from then on the target's own properties are exactly the ones the code under test defined, and the proxy's answers
+ * cannot conflict with them (a frozen target without own properties constrains nothing). A defined property is a real
+ * property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
+ * Taking over is rare, so the hot path only checks a counter.
+ */
+const ownedTargets = new WeakSet<object>()
+let ownedTargetCount = 0
+const hasOwnProperty = Object.prototype.hasOwnProperty
+
+const takeOver = (target: FaceTarget): void => {
+  if (ownedTargets.has(target)) return
+  delete (target as any).length
+  delete (target as any).name
+  ownedTargets.add(target)
+  ownedTargetCount++
+}
+
+const isOwned = (target: FaceTarget): boolean => ownedTargetCount > 0 && ownedTargets.has(target)
+
+/** Whether the code under test defined the property on the substitute (E25). */
+const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwned(target) && hasOwnProperty.call(target, property)
+
+/*
  * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
  * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
  */
 const faceHandler: ProxyHandler<FaceTarget> = {
-  get: function get(target: FaceTarget, property: PropertyKey) {
+  get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
+    if (isDefined(target, property)) return Reflect.get(target, property, receiver)
     const face = target()
     const value = faceGet(face, property, get)
     return value === REAL_READ ? realGet(faceState(face), property, adjacentHandOut(face), captureStack(get)) : value
   },
-  set: function set(target: FaceTarget, property: PropertyKey, value: unknown) {
+  set: function set(target: FaceTarget, property: PropertyKey, value: unknown, receiver: unknown) {
+    if (isDefined(target, property)) return Reflect.set(target, property, value, receiver)
     faceSet(target(), property, value, set)
     return true
   },
+  // E26: `key in sub` (see faceHas)
+  has: (target: FaceTarget, property: PropertyKey) => isDefined(target, property) || faceHas(target(), property),
+  defineProperty: (target: FaceTarget, property: PropertyKey, descriptor: PropertyDescriptor) => {
+    takeOver(target)
+    return Reflect.defineProperty(target, property, descriptor)
+  },
+  preventExtensions: (target: FaceTarget) => {
+    takeOver(target)
+    return Reflect.preventExtensions(target)
+  },
+  deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
+  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : [],
+  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
+    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : undefined,
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
@@ -240,6 +312,40 @@ const faceHandler: ProxyHandler<FaceTarget> = {
 
 // bound to the face: a bound function is smaller than a closure and its context
 const returnThis = function (this: Face): Face { return this }
+
+/**
+ * E26: `key in sub` (and Reflect.has) is true for a key with a setup (as a property or a method, or a nested setup
+ * through it) and for a key that the mimicked instance has (`key in instance`), and false otherwise: for unconfigured
+ * keys, protocol keys and the library's own special members (then, inspect.custom, ...). Nothing is recorded.
+ */
+const faceHas = (face: Face, key: PropertyKey): boolean => {
+  if (isSpecialProperty(key)) return false
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state === undefined) return false
+  return state.propertySubstitution(key) !== undefined ||
+    state.hasCallSubstitutions(key) ||
+    (state.mimicked !== undefined && hasMember(state.mimicked.instance, key)) ||
+    hasNestedSetup(state, key)
+}
+
+/** Whether an auto-substitute of the member (of the property, or of one of its calls) has a setup of its own. */
+const hasNestedSetup = (state: SubstituteState, key: PropertyKey): boolean => {
+  for (const entry of state.entries()) {
+    const nested = entry.key === key ? entry.materializedState : undefined
+    if (nested !== undefined && isConfigured(nested)) return true
+  }
+  return false
+}
+
+/** Whether a substitute, or one of its auto-substitutes, has a setup or mimicks an instance. */
+const isConfigured = (state: SubstituteState): boolean => {
+  if (state.mimicked !== undefined || state.substitutions().some(substitution => substitution.method !== 'auto')) return true
+  for (const entry of state.entries()) {
+    const nested = entry.materializedState
+    if (nested !== undefined && isConfigured(nested)) return true
+  }
+  return false
+}
 
 const createFaceProxy = (face: Face): any => {
   const target: FaceTarget = returnThis.bind(face)
@@ -468,7 +574,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
  */
 const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, boundArgs: any[]): any => {
   const print: Printer = options => printFace(bindEntry, colorsOf(options))
-  const proxy: any = new Proxy(newTarget(print), {
+  const proxy: any = createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, bindEntry)
       // a bound function ignores the `this` it is called with
@@ -777,7 +883,7 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
     return value
   }
   const print: Printer = () => state.memberPath(key)
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
@@ -814,7 +920,7 @@ const describeCount = (count: ExpectedCount) => count === undefined ? 'received(
 
 const createAssertionProxy = (state: SubstituteState, count: ExpectedCount): any => {
   const print: Printer = () => `${state.path}.${describeCount(count)}`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       return assertionMember(state, property, count, get)
@@ -867,7 +973,7 @@ const assertionMember = (state: SubstituteState, key: PropertyKey, count: Expect
     )
   }
   const print: Printer = () => `${state.path}.${describeCount(count)}.${memberLabel(key)}`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isFunctionHelperKey(property)) return functionHelper(property, assertInvocation)
@@ -895,7 +1001,7 @@ const configureSetError = (start: Function) => SubstituteException.generic(
 
 const createConfigureProxy = (state: SubstituteState): any => {
   const print: Printer = () => `${state.path}[configure]()`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, get)
@@ -959,7 +1065,7 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
   const context = contextMethodOf(key)
   if (context !== undefined) return contextFunction(context, () => state, undefined)
   const print: Printer = () => `${state.memberPath(key)} (configure)`
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
@@ -1027,7 +1133,7 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
   const print: Printer = () => `${state.memberPath(key)}${pathArguments(specification.value)} (configure)`
   const assertionCount = (start: Function): ExpectedCount =>
     key === 'didNotReceive' ? 0 : validateExpectedCount(specification.value?.[0], start)
-  return new Proxy(newTarget(print), {
+  return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       const method = substitutionMethodOf(property)
