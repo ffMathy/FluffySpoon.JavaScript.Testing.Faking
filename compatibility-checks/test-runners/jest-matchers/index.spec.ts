@@ -101,3 +101,71 @@ describe('R7 jest matchers and pretty-format with printing, frozen substitutes a
     expect(settings.level).toBe(3)
   })
 })
+
+// Round 8 (E33): snapshots and failure diffs of values that hold substitutes. pretty-format's mock serializer probes
+// `_isMockFunction`, which a substitute no longer answers unless it is configured, and printing paths never recurses
+// (a factory result stored on the object passed to it, handlers bound to the instance that holds them). Each one must
+// finish quickly. jest's snapshots print a function as `[Function]` (without its name); its failure diffs print
+// `[Function <name>]`, where the name of a substitute is the path of its `name` member.
+class Widget {
+  public readonly onSave: unknown
+  public readonly onClose: unknown
+  constructor(bus: any) {
+    this.onSave = bus.handler0.bind(this)
+    this.onClose = bus.handler1.bind(this)
+  }
+}
+
+/** A state object of the kind a test snapshots: an auto-substitute, a configured one, bound handlers, a factory result. */
+const stateWithSubstitutes = () => {
+  const app = Substitute.for<any>()
+  app.config.port.returns(8080)
+  const context: any = { name: 'root' }
+  context.child0 = app.create0(context)
+  context.child1 = app.create1(context)
+  return { status: 200, user: app.getUser(1), config: app.config, widget: new Widget(Substitute.for<any>()), context }
+}
+
+/** Runs a check and returns how long it took. */
+const timed = (check: () => void): number => {
+  const started = Date.now()
+  check()
+  return Date.now() - started
+}
+
+describe('R8 jest snapshots and diffs of values that hold substitutes', () => {
+  test('E33 toMatchInlineSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+    const state = stateWithSubstitutes()
+    expect(timed(() => expect(state).toMatchInlineSnapshot(`
+{
+  "config": [Function],
+  "context": {
+    "child0": [Function],
+    "child1": [Function],
+    "name": "root",
+  },
+  "status": 200,
+  "user": [Function],
+  "widget": Widget {
+    "onClose": [Function],
+    "onSave": [Function],
+  },
+}
+`))).toBeLessThan(2000)
+  })
+
+  test('E33 toMatchSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+    const state = stateWithSubstitutes()
+    expect(timed(() => expect(state).toMatchSnapshot())).toBeLessThan(2000)
+  })
+
+  test('E33 a failing toEqual diff prints the paths and finishes quickly', () => {
+    const state = stateWithSubstitutes()
+    let message = ''
+    expect(timed(() => { message = failureOf(() => expect(state).toEqual({ status: 200 })).message })).toBeLessThan(2000)
+    expect(message).toContain('@Substitute.getUser(1).name')
+    expect(message).toContain('@Substitute.create0({ name: \'root\', child0: @Substitute.create0(…)')
+    expect(message).toContain('@Substitute.handler0.bind(Widget {')
+    expect(message).not.toContain('MockFunction')
+  })
+})

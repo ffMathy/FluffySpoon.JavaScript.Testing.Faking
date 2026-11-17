@@ -67,3 +67,70 @@ describe('R7 vitest matchers with substitutes', () => {
     expect(configured.__esModule).toBe(false)
   })
 })
+
+// Round 8 (E33): snapshots and failure diffs of values that hold substitutes. vitest's mock serializer probes
+// `_isMockFunction`; answered by a truthy auto-substitute, it printed `mock.calls` without end (PrettyFormatPluginError:
+// Maximum call stack size exceeded). Printing paths never recurses (a factory result stored on the object passed to it,
+// handlers bound to the instance that holds them). Each one must finish quickly. vitest's snapshots print a function as
+// `[Function]`; its failure diffs print `[Function <name>]`, where the name of a substitute is the path of its `name`
+// member.
+class Widget {
+  public readonly onSave: unknown
+  public readonly onClose: unknown
+  constructor(bus: any) {
+    this.onSave = bus.handler0.bind(this)
+    this.onClose = bus.handler1.bind(this)
+  }
+}
+
+/** A state object of the kind a test snapshots: an auto-substitute, a configured one, bound handlers, a factory result. */
+const stateWithSubstitutes = () => {
+  const app = Substitute.for<any>()
+  app.config.port.returns(8080)
+  const context: any = { name: 'root' }
+  context.child0 = app.create0(context)
+  context.child1 = app.create1(context)
+  return { status: 200, user: app.getUser(1), config: app.config, widget: new Widget(Substitute.for<any>()), context }
+}
+
+/** Runs a check and returns how long it took. */
+const timed = (check: () => void): number => {
+  const started = Date.now()
+  check()
+  return Date.now() - started
+}
+
+describe('R8 vitest snapshots and diffs of values that hold substitutes', () => {
+  test('E33 toMatchInlineSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+    const state = stateWithSubstitutes()
+    expect(timed(() => expect(state).toMatchInlineSnapshot(`
+      {
+        "config": [Function],
+        "context": {
+          "child0": [Function],
+          "child1": [Function],
+          "name": "root",
+        },
+        "status": 200,
+        "user": [Function],
+        "widget": Widget {
+          "onClose": [Function],
+          "onSave": [Function],
+        },
+      }
+    `))).toBeLessThan(2000)
+  })
+
+  test('E33 toMatchSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+    const state = stateWithSubstitutes()
+    expect(timed(() => expect(state).toMatchSnapshot())).toBeLessThan(2000)
+  })
+
+  test('E33 a failing toEqual diff prints the paths and finishes quickly', () => {
+    const state = stateWithSubstitutes()
+    let message = ''
+    expect(timed(() => { message = failureOf(() => expect(state).toEqual({ status: 200 })).message })).toBeLessThan(2000)
+    expect(message).not.toContain('MockFunction')
+    expect(message).not.toContain('Maximum call stack')
+  })
+})
