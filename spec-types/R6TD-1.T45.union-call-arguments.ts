@@ -77,10 +77,27 @@ drawing.draw(1).returns('flat')
 // @ts-expect-error `draw(x)` with one argument never returns 'solid'
 drawing.draw(1).returns('solid')
 
+// An optional parameter with a literal type (TypeScript tries such a signature first when it calls the union).
+interface ReaderA { kind: 'a'; read(path: string): string }
+interface ReaderB { kind: 'b'; read(path: string, encoding?: 'buffer'): Uint8Array }
+const reader = Substitute.for<ReaderA | ReaderB>()
+reader.read('p').returns('text')
+reader.read('p').returns(new Uint8Array())
+reader[configure]().read('p').returns('text')
+reader.read('p', 'buffer').returns(new Uint8Array())
+const readResult: string | Uint8Array = reader.read('p')
+// @ts-expect-error the configured value is a string or a Uint8Array
+reader.read('p').returns(1)
+const root = Substitute.for<Document | Element>()
+root.querySelector('a').returns(null)
+root.querySelectorAll('div')
+const canvas = Substitute.for<HTMLCanvasElement | OffscreenCanvas>()
+canvas.getContext('2d').returns(null)
+
 // Generic code keeps the variant's own signatures (see limitations.ts for union constraints).
 export function stubApi<T extends ApiV1>(sub: SubstituteOf<T>) {
   sub.get('k').returns(1)
   sub[received](1).get('k')
 }
 
-export { fromAnyVersion }
+export { fromAnyVersion, readResult }
