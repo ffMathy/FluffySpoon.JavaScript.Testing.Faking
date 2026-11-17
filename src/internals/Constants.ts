@@ -112,7 +112,12 @@ export const isLibrarySymbol = (property: symbol): boolean => {
  */
 export const answersOnlyItself = (property: PropertyKey): boolean => typeof property === 'symbol'
   ? property === Symbol.toPrimitive || property === inspect.custom || property === registeredInspectCustom || isLibrarySymbol(property)
-  : property === 'toString' || property === 'valueOf' || property === 'toJSON' || property === 'then'
+  : property === 'toString' || property === 'valueOf' || property === 'toJSON' || property === 'then' ||
+    (property === 'inspect' && callsInspectMethod)
+
+/** Node.js 10 still calls an object's own `inspect` method in util.inspect (DEP0079, removed in Node.js 11). */
+const callsInspectMethod = typeof process === 'object' && process !== null && typeof process.version === 'string' &&
+  /^v10\./.test(process.version)
 
 export const keyToString =(key: PropertyKey): string => typeof key === 'symbol' ? key.toString() : String(key)
 
