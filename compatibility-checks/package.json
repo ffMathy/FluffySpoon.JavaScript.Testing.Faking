@@ -22,10 +22,13 @@
         "validate:jest-matchers": "jest test-runners/jest-matchers/**.ts",
         "validate:jest-modules-ts": "jest -c jest.modules.ts-jest.config.js",
         "validate:jest-modules-babel": "jest -c jest.modules.babel.config.js",
+        "validate:jest-modules-esm": "node --experimental-vm-modules node_modules/jest/bin/jest.js -c jest.modules.esm.config.js",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
+        "validate:nodejs-modules": "node --test --experimental-test-module-mocks test-runners/nodejs-modules/index.test.mjs",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",
         "validate:vitest-inline": "vitest run --config vitest.inline.config.mts ./test-runners/vitest-inline/index.spec.ts",
+        "validate:vitest-modules": "vitest run ./test-runners/vitest-modules/index.spec.ts",
         "pretest": "npm run install:local",
         "test": "node --require tsx/cjs --test test/index.ts test/bundlers.ts"
     },
