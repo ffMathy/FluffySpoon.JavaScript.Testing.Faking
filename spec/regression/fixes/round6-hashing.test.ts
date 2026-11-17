@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg, configure } from '../../../src'
 import { hashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
+import { RecordedArguments } from '../../../src/internals/RecordedArguments'
 
 // Round 6: the structural hash of wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13) and of values that cannot
 // be read (R5V-2; E14). The tests run in order: which wide objects were hashed before matters for how fast a hash is
@@ -204,6 +205,22 @@ test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: 1
     t.true(firstListings <= 4, `${size} keys: listed ${firstListings} times`)
     t.notThrows(() => lookup.received(1).find(999, table))
   }
+
+  // a shared table of records that share nested objects: the budget of the search leaves those out on every call, so
+  // the table is searched once in full instead (45facfb: 1.8 s, ec64181: 1.6 s)
+  const role = { name: 'admin', permissions: ['read', 'write'] }
+  const users = wideObject(600, key => ({ id: key, role }), key => `user${key}`)
+  const directory = Substitute.for<any>()
+  const elapsed = millisecondsOf(() => {
+    for (let index = 0; index < 10_000; index++) directory.t(`key${index}`, users)
+  })
+  t.log(`10,000 calls with distinct first arguments and one shared table of 600 records with a shared role: ${elapsed.toFixed(1)} ms`)
+  t.true(elapsed < 1000, `10,000 calls with one shared table of 600 records: ${elapsed} ms`)
+  // a matcher further inside than the search looks is not recognised there, on every call (as before)
+  const hidden = wideObject(600, key => key === 300 ? { id: key, more: { deep: Arg.any() } } : { id: key, role }, key => `user${key}`)
+  t.false(RecordedArguments.containsMatchers([hidden]))
+  t.false(RecordedArguments.containsMatchers([hidden]))
+  t.true(RecordedArguments.containsMatchers([hidden.user300]))
 
   // a matcher nested in a table is still found when the table is first seen, also after an equal one without
   const tableOf = (value: unknown) => wideObject(300, key => key === 150 ? value : key, key => `entry.${key}`)
