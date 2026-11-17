@@ -223,33 +223,47 @@ test.serial('R6-ADV-5 (E20) fresh batches of 257 to 1,000 records with nested ob
 })
 
 test('R6V-3 / R6-ADV-3 (E19) families do not slow down small records that share a key with the objects that started them', t => {
-  // in a child process of its own, as the families of the hash are kept for the rest of the process
-  const result = runScript(`
-    const { Substitute } = require(${JSON.stringify(library)})
+  // In child processes, as the families of the hash are kept for the rest of the process. Each loads the library twice,
+  // gives one copy 16 families and measures both copies by turns, so that a busy machine slows both; the two processes
+  // load the copies in both orders, as a copy loaded later runs a little slower.
+  const ratios = (familiesFirst: boolean) => runScript(`
+    const loadLibrary = () => {
+      for (const key of Object.keys(require.cache)) if (key.startsWith(${JSON.stringify(path.dirname(library))})) delete require.cache[key]
+      return require(${JSON.stringify(library)}).Substitute
+    }
+    const first = loadLibrary()
+    const second = loadLibrary()
+    if (first === second) throw new Error('the library was loaded once')
+    const [withFamilies, plain] = ${familiesFirst} ? [first, second] : [second, first]
+    // 16 wide objects with different keys whose first key is 'id', as small records have
+    const warm = withFamilies.for()
+    for (let family = 0; family < 16; family++) { const object = { id: family }; for (let key = 0; key < 1100; key++) object['f' + family + '_k' + key] = key; warm.load(object) }
     const time = run => { const start = process.hrtime.bigint(); run(); return Number(process.hrtime.bigint() - start) / 1e6 }
     const median = values => values.slice().sort((a, b) => a - b)[Math.floor(values.length / 2)]
     let round = 0
-    const batches = () => {
-      const lists = Array.from({ length: 1000 }, (_, call) => Array.from({ length: 100 }, (_, index) => ({ id: ++round, name: 'n' + index, email: 'u' + index + '@x', active: true })))
+    const batches = Substitute => {
+      const lists = Array.from({ length: 500 }, (_, call) => Array.from({ length: 100 }, (_, index) => ({ id: ++round, name: 'n' + index, email: 'u' + index + '@x', active: true })))
       const sub = Substitute.for()
       return time(() => { for (const list of lists) sub.saveAll(list) })
     }
-    const singles = () => { const sub = Substitute.for(); return time(() => { for (let index = 0; index < 10000; index++) sub.save({ id: ++round, name: 'n', email: 'e', active: true }) }) }
-    const measure = () => { const b = [], s = []; for (let run = 0; run < 5; run++) { b.push(batches()); s.push(singles()) } return { batches: median(b), singles: median(s) } }
-    measure()
-    const without = measure()
-    // 16 wide objects with different keys whose first key is 'id', as small records have
-    const warm = Substitute.for()
-    for (let family = 0; family < 16; family++) { const object = { id: family }; for (let key = 0; key < 1100; key++) object['f' + family + '_k' + key] = key; warm.load(object) }
-    const withFamilies = measure()
-    console.log(JSON.stringify({ without, withFamilies }))
+    const singles = Substitute => { const sub = Substitute.for(); return time(() => { for (let index = 0; index < 10000; index++) sub.save({ id: ++round, name: 'n', email: 'e', active: true }) }) }
+    const times = { plain: { batches: [], singles: [] }, withFamilies: { batches: [], singles: [] } }
+    for (let run = 0; run < 9; run++) {
+      for (const [name, Substitute] of run % 2 === 0 ? [['plain', plain], ['withFamilies', withFamilies]] : [['withFamilies', withFamilies], ['plain', plain]]) {
+        times[name].batches.push(batches(Substitute))
+        times[name].singles.push(singles(Substitute))
+      }
+    }
+    const ratio = kind => median(times.withFamilies[kind].slice(1)) / median(times.plain[kind].slice(1))
+    console.log(JSON.stringify({ batches: ratio('batches'), singles: ratio('singles') }))
   `)
-  const { without, withFamilies } = result
-  t.log(`1,000 calls with 100 small records: ${without.batches.toFixed(1)} ms, with 16 families ${withFamilies.batches.toFixed(1)} ms`)
-  t.log(`10,000 calls with a small record: ${without.singles.toFixed(1)} ms, with 16 families ${withFamilies.singles.toFixed(1)} ms`)
+  const [one, other] = [ratios(true), ratios(false)]
+  const batches = Math.sqrt(one.batches * other.batches)
+  const singles = Math.sqrt(one.singles * other.singles)
+  t.log(`with 16 families: 500 calls with 100 small records take ${batches.toFixed(2)}x, 10,000 calls with a small record ${singles.toFixed(2)}x`)
   // 74b8588: 3.2x and 1.5x
-  t.true(withFamilies.batches < without.batches * 1.3, `batches: ${withFamilies.batches} vs ${without.batches} ms`)
-  t.true(withFamilies.singles < without.singles * 1.3, `singles: ${withFamilies.singles} vs ${without.singles} ms`)
+  t.true(batches < 1.2, `batches: ${batches}x`)
+  t.true(singles < 1.2, `singles: ${singles}x`)
 })
 
 /** Runs a script with the library in a child process, and returns what it prints as JSON. */

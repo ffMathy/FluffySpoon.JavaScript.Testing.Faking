@@ -5,8 +5,8 @@ import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import {
-  coarseHashArguments, hashArguments, identityHashArguments, lastHashMemoUses, lastHashWasApproximate, lastNarrowHash,
-  newOperation, refinedHashArguments, stillWide
+  coarseHashArguments, hashArguments, identityHashArguments, lastHashMemoUses, lastHashMetWide, lastHashWasApproximate,
+  lastNarrowHash, newOperation, refinedHashArguments, stillWide
 } from './utilities'
 
 let substitutionOrder = 0
@@ -25,11 +25,13 @@ export class ArgumentHashes {
   private readonly _operation = newOperation()
   private _structural?: number
   private _narrow = 0
+  private _wide = false
   private _approximate = false
   /** The containers whose memos of earlier operations the structural hash used (undefined: none). */
   private _memoUses?: readonly object[]
   private _fresh?: number
   private _freshNarrow = 0
+  private _freshWide = false
   private _stillWide?: boolean
   private _refined?: number
   private _identity?: number | null
@@ -41,6 +43,7 @@ export class ArgumentHashes {
     if (this._structural === undefined) {
       this._structural = hashArguments(this.args, this._operation, this._setup)
       this._narrow = lastNarrowHash()
+      this._wide = lastHashMetWide()
       this._approximate = lastHashWasApproximate()
       this._memoUses = lastHashMemoUses()
     }
@@ -59,8 +62,24 @@ export class ArgumentHashes {
     if (this._fresh === undefined) {
       this._fresh = hashArguments(this.args, this._operation, true)
       this._freshNarrow = lastNarrowHash()
+      this._freshWide = lastHashMetWide()
     }
     return this._fresh
+  }
+
+  /**
+   * E18: whether the hash met a wide container among the arguments: only then can it have used memos, or can a call
+   * whose hash used memos be equal to these arguments.
+   */
+  public get wide(): boolean {
+    void this.structural
+    return this._wide
+  }
+
+  /** Whether the fresh hash met a wide container among the arguments (see wide). */
+  public get freshWide(): boolean {
+    void this.fresh
+    return this.memoBased ? this._freshWide : this._wide
   }
 
   /** Whether the fresh hash has been computed (it is the one to file a new entry under then). */
@@ -257,8 +276,8 @@ type CallEntryIndex = {
   /** The entries handed out for arguments with objects, by their identity hash. */
   byIdentity?: Buckets<AutoEntry>
   /**
-   * E18: the narrow hashes of the entries for arguments with objects (whether a call with objects among its arguments
-   * can have a candidate at all), each with the entry that was filed under a hash that used memos without a check, if
+   * E18: the narrow hashes of the entries for arguments with wide containers (whether a call whose hash used memos can
+   * have a candidate at all), each with the entry that was filed under a hash that used memos without a check, if
    * there is one (see callEntry).
    */
   byNarrow?: Map<number, Unchecked | null>
@@ -589,17 +608,27 @@ export class SubstituteState {
     let hash = actual.structural
     let entry = findEntry(index.byHash, hash, actual, true)
     let unchecked = false
-    if (entry === undefined && identity !== undefined) {
+    if (entry === undefined && actual.wide) {
       const groups = index.byNarrow ?? (index.byNarrow = new Map())
       const narrow = actual.narrow
       const group = groups.get(narrow)
-      if (group === undefined) {
-        // no entry can be equal: file the new one under the fresh hash if there is one, else note it as unchecked
-        if (actual.hasFresh) {
-          hash = actual.fresh
+      if (actual.memoBased && actual.hasFresh) {
+        // the fresh hash is known already (the literal substitutions looked with it, or a container whose memo the
+        // hash used is no longer wide, so that an equal entry may have no wide container and no group): it tells
+        hash = actual.fresh
+        entry = findEntry(index.byHash, hash, actual, false)
+        if (entry === undefined && group !== undefined && group !== null) {
+          refile(index.byHash, group)
           groups.set(narrow, null)
-        } else unchecked = true
+          entry = findEntry(index.byHash, hash, actual, false)
+        }
+        if (entry === undefined && actual.freshWide && group === undefined) groups.set(narrow, null)
+      } else if (group === undefined) {
+        // no entry can be equal: file the new one under the fresh hash if there is one, else note it as unchecked
+        if (actual.hasFresh) groups.set(narrow, null)
+        else unchecked = true
       } else {
+        // an entry may be equal: the unchecked one is filed under its fresh hash first, then the call looks again
         if (group !== null) {
           refile(index.byHash, group)
           groups.set(narrow, null)

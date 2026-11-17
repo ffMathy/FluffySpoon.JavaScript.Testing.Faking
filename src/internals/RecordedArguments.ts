@@ -97,16 +97,17 @@ const isNotSearched = (container: object): boolean => hashSettings.memos && notS
  */
 type Search = { root: object, visited: Map<object, boolean> | undefined, items: number, cuts: number }
 
-const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean => {
+/** `probe`: whether a container may be looked up in the families (see ArgumentHash.hashKeyed): not an array item. */
+const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   if (isArgumentMatcher(item)) return true
-  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search)
+  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search, probe)
   // E20: only a plain container is ever searched, so only one is left out (a Date or a class instance is not)
   if (isPlainContainer(item)) search.cuts++
   return false
 }
 
 /** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
-const holdsMatcher = (container: object, budget: number, depth: number, search: Search): boolean => {
+const holdsMatcher = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   if (isNotSearched(container)) return false
   const cuts = search.cuts
   if (depth > 0) {
@@ -119,12 +120,12 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
     }
     visited.set(container, false)
   }
-  const found = holdsMatcherInside(container, budget, depth, search)
+  const found = holdsMatcherInside(container, budget, depth, search, probe)
   if (!found && depth > 0 && search.cuts === cuts) search.visited!.set(container, true)
   return found
 }
 
-const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search): boolean => {
+const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   const cuts = search.cuts
   if (Array.isArray(container)) {
     const length = container.length
@@ -135,12 +136,12 @@ const holdsMatcherInside = (container: object, budget: number, depth: number, se
     }
     search.items -= length
     const share = Math.floor((budget - 1) / length)
-    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search)) return true
+    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search, false)) return true
     if (length > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
     return false
   }
   // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
-  if (isInFamily(container)) {
+  if (probe && isInFamily(container)) {
     if (hashSettings.memos) notSearched.add(container)
     return false
   }
@@ -159,10 +160,10 @@ const holdsMatcherInside = (container: object, budget: number, depth: number, se
   }
   search.items -= count
   const share = Math.floor((budget - 1) / count)
-  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search)) return true
+  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search, true)) return true
   for (let index = 0; index < symbols.length; index++) {
     const symbol = symbols[index]
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search)) return true
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search, true)) return true
   }
   if (count > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
   return false
@@ -241,7 +242,7 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 })
+    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 }, true)
   } catch {
     return false
   }

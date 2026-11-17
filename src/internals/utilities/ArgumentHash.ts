@@ -394,7 +394,7 @@ const entryHash = (value: unknown): number => {
   const outer = inEntry
   inEntry = true
   try {
-    return hashValue(value, ENTRY_BUDGET, 0)
+    return hashValue(value, ENTRY_BUDGET, 0, false)
   } finally {
     inEntry = outer
   }
@@ -541,15 +541,18 @@ let operations = 0
  */
 export const newOperation = (): number => ++operations
 
-/** The hash of one value with a budget of objects (see above). */
-const hashValue = (value: unknown, budget: number, depth: number): number => {
+/**
+ * The hash of one value with a budget of objects (see above). `probe`: whether an object may be looked up in the
+ * families without listing its keys (see hashKeyed).
+ */
+const hashValue = (value: unknown, budget: number, depth: number, probe: boolean): number => {
   if (typeof value === 'function') return mix(Tag.Function, idOf(value))
   if (typeof value !== 'object' || value === null) return hashPrimitive(value)
   if (budget <= 0 || depth >= MAX_DEPTH) return Tag.Cut
-  return hashObject(value, budget, depth + 1)
+  return hashObject(value, budget, depth + 1, probe)
 }
 
-const hashObject = (object: object, budget: number, depth: number): number => {
+const hashObject = (object: object, budget: number, depth: number, probe: boolean): number => {
   if (remembered) {
     const memo = memos.get(object)
     if (memo !== undefined) {
@@ -573,7 +576,7 @@ const hashObject = (object: object, budget: number, depth: number): number => {
     }
   }
   try {
-    return hashReadable(object, budget, depth)
+    return hashReadable(object, budget, depth, probe)
   } catch {
     // E14: a value that cannot be read (a throwing getter, a revoked proxy) is hashed by its identity, and read once
     // per operation: it is deep strictly equal to nothing but itself (Node.js throws when it compares it, which counts
@@ -584,13 +587,13 @@ const hashObject = (object: object, budget: number, depth: number): number => {
   }
 }
 
-const hashReadable = (object: object, budget: number, depth: number): number => {
+const hashReadable = (object: object, budget: number, depth: number, probe: boolean): number => {
   if (Array.isArray(object)) {
     const length = object.length
     const count = length <= SAMPLED_ITEMS ? length : SAMPLED_ITEMS
     const childBudget = share(budget, count)
     let h = mix(Tag.Array, length)
-    for (let index = 0; index < count; index++) h = mix(h, hashValue(object[sampledPosition(length, SAMPLED_ITEMS, index)], childBudget, depth))
+    for (let index = 0; index < count; index++) h = mix(h, hashValue(object[sampledPosition(length, SAMPLED_ITEMS, index)], childBudget, depth, false))
     return h
   }
   if (ArrayBuffer.isView(object)) return hashBytes(new Uint8Array(object.buffer, object.byteOffset, object.byteLength))
@@ -598,7 +601,7 @@ const hashReadable = (object: object, budget: number, depth: number): number => 
   // objects with the same prototype equal, so another kind of object made plain with Object.setPrototypeOf, or an
   // arguments object, is hashed like the plain objects it can be equal to: by its keys.)
   const prototype = Object.getPrototypeOf(object)
-  if (prototype === Object.prototype || prototype === null) return hashKeyed(object, budget, depth, true)
+  if (prototype === Object.prototype || prototype === null) return hashKeyed(object, budget, depth, true, probe)
   if (types.isAnyArrayBuffer(object)) return hashBytes(new Uint8Array(object as ArrayBuffer))
   if (types.isDate(object)) return mix(Tag.Date, hashNumber(Date.prototype.getTime.call(object)))
   if (types.isRegExp(object)) {
@@ -613,7 +616,7 @@ const hashReadable = (object: object, budget: number, depth: number): number => 
   if (types.isSymbolObject(object)) return mix(Tag.Boxed, hashString(Symbol.prototype.toString.call(object), Tag.Symbol))
   if (isBigIntObject(object)) return mix(Tag.Boxed, hashString(String(object), Tag.BigInt))
 
-  return hashKeyed(object, budget, depth, false)
+  return hashKeyed(object, budget, depth, false, probe)
 }
 
 /**
@@ -627,14 +630,17 @@ const sampled = (keyHash: number, count: number): boolean =>
 /**
  * Objects and class instances by their own enumerable string and symbol keys and their values, in any key order.
  * `plain`: the prototype is Object.prototype or null (no error, see hashReadable).
+ * E19: `probe`: whether to look the object up in the families before its keys are listed. Not for array items and
+ * values inside entries (records, mostly, which a wide object rarely is): their keys are listed, and a wide one among
+ * them is found to be wide, or in a family, that way, with the same hash.
  */
-const hashKeyed = (object: object, budget: number, depth: number, plain: boolean): number => {
+const hashKeyed = (object: object, budget: number, depth: number, plain: boolean, probe: boolean): number => {
   const error = !plain && isComparedAsError(object) ? object : undefined
   const tag = plain ? Tag.Object : types.isArgumentsObject(object) ? Tag.Arguments : error !== undefined ? Tag.Error : Tag.Object
   // families: looked up without listing the keys when a recent family may match, or once the keys show enough of them
   // (a member is a wide object: inside an entry of a wide container that is all there is to know, see entryHash)
   const lookUp = anchors.length !== 0 && (inEntry || !refining)
-  const lookedUp = lookUp && mayBeInRecentFamily(object)
+  const lookedUp = lookUp && probe && !inEntry && mayBeInRecentFamily(object)
   if (lookedUp) {
     const family = familyOf(object)
     if (family !== -1) {
@@ -665,7 +671,7 @@ const hashKeyed = (object: object, budget: number, depth: number, plain: boolean
     let sum = 0
     for (let index = 0; index < count; index++) {
       const key = keys[index]
-      sum = (sum + spread(mix(hashKey(key), hashValue((object as any)[key], childBudget, depth)))) | 0
+      sum = (sum + spread(mix(hashKey(key), hashValue((object as any)[key], childBudget, depth, true)))) | 0
     }
     return withError(mix(h, sum), error, childBudget, depth)
   }
@@ -697,8 +703,8 @@ const withError = (h: number, error: ComparedError | undefined, childBudget: num
   if (error === undefined) return h
   if (errorParts.name) h = mix(h, shallowHash(error.name))
   if (errorParts.message) h = mix(h, shallowHash(error.message))
-  if (errorParts.cause) h = mix(h, hashValue(error.cause, childBudget, depth))
-  if (errorParts.errors) h = mix(h, hashValue(error.errors, childBudget, depth))
+  if (errorParts.cause) h = mix(h, hashValue(error.cause, childBudget, depth, true))
+  if (errorParts.errors) h = mix(h, hashValue(error.errors, childBudget, depth, true))
   return h
 }
 
@@ -731,7 +737,7 @@ const hashMap = (map: Map<unknown, unknown>, budget: number, depth: number): num
   }
   const childBudget = share(budget, 2 * size)
   mapForEach.call(map, (value: unknown, key: unknown) => {
-    sum = (sum + spread(mix(hashValue(key, childBudget, depth), hashValue(value, childBudget, depth)))) | 0
+    sum = (sum + spread(mix(hashValue(key, childBudget, depth, true), hashValue(value, childBudget, depth, true)))) | 0
   })
   return mix(h, sum)
 }
@@ -754,7 +760,7 @@ const hashSet = (set: Set<unknown>, budget: number, depth: number): number => {
   }
   const childBudget = share(budget, size)
   setForEach.call(set, (value: unknown) => {
-    sum = (sum + spread(hashValue(value, childBudget, depth))) | 0
+    sum = (sum + spread(hashValue(value, childBudget, depth, true))) | 0
   })
   return mix(mix(Tag.Set, size), sum)
 }
@@ -781,6 +787,7 @@ const hashing = (refine: boolean, of: number, freshly: boolean, hash: () => numb
     return hash()
   } catch {
     lastNarrow = FALLBACK_HASH
+    lastWide = false
     return FALLBACK_HASH
   } finally {
     lastApproximate = approximate
@@ -797,23 +804,26 @@ const hashing = (refine: boolean, of: number, freshly: boolean, hash: () => numb
 let lastApproximate = false
 let lastMemoUses: readonly object[] | undefined
 let lastNarrow = 0
+let lastWide = false
 
 /** Also computes the narrow hash of the list (see lastNarrowHash). */
 const hashList = (args: readonly unknown[]): number => {
   let h = mix(Tag.Array, args.length)
   let narrow = h
+  const start = wideCount
   for (let index = 0; index < args.length; index++) {
     const wide = wideCount
-    const value = hashValue(args[index], BUDGET, 0)
+    const value = hashValue(args[index], BUDGET, 0, true)
     h = mix(h, value)
     narrow = mix(narrow, wideCount === wide ? value : Tag.Wide)
   }
   lastNarrow = narrow
+  lastWide = wideCount !== start
   return h
 }
 
 /** The hash of one value (see above), as an operation of its own. Exported for the tests of the contract. */
-export const structuralHash = (value: unknown): number => hashing(false, newOperation(), false, () => hashValue(value, BUDGET, 0))
+export const structuralHash = (value: unknown): number => hashing(false, newOperation(), false, () => hashValue(value, BUDGET, 0, true))
 
 /**
  * The structural hash of an argument list (see above), for the operation `of`. Each argument has a budget of its own.
@@ -843,12 +853,18 @@ export const lastHashMemoUses = (): readonly object[] | undefined => lastMemoUse
  */
 export const lastNarrowHash = (): number => lastNarrow
 
+/**
+ * Whether the last argument list hashed by hashArguments holds a wide container where the hash meets it. Only then
+ * can its hash use memos, or be equal to a list whose hash did (see lastNarrowHash).
+ */
+export const lastHashMetWide = (): boolean => lastWide
+
 /** The hash of an argument list without families (E13): it also counts the keys a family leaves out. */
 export const refinedHashArguments = (args: readonly unknown[], of = newOperation(), freshly = false): number =>
   hashing(true, of, freshly, () => hashList(args))
 
 /** The refined hash of one value. Exported for the tests of the contract. */
-export const refinedStructuralHash = (value: unknown): number => hashing(true, newOperation(), false, () => hashValue(value, BUDGET, 0))
+export const refinedStructuralHash = (value: unknown): number => hashing(true, newOperation(), false, () => hashValue(value, BUDGET, 0, true))
 
 /**
  * E9: a hash of an argument list that does not look into objects: primitives by value, functions by identity, every
