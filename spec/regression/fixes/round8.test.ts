@@ -653,3 +653,17 @@ test('R7FE-11 (E39) a setup or check chained through a member configured to retu
   t.is(listener('x'), 'y')
   t.notThrows(() => factory.didNotReceive().listener())
 })
+
+test('E39 a configured value that is the substitute itself (a fluent `return this`) does not continue the expression', t => {
+  // the test calls the substitute and checks it in the next statement, which starts from the same substitute
+  const map = Substitute.for<any>()
+  map.set(Arg.all()).returns(map)
+  t.is(map.set('b', 2), map)
+  t.notThrows(() => map.received(1).set('b', 2))
+
+  const builder = Substitute.for<any>()
+  builder.where(Arg.all()).returns(builder)
+  const query = (b: any) => b.where('a', 1).where('b', 2)
+  t.is(query(builder), builder)
+  t.notThrows(() => builder.received(2).where(Arg.all()))
+})

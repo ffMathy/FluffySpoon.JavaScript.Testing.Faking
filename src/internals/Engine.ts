@@ -256,11 +256,15 @@ const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHan
  * out, as an unconfigured one hands out its auto-substitute, so that a setup or a check chained to it in the same
  * expression (`app.getCalc().add(1, 2).returns(3)`, `app.logger.received(1).info('x')`) leaves out the read or call
  * that led to it (D25). Returns the value.
+ *
+ * Not when the value is the substitute that was read or called itself (`map.set(Arg.all()).returns(map)`, a fluent
+ * `return this`): the test holds that substitute anyway, and its next statement (`map.received(1).set('b', 2)` after
+ * `expect(map.set('b', 2)).toBe(map)`) must not take the call made in the statement before with it.
  */
-const handOutConfigured = <T>(value: T, record: CallRecord): T => {
+const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteState): T => {
   if (typeof value === 'function' && Object.getPrototypeOf(value) === faceTargetPrototype) {
     const face = (value as any)[INTERNAL] as Face | undefined
-    if (face !== undefined) face.handOut(record)
+    if (face !== undefined && (face instanceof AutoEntry ? face.materializedState : face) !== owner) face.handOut(record)
   }
   return value
 }
@@ -708,7 +712,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
     // Configured both as a property and as a method: whether this read is a property read is only known later.
     if (state.hasCallSubstitutions(key)) return deferredRead(state, key, record, substitution)
-    return handOutConfigured(execute(substitution), record)
+    return handOutConfigured(execute(substitution), record, state)
   }
 
   const mimicked = state.mimicked
@@ -720,7 +724,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const value = delegate ? mimicked.instance[key] : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
-      return handOutConfigured(value, linkChain(state.addRecord('get', key, undefined, site), chainCandidate))
+      return handOutConfigured(value, linkChain(state.addRecord('get', key, undefined, site), chainCandidate), state)
     }
   }
 
@@ -855,7 +859,7 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   const hashes = new ArgumentHashes(args)
   const answer = configuredAnswer(state, key, args, hashes, record, self)
   // E23: `new` answers with an object; for any other configured value it gives the auto-substitute of the call
-  if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return handOutConfigured(answer, record)
+  if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return handOutConfigured(answer, record, state)
   // E36: or, for a subclass (new.target), a new instance of it
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
   const entry = state.callEntry(key, hashes)
