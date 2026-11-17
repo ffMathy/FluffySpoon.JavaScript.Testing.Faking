@@ -7,9 +7,5 @@ module.exports = {
 	...config,
 	files: config.files.filter(file => file.startsWith('!')).map(file => file.slice(1)),
 	serial: true,
-	concurrency: 1,
-	// Several of these tests run for more than ava's default of 10 seconds without a break (synchronous loops, child
-	// processes), and on their own no other test file reports in the meantime. A test's own t.timeout() reaches ava only
-	// once the test yields, so the time without news has to be longer.
-	timeout: '3m'
+	concurrency: 1
 }

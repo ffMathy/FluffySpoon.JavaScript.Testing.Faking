@@ -21,5 +21,10 @@ module.exports = {
 	},
   cache: false,
   failFast: true,
-  failWithoutAssertions: true
+  failWithoutAssertions: true,
+  // ava's stall timeout (10 seconds by default): how long ava waits for news from the test files before it gives up.
+  // Some of them work for longer without reporting, and more so on a busy machine: the packaging checks pack a copy of
+  // the repository before their first test, and the timing-sensitive files run tests that take more than 10 seconds,
+  // one at a time. (A test's own t.timeout() reaches ava only once the test yields.)
+  timeout: '3m'
 }
