@@ -137,6 +137,19 @@ test.describe('Verifies test runner compatibility', () => {
     })
   })
 
+  // Round 7 (E24-E27): vitest's matchers, its pretty-format and util.inspect with printed, frozen and `in`-probed
+  // substitutes (test-runners/vitest-matchers). This suite must pass as well.
+  test.describe('vitest matchers', () => {
+    test.it('R7 substitutes print by their paths, can be frozen, answer `in`, and compare by identity', () => {
+      try {
+        execSync('npx vitest run ./test-runners/vitest-matchers/index.spec.ts', { env: testRunnerEnvironment(), stdio: 'pipe' })
+      } catch (error) {
+        // @ts-expect-error
+        assert.fail(`The vitest matcher checks failed:\n${error.stdout.toString()}${error.stderr.toString()}`)
+      }
+    })
+  })
+
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
       test.it('reports the Substitute exception', () => {
