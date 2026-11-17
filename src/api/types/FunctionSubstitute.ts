@@ -294,7 +294,9 @@ type CombinedKind<TFunction> = ReturnsAlike<TFunction> extends true ?
   (7 extends MaximumArguments<Extract<SlotParameterLists<TFunction, number>, any[]>> ? 'boxes' : any) :
   'boxes'
 type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> extends NoOverloads ? false : true) : never
-type ReturnsAlike<TFunction> = false extends EachReturnsAll<TFunction, AllReturnTypes<TFunction>> ? false : true
+// Told apart by type identity (as `VariantsKind` does), which takes linear time, unlike comparing every return type with
+// the union of all (`ReturnsKind`), which made unions of many variants with `this`-returning methods slow.
+type ReturnsAlike<TFunction> = true extends IsUnion<AllReturnTypes<TFunction>, AllReturnTypes<TFunction>> ? false : true
 // The parameter lists of the overloads in slot `TSlot` of the variants (all slots for `number`). The parameter names
 // are kept: removing them (`UnnamedArguments`) costs more than the duplicates it would remove.
 type SlotParameterLists<TVariant, TSlot extends number> =
@@ -316,11 +318,13 @@ type SlotSignature<A, R, V extends SubstituteView> =
 type SlotSignatureOf<A extends any[], R, V extends SubstituteView> =
   PositionalSignatureOf<UnnamedArgumentsOf<A, MinimumArguments<A>, MaximumArguments<A>>, R, V, never>
 type SignaturesOfBoxes<TBoxes> = TBoxes extends SignatureBox ?
-  TBoxes[6] & TBoxes[5] & TBoxes[4] & TBoxes[3] & TBoxes[2] & TBoxes[1] & TBoxes['more'] & TBoxes['allArguments'] &
+  TBoxes[6] & TBoxes[5] & TBoxes[4] & TBoxes[3] & TBoxes[2] & TBoxes[1] & TBoxes['more'] & TBoxes['full'] &
+  TBoxes['allArguments'] &
   TBoxes[0] :
   never
 type SignatureBox = {
-  0: unknown, 1: unknown, 2: unknown, 3: unknown, 4: unknown, 5: unknown, 6: unknown, more: unknown, allArguments: unknown
+  0: unknown, 1: unknown, 2: unknown, 3: unknown, 4: unknown, 5: unknown, 6: unknown, more: unknown, full: unknown,
+  allArguments: unknown
 }
 // The signatures of one variant: for each number of arguments `n` from 0 to 6 that an overload accepts, a positional
 // signature that takes exactly `n` arguments, the overload's first `n` parameters (T45, R6TD-1); in `more`, the
@@ -345,6 +349,7 @@ type EachBox<TVariant, TView extends SubstituteView, TFunction> = TVariant exten
   5: PrefixSignatures<Overloads<TVariant>, 5, TView, TFunction>
   6: PrefixSignatures<Overloads<TVariant>, 6, TView, TFunction>
   more: PrefixSignatures<Overloads<TVariant>, 7, TView, TFunction>
+  full: FullSignatures<Overloads<TVariant>, TView, TFunction>
   allArguments: UnionAllArgumentsSignaturesOf<Overloads<TVariant>, TView, TFunction>
 } : never
 type PrefixSignatures<TOverloads extends any[], TCount extends ArgumentCount, TView extends SubstituteView, TFunction> =
@@ -357,8 +362,21 @@ type PrefixSignatures<TOverloads extends any[], TCount extends ArgumentCount, TV
 type PrefixSignature<TOverload, TCount extends ArgumentCount, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
   (ArgumentCounts[TCount] extends TOverload['arguments'] ?
-    PrefixSignatureOf<Extract<PrefixOf<TOverload['arguments'], TCount>, any[]>, TOverload['arguments'], TView, TFunction> :
+    PrefixSignatureOf<Extract<PrefixOf<TOverload['arguments'], TCount>, any[]>, UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
     unknown) :
+  unknown
+// The signature of each overload with its whole parameter list (the optional parameters included). Calls resolve to the
+// signatures above first; these make sure that when TypeScript calls the union, it finds the same parameter list as
+// a variant's own method among the substitute's signatures and leaves the plain method out. (TypeScript tries a
+// signature whose parameters have literal types, such as `read(path: string, encoding?: 'buffer')`, first.)
+type FullSignatures<TOverloads extends any[], TView extends SubstituteView, TFunction> =
+  FullSignature<TOverloads[0], TView, TFunction> & FullSignature<TOverloads[1], TView, TFunction> &
+  FullSignature<TOverloads[2], TView, TFunction> & FullSignature<TOverloads[3], TView, TFunction> &
+  FullSignature<TOverloads[4], TView, TFunction> & FullSignature<TOverloads[5], TView, TFunction> &
+  FullSignature<TOverloads[6], TView, TFunction> & FullSignature<TOverloads[7], TView, TFunction>
+type FullSignature<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  PrefixSignatureOf<UnnamedArguments<TOverload['arguments']>, UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
   unknown
 type ArgumentCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 type ArgumentCounts = [[], [any], [any, any], [any, any, any], [any, any, any, any], [any, any, any, any, any],
@@ -389,10 +407,14 @@ type UnionAllArgumentsSignaturesOf<TOverloads extends any[], TView extends Subst
 // A single `Arg.all()` matches every call, so its result takes what any overload of any variant returns (T45, R6TD-1).
 type UnionAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
-  ((allArguments: AllArguments<UnnamedArguments<TOverload['arguments']>>) =>
-    CallResult<TView, UnnamedArguments<TOverload['arguments']>, AllReturnTypes<TFunction>, never>) &
-  TrailingAllArgumentsSignatures<UnnamedArguments<TOverload['arguments']>, unknown, TView, TFunction> :
+  UnionAllArgumentsSignaturesFor<UnnamedArguments<TOverload['arguments']>, TView, TFunction> :
   unknown
+// A separate alias of the parameter list without names, so that variants with the same parameter list give the same
+// signatures (see `EachBox`). Written out in `UnionAllArgumentsSignatures`, each variant had its own copy, and a union
+// of 60 variants took 1.5 times as long to check.
+type UnionAllArgumentsSignaturesFor<A extends any[], V extends SubstituteView, F> =
+  ((allArguments: AllArguments<A>) => CallResult<V, A, AllReturnTypes<F>, never>) &
+  TrailingAllArgumentsSignatures<A, unknown, V, F>
 // The number of arguments a parameter list requires; 6 stands for 6 or more.
 type MinimumArguments<A> =
   [] extends A ? 0 : [any] extends A ? 1 : [any, any] extends A ? 2 : [any, any, any] extends A ? 3 :
