@@ -41,7 +41,6 @@ export type Frame = { readonly file: string | null | undefined, readonly enclosi
 const errorConstructor = Error as unknown as Record<string, unknown>
 const STACK_TRACE_LIMIT = 'stackTraceLimit'
 const NONE: unique symbol = Symbol('none')
-const NONE_OWN: unique symbol = Symbol('no own property')
 /** E15: the last limit that could not be lowered for a moment (read-only, getter-only, frozen): it is not tried again. */
 let fixedLimit: unknown = NONE
 /** The last limit whose property was found to be assignable (so that it is not looked at on every capture). */
@@ -49,31 +48,21 @@ let assignableLimit: unknown = NONE
 
 /**
  * Whether Error.stackTraceLimit can be assigned without an exception (E16: a debugger set to pause on caught
- * exceptions would stop at a failed assignment): a writable value, an accessor with a setter, or no property on an
- * Error that can still get one.
+ * exceptions would stop at a failed assignment): a writable value, or an accessor with a setter.
  */
 const limitIsAssignable = (): boolean => {
   const descriptor = Object.getOwnPropertyDescriptor(errorConstructor, STACK_TRACE_LIMIT)
-  if (descriptor === undefined) return Object.isExtensible(errorConstructor)
+  if (descriptor === undefined) return false
   return 'value' in descriptor ? descriptor.writable === true : typeof descriptor.set === 'function'
 }
 
 /**
- * Lowers Error.stackTraceLimit to 1 for a moment, and gives what to restore: NONE when it was left as it was, because
- * it is 0 or 1 already or cannot be changed (E15: read-only, getter-only, Object.freeze(Error); then the capture takes
- * as many frames as the limit says, which is slower but just as correct). undefined for a limit that did not exist.
+ * Lowers Error.stackTraceLimit (a number above 1) to 1 for a moment, and gives what to restore: NONE when it was left
+ * as it was, because it cannot be changed (E15: read-only, getter-only, Object.freeze(Error); then the capture takes as
+ * many frames as the limit says, which is slower but just as correct).
  */
-const lowerLimit = (): unknown => {
-  let limit: unknown
-  try {
-    limit = errorConstructor[STACK_TRACE_LIMIT]
-  } catch {
-    return NONE
-  }
-  if ((limit as number) >= 0 && (limit as number) <= 1) return NONE
-  if (limit === fixedLimit) return NONE
-  // a limit that does not exist is restored by deleting it again, not by leaving an own property `undefined` behind
-  if (limit === undefined && !Object.prototype.hasOwnProperty.call(errorConstructor, STACK_TRACE_LIMIT)) limit = NONE_OWN
+const lowerLimit = (limit: number): unknown => {
+  if (limit === 1 || limit === fixedLimit) return NONE
   let lowered = false
   try {
     if (limit === assignableLimit || limitIsAssignable()) {
@@ -83,12 +72,12 @@ const lowerLimit = (): unknown => {
     }
   } catch { /* it changed in the meantime */ }
   if (!lowered) {
-    fixedLimit = limit === NONE_OWN ? undefined : limit
+    fixedLimit = limit
     return NONE
   }
   if (errorConstructor[STACK_TRACE_LIMIT] !== 1) {
     // an accessor that ignores what it is given: nothing to restore
-    fixedLimit = limit === NONE_OWN ? undefined : limit
+    fixedLimit = limit
     return NONE
   }
   fixedLimit = NONE
@@ -98,25 +87,42 @@ const lowerLimit = (): unknown => {
 const restoreLimit = (limit: unknown): void => {
   if (limit === NONE) return
   try {
-    if (limit === NONE_OWN) delete errorConstructor[STACK_TRACE_LIMIT]
-    else errorConstructor[STACK_TRACE_LIMIT] = limit
+    errorConstructor[STACK_TRACE_LIMIT] = limit
   } catch { /* it could be changed a moment ago */ }
 }
 
-// Only the call site (the first frame) is ever used, so only one frame is collected: collecting the whole stack for
-// every call would dominate the cost of a call, especially with a raised stackTraceLimit. Error.stackTraceLimit = 0
-// is honoured: then there is no call site at all.
-export const captureStack = (stackStart: Function): StackHolder => {
-  const holder: StackHolder = {}
-  if (typeof Error.captureStackTrace !== 'function') {
-    holder.stack = new Error().stack
-    return holder
+/**
+ * E21: the capture of an operation without stack frames, shared by all of them: Error.stackTraceLimit is missing, is
+ * not a number or is below 1 (V8 itself collects no frames for any error then). It has no stack, so it shows no
+ * "called at" line, and has no frame (D25 falls back to adjacency, E2).
+ */
+const NO_FRAMES: StackHolder = Object.freeze({})
+
+/** Error.stackTraceLimit as a number of frames, or 0 when V8 collects none (see NO_FRAMES). */
+const currentLimit = (): number => {
+  let limit: unknown
+  try {
+    limit = errorConstructor[STACK_TRACE_LIMIT]
+  } catch {
+    return 0
   }
-  const limit = lowerLimit()
+  return typeof limit === 'number' && limit >= 1 ? limit : 0
+}
+
+// Only the call site (the first frame) is ever used, so only one frame is collected: collecting the whole stack for
+// every call would dominate the cost of a call, especially with a raised stackTraceLimit. A limit that gives no frames
+// (Error.stackTraceLimit = 0, or E21: missing or not a number) is honoured: then there is no call site at all, and
+// the property is left alone.
+export const captureStack = (stackStart: Function): StackHolder => {
+  if (typeof Error.captureStackTrace !== 'function') return { stack: new Error().stack }
+  const limit = currentLimit()
+  if (limit === 0) return NO_FRAMES
+  const holder: StackHolder = {}
+  const lowered = lowerLimit(limit)
   try {
     Error.captureStackTrace(holder, stackStart)
   } finally {
-    restoreLimit(limit)
+    restoreLimit(lowered)
   }
   return holder
 }
@@ -241,6 +247,7 @@ type Prepare = typeof peekFirstFrame | typeof keepFirstFrame | typeof takeFirstF
  * stack (E16, see DeferredStack), otherwise by a peek that throws.
  */
 const readFirstFrame = (holder: StackHolder, keep: boolean): Frame | null => {
+  if (holder === NO_FRAMES) return null
   let original: PropertyDescriptor | undefined
   try {
     original = Object.getOwnPropertyDescriptor(errorConstructor, PREPARE_STACK_TRACE)

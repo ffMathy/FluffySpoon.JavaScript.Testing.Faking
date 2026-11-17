@@ -58,9 +58,9 @@ test('R5V-3 (E15) a read-only, getter-only, frozen or missing Error.stackTraceLi
     `)
     const deleted = name.startsWith('a deleted property')
     // V8 only takes a data property as the limit: with an accessor it collects no frames for any error, and neither
-    // for the library. A missing limit is defined as 1 for a moment, where it can be (as before), so that only
-    // a missing one on a frozen Error leaves the library without frames as well.
-    const withFrames = !(name.includes('accessor') || name === 'a deleted property on a frozen Error')
+    // for the library. E21 (round 7): neither does it with a missing limit, so the library captures none then either
+    // (until round 6 it defined the limit as 1 for a moment, where it could).
+    const withFrames = !(name.includes('accessor') || deleted)
     t.deepEqual(result, {
       user: { id: 1 },
       calledAt: withFrames,

@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument } from '../shared'
 import { SubstituteException } from './SubstituteException'
-import { FAMILY_KEYS, forgetListings, isInFamily, noteListing } from './utilities/ArgumentHash'
+import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -87,6 +87,9 @@ const REMEMBERED_ITEMS = 256
 /** Containers that are never searched again: too wide to be searched, or wide and searched in full without a matcher. */
 const notSearched = new WeakSet<object>()
 
+/** Whether a container is remembered as one that is never searched again (none are with the memos off, see hashSettings). */
+const isNotSearched = (container: object): boolean => hashSettings.memos && notSearched.has(container)
+
 /**
  * One search: the argument, the containers searched so far (created once a nested one is reached; true for those
  * searched in full), the items left, and how often a bound left something out (`cuts`: then the containers around it
@@ -94,16 +97,18 @@ const notSearched = new WeakSet<object>()
  */
 type Search = { root: object, visited: Map<object, boolean> | undefined, items: number, cuts: number }
 
-const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search): boolean => {
+/** `probe`: whether a container may be looked up in the families (see ArgumentHash.hashKeyed): not an array item. */
+const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   if (isArgumentMatcher(item)) return true
-  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search)
-  if (typeof item === 'object' && item !== null) search.cuts++
+  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search, probe)
+  // E20: only a plain container is ever searched, so only one is left out (a Date or a class instance is not)
+  if (isPlainContainer(item)) search.cuts++
   return false
 }
 
 /** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
-const holdsMatcher = (container: object, budget: number, depth: number, search: Search): boolean => {
-  if (notSearched.has(container)) return false
+const holdsMatcher = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
+  if (isNotSearched(container)) return false
   const cuts = search.cuts
   if (depth > 0) {
     const visited = search.visited ?? (search.visited = new Map([[search.root, false]]))
@@ -115,12 +120,12 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
     }
     visited.set(container, false)
   }
-  const found = holdsMatcherInside(container, budget, depth, search)
+  const found = holdsMatcherInside(container, budget, depth, search, probe)
   if (!found && depth > 0 && search.cuts === cuts) search.visited!.set(container, true)
   return found
 }
 
-const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search): boolean => {
+const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   const cuts = search.cuts
   if (Array.isArray(container)) {
     const length = container.length
@@ -131,20 +136,20 @@ const holdsMatcherInside = (container: object, budget: number, depth: number, se
     }
     search.items -= length
     const share = Math.floor((budget - 1) / length)
-    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search)) return true
+    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search, false)) return true
     if (length > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
     return false
   }
   // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
-  if (isInFamily(container)) {
-    notSearched.add(container)
+  if (probe && isInFamily(container)) {
+    if (hashSettings.memos) notSearched.add(container)
     return false
   }
   const keys = Object.keys(container)
   const symbols = Object.getOwnPropertySymbols(container)
   const count = keys.length + symbols.length
   if (count > MAX_SCANNED_ITEMS) {
-    notSearched.add(container)
+    if (hashSettings.memos) notSearched.add(container)
     // E13: the hash, which comes next, takes the keys from here
     noteListing(container, symbols.length === 0 ? keys : [...keys, ...symbols.filter(symbol => Object.prototype.propertyIsEnumerable.call(container, symbol))])
     return false
@@ -155,28 +160,39 @@ const holdsMatcherInside = (container: object, budget: number, depth: number, se
   }
   search.items -= count
   const share = Math.floor((budget - 1) / count)
-  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search)) return true
+  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index]), share, depth, search, true)) return true
   for (let index = 0; index < symbols.length; index++) {
     const symbol = symbols[index]
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search)) return true
+    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol), share, depth, search, true)) return true
   }
   if (count > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts)
   return false
 }
 
-/** Wide containers whose search left something out, and that cannot be shown to hold no matcher anywhere (see below). */
-const unproven = new WeakSet<object>()
+/**
+ * Wide containers whose search left something out: false once one was seen (searched within its bounds), true once
+ * it cannot be shown to hold no matcher anywhere (see below).
+ */
+const partlySearched = new WeakMap<object, boolean>()
 
 /**
  * Remembers a wide container that holds no matcher within the bounds of its search. When the bounds left something
- * out (a record's nested object without a share of the budget), it is searched once more, without budgets (see
- * holdsNoMatcherAtAll), so that a shared table of records is searched in full once instead of in part on every call.
+ * out (a record's nested object without a share of the budget) and the container is seen a second time, it is
+ * searched once more, without budgets (see holdsNoMatcherAtAll), so that a shared table of records is searched in full
+ * once instead of in part on every call. E20: a container that is only passed once (a fresh batch of records for
+ * every call) is not searched again.
  */
 const rememberSearched = (container: object, inFull: boolean): void => {
-  if (inFull) notSearched.add(container)
-  else if (!unproven.has(container)) {
+  if (!hashSettings.memos) return
+  if (inFull) {
+    notSearched.add(container)
+    return
+  }
+  const unproven = partlySearched.get(container)
+  if (unproven === undefined) partlySearched.set(container, false)
+  else if (!unproven) {
     if (holdsNoMatcherAtAll(container)) notSearched.add(container)
-    else unproven.add(container)
+    else partlySearched.set(container, true)
   }
 }
 
@@ -226,7 +242,7 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
 const containsNestedMatcher = (value: unknown): boolean => {
   if (!isPlainContainer(value)) return false
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 })
+    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 }, true)
   } catch {
     return false
   }
