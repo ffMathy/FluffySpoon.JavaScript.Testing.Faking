@@ -239,3 +239,123 @@ test('R6FE-2 (E22) the literal-setup index, re-configuration and the auto-substi
   t.is(sub.child(1, undefined).name, 'ann')
   t.not(sub.child(1), sub.child(1, 2))
 })
+
+// ---- E23: new -----------------------------------------------------------------------------------
+
+interface ApiClient { get(path: string): Promise<string> }
+type ClientFactory = new (baseUrl: string) => ApiClient
+
+/** Code under test that is given a class (or a constructor) to instantiate. */
+class UserService {
+  constructor(private readonly Client: ClientFactory) { }
+  load() { return new this.Client('https://api').get('/users') }
+}
+
+/** Code under test that instantiates a class it finds on an injected namespace, in a class field. */
+class Connection {
+  private readonly client = new this.sdk.Client({ region: 'eu' })
+  constructor(private readonly sdk: any) { }
+  open() { return this.client.connect() }
+}
+
+const instantiate = (Klass: any, ...args: any[]) => new Klass(...args)
+const createClient = (sdk: any) => new sdk.Client({ a: 1 })
+
+test('R6FE-3 (E23) new on a substitute is a recorded call that answers with the configured object (the case of the finding)', async t => {
+  const Client = Substitute.for<ClientFactory>()
+  const client = Substitute.for<ApiClient>()
+  client.get('/users').resolves('[]')
+  ;(Client as any)('https://api').returns(client)
+
+  t.is(await new UserService(Client).load(), '[]')
+  t.notThrows(() => (Client as any).received(1)('https://api'))
+  t.notThrows(() => (Client as any)[received](1)('https://api'))
+  t.throws(() => (Client as any).didNotReceive()('https://api'), { instanceOf: SubstituteException })
+  t.regex(inspect(Client), /received:\n {4}new @Substitute\('https:\/\/api'\)/)
+  t.true(messageOf(() => (Client as any).received(2)('https://api')).includes("› ✔ new @Substitute('https://api')\n"))
+})
+
+test('R6FE-3 (E23) new on a member: recorded as new Client(args), configured with call syntax, otherwise an auto-substitute', t => {
+  const ns = Substitute.for<any>()
+  // in code under test (a setup on the result in the test's own expression would retract the call, D25)
+  const o = createClient(ns)
+  t.is(typeof o, 'function', 'an auto-substitute')
+  o.connect().returns('connected')
+  t.notThrows(() => ns.received(1).Client({ a: 1 }))
+  t.is(ns.Client({ a: 1 }).connect(), 'connected', 'the same auto-substitute as the call')
+  t.true(inspect(ns).includes('    new Client({ a: 1 })\n    Client({ a: 1 })\n'))
+  const message = messageOf(() => ns.received(3).Client({ a: 1 }))
+  t.true(message.includes('Expected to receive 3 method calls matching Client({ a: 1 }), but received 2.'))
+  t.true(message.includes('› ✔ new @Substitute.Client({ a: 1 })\n'))
+  t.true(message.includes('› ✔ @Substitute.Client({ a: 1 })\n'))
+
+  const instance = { configured: true }
+  ns.Configured(Arg.any()).returns(instance)
+  t.is(new ns.Configured(1), instance)
+  ns.Factory(Arg.any()).returns(() => 'a function')
+  t.is(new ns.Factory(1)(), 'a function', 'a function is an object for new')
+  ns.Primitive(Arg.any()).returns(5)
+  const fromPrimitive = new ns.Primitive(1)
+  t.is(typeof fromPrimitive, 'function', 'a primitive configured: the auto-substitute of the call')
+  t.is(fromPrimitive, new ns.Primitive(1))
+  t.is(ns.Primitive(1), 5, 'the call itself still answers with the primitive')
+  ns.Failing(Arg.any()).throws(new Error('cannot connect'))
+  t.throws(() => new ns.Failing(1), { message: 'cannot connect' })
+  ns.Async(Arg.any()).resolves('ready')
+  t.true(new ns.Async(1) instanceof Promise)
+})
+
+test('R6FE-3 (E23) Reflect.construct, new (sub.Member)(), class fields and a substitute passed as a class', t => {
+  const Ctor = Substitute.for<any>()
+  const made = { made: true }
+  Ctor(Arg.all()).returns(made)
+  t.is(Reflect.construct(Ctor, [1, 2]), made)
+  t.is(instantiate(Ctor), made)
+  t.notThrows(() => Ctor.received(1)(1, 2))
+  t.notThrows(() => Ctor.received(1)())
+
+  const ns = Substitute.for<any>()
+  t.is(typeof new (ns.Member)(), 'function')
+  t.notThrows(() => ns.received(1).Member())
+
+  const sdk = Substitute.for<any>()
+  sdk.Client(Arg.any()).returns({ connect: () => 'open' })
+  t.is(new Connection(sdk).open(), 'open')
+  t.notThrows(() => sdk.received(1).Client({ region: 'eu' }))
+
+  // new on a bound substitute constructs it with the bound arguments first
+  const Bound = ns.Bound.bind(null, 'a')
+  t.is(typeof new Bound('b'), 'function')
+  t.notThrows(() => ns.received(1).Bound('a', 'b'))
+
+  // setups and checks can be written with new as well
+  new ns.Late(Arg.any()).returns({ late: true })
+  t.true(new ns.Late(2).late)
+  new (ns[configure]().Configured)(1).returns({ configured: true })
+  t.true(new ns.Configured(1).configured)
+  t.notThrows(() => new (ns.received(1).Configured)(1))
+})
+
+test('R6FE-3 (E23) a mimicked class, or a class given to mimicks(), is constructed; an arrow function is called', t => {
+  class Real { constructor(public readonly value: number) { } }
+  const Mimicking = Substitute.for<any>()
+  Mimicking[mimick](Real)
+  const real = new Mimicking(3)
+  t.true(real instanceof Real)
+  t.is(real.value, 3)
+  t.notThrows(() => Mimicking.received(1)(3))
+
+  const holder = Substitute.for<any>()
+  holder[mimick]({ Real })
+  t.true(new holder.Real(4) instanceof Real)
+
+  const factories = Substitute.for<any>()
+  factories.Make(Arg.any()).mimicks(Real)
+  t.is(new factories.Make(7).value, 7)
+  factories.Arrow(Arg.any()).mimicks((value: number) => ({ arrow: value }))
+  t.is(new factories.Arrow(8).arrow, 8)
+  factories.Plain(Arg.any()).mimicks(function (this: any, value: number) { this.plain = value })
+  t.is(new factories.Plain(9).plain, 9)
+  factories.called(Arg.any()).mimicks(Real as any)
+  t.throws(() => factories.called(1), { instanceOf: TypeError }, 'a call of a mimicked class still calls it')
+})
