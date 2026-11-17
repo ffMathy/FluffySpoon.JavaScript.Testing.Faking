@@ -1,6 +1,8 @@
 import test from 'ava'
+import * as assert from 'assert'
 import { spawnSync } from 'child_process'
 import * as path from 'path'
+import { performance } from 'perf_hooks'
 import { inspect } from 'util'
 
 import { Substitute, Arg, configure, mimick } from '../../../src'
@@ -223,4 +225,251 @@ test('R7FE-3 (E33) _isMockFunction is a protocol key: undefined and not recorded
   const mimicking = Substitute.for<any>()
   mimicking[mimick]({ _isMockFunction: true })
   t.true(mimicking._isMockFunction)
+})
+
+// ---- E35: the in operator, and deep chains of auto-substitutes ----------------------------------------------
+
+/** Code under test that feature-detects an optional logger method on every call (R7-ADV-1). */
+class Reporter {
+  constructor(private readonly logger: any) { }
+  report(item: { id: number }) {
+    if ('debug' in this.logger) this.logger.debug(item)
+    else this.logger.log(`item ${item.id}`)
+  }
+}
+
+/** The same code under test without the probe. */
+class PlainReporter {
+  constructor(private readonly logger: any) { }
+  report(item: { id: number }) { this.logger.log(`item ${item.id}`) }
+}
+
+test('R7-ADV-1 (E35) key in sub does not scan the auto-substitutes: 10,000 probes interleaved with calls cost no more than the calls', t => {
+  /**
+   * 10,000 reports with the probe and 10,000 without, interleaved report by report (in alternating order), so that both
+   * see the same load and the same garbage collections. The time of each one is added up.
+   */
+  const round = (): { probed: number, plain: number } => {
+    const probedLogger = Substitute.for<any>()
+    const plainLogger = Substitute.for<any>()
+    const probedReporter = new Reporter(probedLogger)
+    const plainReporter = new PlainReporter(plainLogger)
+    let probed = 0
+    let plain = 0
+    const time = (report: () => void): number => {
+      const started = performance.now()
+      report()
+      return performance.now() - started
+    }
+    for (let index = 0; index < 10000; index++) {
+      const item = { id: index }
+      if (index % 2 === 0) {
+        probed += time(() => probedReporter.report(item))
+        plain += time(() => plainReporter.report(item))
+      } else {
+        plain += time(() => plainReporter.report(item))
+        probed += time(() => probedReporter.report(item))
+      }
+    }
+    probedLogger.received(10000).log(Arg.any())
+    plainLogger.received(10000).log(Arg.any())
+    return { probed, plain }
+  }
+  round() // warm-up
+  const rounds = [round(), round(), round(), round(), round()]
+  const ratios = rounds.map(({ probed, plain }) => probed / plain).sort((a, b) => a - b)
+  const ratio = ratios[2]
+  t.log(`10,000 calls with an in probe each against 10,000 without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratio.toFixed(2)}x, ` +
+    `${rounds.map(({ probed }) => probed.toFixed(0)).join(', ')} ms with the probe)`)
+  // at 89e4175 the probes made it 15 to 50 times slower; at 74b8588 (no in trap) they cost nothing
+  t.true(ratio < 1.3, `${ratio.toFixed(2)}x`)
+})
+
+test('R7-ADV-1 (E35) the cost of key in sub does not grow with the auto-substitutes of the substitute', t => {
+  const probe = (logger: any): number => {
+    const started = process.hrtime()
+    let found = 0
+    for (let index = 0; index < 10000; index++) if ('debug' in logger) found++
+    const [seconds, nanoseconds] = process.hrtime(started)
+    t.is(found, 0)
+    return seconds * 1e3 + nanoseconds / 1e6
+  }
+  const fresh = Substitute.for<any>()
+  const used = Substitute.for<any>()
+  for (let index = 0; index < 10000; index++) used.log(`item ${index}`).flush()
+  probe(fresh)
+  probe(used)
+  const freshTimes: number[] = []
+  const usedTimes: number[] = []
+  for (let round = 0; round < 5; round++) {
+    freshTimes.push(probe(fresh))
+    usedTimes.push(probe(used))
+  }
+  const best = (values: number[]) => Math.min(...values)
+  t.log(`10,000 probes: ${best(freshTimes).toFixed(2)} ms on a new substitute, ${best(usedTimes).toFixed(2)} ms after 10,000 distinct calls`)
+  // at 89e4175 every probe listed the 10,000 auto-substitutes (seconds in all); a few milliseconds of noise are allowed
+  t.true(best(usedTimes) < 3 * best(freshTimes) + 5, `${best(usedTimes).toFixed(2)} ms against ${best(freshTimes).toFixed(2)} ms`)
+})
+
+test('E35 key in sub notes setups made deeper later, through any path, and only setups', t => {
+  const app = Substitute.for<any>()
+  app.logger.info('used')
+  app.getUser(1).name
+  t.false('logger' in app)
+  t.false('getUser' in app)
+  app.logger.child('x').level.returns(3)
+  t.true('logger' in app, 'a setup two levels down')
+  t.true('child' in app.logger)
+  t.true('level' in app.logger.child('x'))
+  t.false('info' in app.logger)
+  app.getUser(2)[mimick]({ name: 'ann' })
+  t.true('getUser' in app, 'an auto-substitute that mimicks an instance')
+  app[configure]().settings.port.returns(80)
+  t.true('settings' in app, 'a setup through the configure view')
+  const other = Substitute.for<any>()
+  other.repo(Arg.any()).find(Arg.is((id: number) => id > 0)).resolves({ id: 1 })
+  t.true('repo' in other, 'a setup through a matcher chain')
+})
+
+test('R7-ADV-6 (E35) a check or a read through a matcher chain does not make the member `in` the substitute', t => {
+  const app = Substitute.for<any>()
+  t.false('repo' in app)
+  app.repo(Arg.any()).didNotReceive().save(1)
+  t.false('repo' in app)
+  t.is(String(app), '@Substitute {\n}')
+
+  const app2 = Substitute.for<any>()
+  void app2.repo(Arg.any()).save
+  t.false('repo' in app2)
+
+  const app3 = Substitute.for<any>()
+  app3.logger.received(0).info('x')
+  t.false('logger' in app3)
+})
+
+test('R7-ADV-7 (E35) a deep chain of auto-substitutes prints, stringifies, answers `in` and clears without a RangeError, and small', t => {
+  const list = Substitute.for<any>()
+  let node = list
+  for (let index = 0; index < 10000; index++) node = node.next
+  const printed = String(list)
+  t.true(printed.length < 20000, `${printed.length} characters`)
+  t.true(printed.startsWith('@Substitute {\n  received:\n    next\n    next.next\n    next.next.next\n'))
+  t.true(printed.includes('    next.next.next.next.next.next.next.next.next.next.next\n'))
+  t.true(printed.includes('    next.next.next.….next.next.next.next.next.next.next\n'), 'long paths leave out their middle members')
+  t.true(printed.endsWith('    … and 9949 more\n}'), 'its own read and at most 50 calls of the auto-substitutes are listed')
+  t.is(inspect(list), printed)
+  t.true(JSON.stringify({ list }).length < 20000)
+  t.false('next' in list)
+  t.false('value' in list)
+  t.is(String(node), '@Substitute.next.next.next.….next.next.next.next.next.next')
+  node.value.returns(1)
+  t.true('next' in list, 'a setup at the end of the chain')
+  t.notThrows(() => list[Symbol.for('@fluffy-spoon/substitute:clearReceivedCalls')]())
+  t.is(node.value, 1)
+
+  const db = Substitute.for<any>()
+  let query = db.query('users')
+  for (let index = 0; index < 6000; index++) query = query.where(`f${index}`, index)
+  const printedDb = inspect(db)
+  t.true(printedDb.length < 20000, `${printedDb.length} characters`)
+  t.true(printedDb.includes("\n    query('users').where('f0', 0).where('f1', 1).….where('f42', 42).where('f43', 43).where('f44', 44).where('f45', 45).where('f46', 46).where('f47', 47).where('f48', 48)\n"))
+  t.regex(printedDb, /\n {4}… and 59\d\d more\n\}$/)
+  t.false('query' in db)
+  t.true(String(query).startsWith("@Substitute.query('users').where('f0', 0).where('f1', 1).….where('f5994', 5994)"))
+})
+
+// ---- E38: handleEvent ---------------------------------------------------------------------------------------
+
+/** How happy-dom calls an event listener: its handleEvent method when it has one, the listener itself otherwise. */
+const dispatchLikeHappyDom = (listener: any, event: unknown) => {
+  if (listener.handleEvent) listener.handleEvent.call(listener, event)
+  else listener.call(undefined, event)
+}
+
+test('R7FE-2 (E38) a function substitute added as an event listener records the event as a call of itself (happy-dom, Node.js EventTarget)', t => {
+  const onClick = Substitute.for<any>()
+  t.is(onClick.handleEvent, undefined)
+  dispatchLikeHappyDom(onClick, { type: 'click' })
+  t.notThrows(() => onClick.received(1)(Arg.any()))
+  t.is(String(onClick), "@Substitute {\n  received:\n    ({ type: 'click' }) via .call(undefined, { type: 'click' })\n}", 'handleEvent is not recorded')
+
+  const target = new EventTarget()
+  const onSave = Substitute.for<any>()
+  target.addEventListener('save', onSave)
+  target.dispatchEvent(new Event('save'))
+  t.notThrows(() => onSave.received(1)(Arg.is((event: Event) => event.type === 'save')))
+})
+
+test('R7FE-2 (E38) handleEvent answers once it is configured or mimicked, and the wrapper workaround for EventListenerObject substitutes', t => {
+  const configured = Substitute.for<any>()
+  configured[configure]().handleEvent(Arg.any()).returns(undefined)
+  dispatchLikeHappyDom(configured, { type: 'click' })
+  t.notThrows(() => configured.received(1).handleEvent(Arg.any()))
+
+  const mimicking = Substitute.for<any>()
+  const seen: unknown[] = []
+  mimicking[mimick]({ handleEvent: (event: unknown) => seen.push(event) })
+  dispatchLikeHappyDom(mimicking, 'e')
+  t.deepEqual(seen, ['e'])
+
+  // an unconfigured handleEvent reads as undefined, also for code under test that calls it itself
+  const unconfigured = Substitute.for<EventListenerObject>()
+  t.throws(() => unconfigured.handleEvent(new Event('save')), { instanceOf: TypeError })
+
+  // the documented workaround for a substitute of an EventListenerObject (DOM implementations other than happy-dom
+  // call a substitute itself, because it is a function): configure handleEvent, and add a plain object that forwards
+  const listener = Substitute.for<EventListenerObject>()
+  listener[configure]().handleEvent(Arg.any()).returns(undefined)
+  const target = new EventTarget()
+  target.addEventListener('save', { handleEvent: event => listener.handleEvent(event) })
+  target.dispatchEvent(new Event('save'))
+  t.notThrows(() => listener.received(1).handleEvent(Arg.is((event: Event) => event.type === 'save')))
+  t.true('handleEvent' in listener)
+})
+
+// ---- E40: errors among arguments, and the name of the proxy target -----------------------------------------
+
+/** Code under test that logs the error of a failed parse (R7FE-6). */
+const parseOrLog = (logger: any, text: string) => {
+  try {
+    return JSON.parse(text)
+  } catch (error) {
+    logger.error('parse failed', error)
+    return undefined
+  }
+}
+
+test('R7FE-6 (E40) failure messages and printouts show an Error argument as [Name: message], without its stack', t => {
+  const logger = Substitute.for<any>()
+  parseOrLog(logger, '{')
+  const message = messageOf(() => logger.received(1).error('parse failed', Arg.is((error: Error) => error.message === 'nope')))
+  t.regex(message, /› ✘ @Substitute\.error\('parse failed', \[SyntaxError: [^\]\n]+\]\)\n {4}called at /)
+  t.false(message.includes('at JSON.parse'), message)
+  t.true(message.split('\n').length <= 6, message)
+
+  const expected = messageOf(() => logger.received(1).error('parse failed', new Error('bad')))
+  t.true(expected.includes("matching error('parse failed', [Error: bad])"), expected)
+
+  const cause = new TypeError('x is undefined')
+  const failure = new (Error as any)('saving failed', { cause })
+  const repo = Substitute.for<any>()
+  repo.reject(failure)
+  repo.code(Object.assign(new RangeError(''), { code: 'E_RANGE' }))
+  t.is(String(repo), '@Substitute {\n  received:\n    reject([Error: saving failed] { [cause]: [TypeError: x is undefined] })\n    code([RangeError])\n}')
+  t.is(String(repo.reject(failure)), '@Substitute.reject([Error: saving failed] { [cause]: [TypeError: x is undefined] })')
+  repo.retry(Arg.any()).throws(new Error('again'))
+  t.true(String(repo).includes("    retry(Arg.any{any}) => throws([Error: again])"), String(repo))
+})
+
+test('R7FE-7 (E40) util.inspect without custom inspection (node:assert) does not show the internal name returnThis', t => {
+  const app = Substitute.for<any>()
+  const user = app.getUser(1)
+  for (const value of [app, user, app.logger, app[configure](), app.received(), app.getUser.bind(null)]) {
+    const shown = inspect(value, { customInspect: false })
+    t.false(shown.includes('returnThis'), shown)
+    t.regex(shown, /^\[Function: bound substitute\]/)
+  }
+  const error = t.throws(() => assert.strictEqual(user, 'ann'))
+  t.false(error!.message.includes('returnThis'), error!.message)
+  t.true(error!.message.includes('[Function: bound substitute]'), error!.message)
 })
