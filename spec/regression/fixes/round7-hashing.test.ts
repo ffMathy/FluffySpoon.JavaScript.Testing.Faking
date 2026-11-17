@@ -208,19 +208,26 @@ test.serial('R6-ADV-5 (E20) fresh batches of 257 to 1,000 records with nested ob
     return millisecondsOf(() => batches.forEach(batch => sub.importRows(batch))) / (rows * calls)
   }
   let seed = 0
+  const median = (values: readonly number[]) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]
   // 74b8588: 3.7x (257 rows) to 5x (1,000 rows) for nested records, 1.4x to 1.7x for flat records (the limits leave room
   // for a busy machine)
   for (const [name, record, limit] of [['nested records', row, 1.6], ['flat records with a Date', flatRow, 2]] as const) {
     for (const rows of [257, 300, 1000]) {
-      // 256 and `rows` rows by turns, the best of six runs each, so that a busy machine slows both
-      let base = Infinity
+      // E29: 256 and `rows` rows by turns (in both orders), and the median of the ratios of seven rounds, so that a busy
+      // machine slows both sides of each ratio alike and a round that it slowed on one side does not count
+      const ratios: number[] = []
       let cost = Infinity
-      for (let round = 0; round < 6; round++) {
-        base = Math.min(base, run(256, 200, record, ++seed))
-        cost = Math.min(cost, run(rows, 200, record, ++seed))
+      for (let round = 0; round < 7; round++) {
+        const baseFirst = round % 2 === 0
+        const before = run(baseFirst ? 256 : rows, 200, record, ++seed)
+        const after = run(baseFirst ? rows : 256, 200, record, ++seed)
+        const [base, current] = baseFirst ? [before, after] : [after, before]
+        ratios.push(current / base)
+        cost = Math.min(cost, current)
       }
-      t.log(`${name}: ${rows} rows cost ${(cost / base).toFixed(2)}x per record of 256 rows (${(cost * rows * 1000).toFixed(1)} ms for 1,000 calls)`)
-      t.true(cost < base * limit, `${name}: ${rows} rows cost ${cost / base}x per record`)
+      const ratio = median(ratios)
+      t.log(`${name}: ${rows} rows cost ${ratio.toFixed(2)}x per record of 256 rows (${(cost * rows * 1000).toFixed(1)} ms for 1,000 calls)`)
+      t.true(ratio < limit, `${name}: ${rows} rows cost ${ratio}x per record (rounds: ${ratios.map(value => value.toFixed(2)).join(', ')})`)
       // 1,000 calls with fresh batches of 300 records (45facfb: 0.29 s, 74b8588: 1 s for nested records on Node.js 22)
       if (rows <= 300) t.true(cost * rows * 1000 < 1000, `${name}: ${rows} rows`)
     }
