@@ -5,8 +5,9 @@ import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import {
-  coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetWide, lastHashShapeUses,
-  lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn, withPrintGuard
+  coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetUnreadable, lastHashMetWide,
+  lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn,
+  withPrintGuard
 } from './utilities'
 
 let substitutionOrder = 0
@@ -25,6 +26,7 @@ export class ArgumentHashes {
   private readonly _operation = newOperation()
   private _structural?: number
   private _wide = false
+  private _unreadable = false
   private _approximate = false
   /** The containers whose hashes, or whose being wide, the structural hash took from memos of earlier operations. */
   private _contentUses?: ReadonlySet<object>
@@ -37,11 +39,26 @@ export class ArgumentHashes {
   private _identity?: number | null
   private _coarse?: number
 
-  constructor(public readonly args: readonly unknown[], private readonly _setup = false) { }
+  /**
+   * `_inherit` (E32): the operation of the call whose setup these arguments are, whose verdicts on values that cannot be
+   * read hold for this one (see ArgumentHash), or 0.
+   */
+  constructor(public readonly args: readonly unknown[], private readonly _setup = false, private readonly _inherit = 0) { }
+
+  /** The operation these hashes belong to (see ArgumentHash.newOperation). */
+  public get operation(): number {
+    return this._operation
+  }
+
+  /** E32: whether the structural hash, if it was computed, met a value that cannot be read (without computing it). */
+  public get metUnreadable(): boolean {
+    return this._structural !== undefined && this._unreadable
+  }
 
   public get structural(): number {
     if (this._structural === undefined) {
-      this._structural = hashArguments(this.args, this._operation, this._setup)
+      this._structural = hashArguments(this.args, this._operation, this._setup, this._inherit)
+      this._unreadable = lastHashMetUnreadable()
       this._wide = lastHashMetWide()
       this._approximate = lastHashWasApproximate()
       this._contentUses = lastHashContentUses()
@@ -64,7 +81,7 @@ export class ArgumentHashes {
   /** E18: the structural hash from what this operation finds out alone (the structural hash, unless memoBased). */
   public get fresh(): number {
     if (!this.memoBased) return this._structural!
-    if (this._fresh === undefined) this._fresh = hashArguments(this.args, this._operation, true)
+    if (this._fresh === undefined) this._fresh = hashArguments(this.args, this._operation, true, this._inherit)
     return this._fresh
   }
 
@@ -90,7 +107,7 @@ export class ArgumentHashes {
   /** E18: the narrow hash of the arguments (see ArgumentHash.narrowHashArguments): exact, whatever memos there are. */
   public get narrow(): number {
     if (this._narrow === undefined) {
-      this._narrow = narrowHashArguments(this.args, this._operation)
+      this._narrow = narrowHashArguments(this.args, this._operation, this._inherit)
       this._narrowWide = lastHashMetWide()
     }
     return this._narrow
@@ -114,7 +131,7 @@ export class ArgumentHashes {
 
   public get refined(): number {
     if (!this.approximate) return this.structural
-    if (this._refined === undefined) this._refined = refinedHashArguments(this.args, this._operation, this._setup)
+    if (this._refined === undefined) this._refined = refinedHashArguments(this.args, this._operation, this._setup, this._inherit)
     return this._refined
   }
 
@@ -372,8 +389,11 @@ class CallSubstitutions {
     return this._size
   }
 
-  /** Adds a substitution. One with the same specification is replaced (most recent wins). */
-  public add(substitution: Substitution): void {
+  /**
+   * Adds a substitution. One with the same specification is replaced (most recent wins). `inherit`: see
+   * ArgumentHashes (E32).
+   */
+  public add(substitution: Substitution, inherit = 0): void {
     const args = substitution.args!
     if (args.argumentsClass !== 'plain') {
       const index = this._withMatchers.findIndex(existing => existing.args!.equals(args))
@@ -382,7 +402,7 @@ class CallSubstitutions {
       this._withMatchers.push(substitution)
       return
     }
-    const hashes = new ArgumentHashes(args.value!, true)
+    const hashes = new ArgumentHashes(args.value!, true, inherit)
     const hash = hashes.structural
     const bucket = bucketItems(this._literal, hash)
     const replaced = bucket?.find(existing => hashes.mayEqual(existing.args!.value, bucket.length) && existing.args!.equals(args))
@@ -475,6 +495,14 @@ const fileNew = (index: CallEntryIndex, actual: ArgumentHashes, entry: AutoEntry
   else if (stale) noteNarrow(group, actual.narrow, { entry, hash })
   else noteNarrow(group, actual.narrow, null)
 }
+
+/**
+ * E32: the arguments of the auto-substitute that the last call handed out, when hashing that call's arguments met a
+ * value that cannot be read (a getter that throws), with the call's operation and sequence number. A setup of these
+ * arguments right after the call, before anything else is recorded (`repository.save(user).returns(1)`), takes the
+ * call's verdicts on such values as its own (see ArgumentHash), so that it does not read them again.
+ */
+let unreadableCall: { args: readonly unknown[], operation: number, sequence: number } | undefined
 
 const memberPath = (state: SubstituteState, key: PropertyKey): string =>
   key === SELF ? state.path : `${state.path}.${keyToString(key)}`
@@ -586,7 +614,10 @@ export class SubstituteState {
       substitutions = new CallSubstitutions()
       this._callSubstitutions.set(key, substitutions)
     }
-    substitutions.add(substitution)
+    const call = unreadableCall
+    const inherit = call !== undefined && call.args === args.value && call.sequence === currentSequence() ? call.operation : 0
+    if (inherit !== 0) unreadableCall = undefined
+    substitutions.add(substitution, inherit)
     return substitution
   }
 
@@ -664,6 +695,7 @@ export class SubstituteState {
       if (index.byIdentity === undefined) index.byIdentity = new Map()
       bucketAdd(index.byIdentity, identity, entry)
     }
+    unreadableCall = actual.metUnreadable ? { args: entry.argumentList!, operation: actual.operation, sequence: currentSequence() } : undefined
     return entry
   }
 

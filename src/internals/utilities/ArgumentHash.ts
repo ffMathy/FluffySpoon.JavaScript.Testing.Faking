@@ -34,8 +34,9 @@ import { isDeepStrictEqual, types } from 'util'
  * No limit depends on the order of keys or of Map and Set entries, as deep strictly equal values may differ in it.
  * E14, E18: a value that cannot be read (anything that throws while it is read, such as a throwing getter or a revoked
  * proxy) is hashed by its identity, and read once per operation: a later operation reads it again, so a value that
- * became readable is hashed by its contents. Only an argument list that cannot be hashed at all gets the constant
- * FALLBACK_HASH.
+ * became readable is hashed by its contents. E32: a setup of the call right before it (`sub.load(user).returns(1)`)
+ * takes that call's verdicts as its own, so that the whole expression reads such a value once. Only an argument list
+ * that cannot be hashed at all gets the constant FALLBACK_HASH.
  *
  * E18: memos never change results. A hash that used the memo of an earlier operation (lastHashContentUses) may be stale,
  * as the container may have changed since; the lookups that use it (SubstituteState) look again with a fresh hash
@@ -575,6 +576,13 @@ let contentUses: Set<object> | undefined
 let shapeUses: Set<object> | undefined
 /** How many wide containers the current hash met. */
 let wideCount = 0
+/**
+ * E32: the operation whose verdicts on values that cannot be read the current hash takes as its own (0: none): that of
+ * the call whose setup it hashes, `sub.load(user).returns(1)`, so that the setup does not read them again.
+ */
+let inherited = 0
+/** How many values that cannot be read the current hash met. */
+let unreadableCount = 0
 
 /**
  * The current hash uses the memo of a wide container (`current`: written by the current operation): its hash, or only
@@ -612,8 +620,12 @@ const hashObject = (object: object, budget: number, depth: number, probe: boolea
     if (memo !== undefined) {
       const current = memo.operation === operation
       if (memo.unreadable !== undefined) {
-        // E18: read once per operation (a later operation reads it again: it may be readable by then)
-        if (current) return memo.unreadable
+        // E18: read once per operation (a later operation reads it again: it may be readable by then), E32: or by the
+        // call whose setup this is
+        if (current || memo.operation === inherited) {
+          unreadableCount++
+          return memo.unreadable
+        }
       } else if (narrowing) {
         // a container that is known to be wide (and is still wide) is one tag
         if (current || stillWide(object)) {
@@ -643,6 +655,7 @@ const hashObject = (object: object, budget: number, depth: number, probe: boolea
     // as unequal), so only the same value finds the entries recorded for it, and no comparison reads it again.
     const hash = mix(Tag.Unreadable, idOf(object))
     memoOf(object).unreadable = hash
+    unreadableCount++
     return hash
   }
 }
@@ -831,9 +844,9 @@ const hashSet = (set: Set<unknown>, budget: number, depth: number): number => {
 
 /**
  * Runs one hash with a state of its own (a getter could start another hash while one runs), for the operation `of`,
- * and `freshly` (without the memos of earlier operations) or not.
+ * and `freshly` (without the memos of earlier operations) or not. `inherit`: see `inherited`.
  */
-const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean, hash: () => number): number => {
+const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean, inherit: number, hash: () => number): number => {
   const outerRefining = refining
   const outerApproximate = approximate
   const outerInEntry = inEntry
@@ -843,6 +856,8 @@ const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean,
   const outerContentUses = contentUses
   const outerShapeUses = shapeUses
   const outerWideCount = wideCount
+  const outerInherited = inherited
+  const outerUnreadableCount = unreadableCount
   refining = refine
   approximate = false
   inEntry = false
@@ -850,7 +865,9 @@ const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean,
   fresh = freshly || narrow || !hashSettings.memos
   narrowing = narrow
   contentUses = shapeUses = undefined
+  inherited = inherit
   const start = wideCount
+  const unreadableStart = unreadableCount
   try {
     return hash()
   } catch {
@@ -860,6 +877,7 @@ const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean,
     lastContentUses = contentUses
     lastShapeUses = shapeUses
     lastWide = wideCount !== start
+    lastUnreadable = unreadableCount !== unreadableStart
     refining = outerRefining
     approximate = outerApproximate
     inEntry = outerInEntry
@@ -869,12 +887,15 @@ const hashing = (refine: boolean, of: number, freshly: boolean, narrow: boolean,
     contentUses = outerContentUses
     shapeUses = outerShapeUses
     wideCount = outerWideCount
+    inherited = outerInherited
+    unreadableCount = outerUnreadableCount
   }
 }
 let lastApproximate = false
 let lastContentUses: ReadonlySet<object> | undefined
 let lastShapeUses: ReadonlySet<object> | undefined
 let lastWide = false
+let lastUnreadable = false
 
 /**
  * E22: the number of arguments without the trailing undefined ones. An omitted trailing argument compares as undefined
@@ -894,14 +915,15 @@ const hashList = (args: readonly unknown[]): number => {
 }
 
 /** The hash of one value (see above), as an operation of its own. Exported for the tests of the contract. */
-export const structuralHash = (value: unknown): number => hashing(false, newOperation(), false, false, () => hashValue(value, BUDGET, 0, true))
+export const structuralHash = (value: unknown): number => hashing(false, newOperation(), false, false, 0, () => hashValue(value, BUDGET, 0, true))
 
 /**
  * The structural hash of an argument list (see above), for the operation `of`. Each argument has a budget of its own.
- * `freshly`: without the memos of earlier operations (E18).
+ * `freshly`: without the memos of earlier operations (E18). `inherit`: the operation whose verdicts on values that
+ * cannot be read count as this operation's own (E32: that of the call whose setup this is, else 0).
  */
-export const hashArguments = (args: readonly unknown[], of = newOperation(), freshly = false): number =>
-  hashing(false, of, freshly, false, () => hashList(args))
+export const hashArguments = (args: readonly unknown[], of = newOperation(), freshly = false, inherit = 0): number =>
+  hashing(false, of, freshly, false, inherit, () => hashList(args))
 
 /**
  * E18: the narrow hash of an argument list, for the operation `of`: the structural hash with every wide container
@@ -910,8 +932,8 @@ export const hashArguments = (args: readonly unknown[], of = newOperation(), fre
  * whatever changed inside their wide containers since they were first hashed. So it tells, without a fresh hash, that
  * no setup or entry can be equal to a call whose hash used memos.
  */
-export const narrowHashArguments = (args: readonly unknown[], of: number): number =>
-  hashing(false, of, true, true, () => hashList(args))
+export const narrowHashArguments = (args: readonly unknown[], of: number, inherit = 0): number =>
+  hashing(false, of, true, true, inherit, () => hashList(args))
 
 /**
  * Whether a family hash took part in the last structural hash (hashArguments or structuralHash): equal hashes are
@@ -938,12 +960,15 @@ export const lastHashShapeUses = (): ReadonlySet<object> | undefined => lastShap
  */
 export const lastHashMetWide = (): boolean => lastWide
 
+/** E32: whether the last hash met a value that cannot be read (see hashObject). */
+export const lastHashMetUnreadable = (): boolean => lastUnreadable
+
 /** The hash of an argument list without families (E13): it also counts the keys a family leaves out. */
-export const refinedHashArguments = (args: readonly unknown[], of = newOperation(), freshly = false): number =>
-  hashing(true, of, freshly, false, () => hashList(args))
+export const refinedHashArguments = (args: readonly unknown[], of = newOperation(), freshly = false, inherit = 0): number =>
+  hashing(true, of, freshly, false, inherit, () => hashList(args))
 
 /** The refined hash of one value. Exported for the tests of the contract. */
-export const refinedStructuralHash = (value: unknown): number => hashing(true, newOperation(), false, false, () => hashValue(value, BUDGET, 0, true))
+export const refinedStructuralHash = (value: unknown): number => hashing(true, newOperation(), false, false, 0, () => hashValue(value, BUDGET, 0, true))
 
 /**
  * E9: a hash of an argument list that does not look into objects: primitives by value, functions by identity, every
