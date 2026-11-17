@@ -5,8 +5,8 @@ import { StackHolder } from './CallSite'
 import { RecordedArguments } from './RecordedArguments'
 import { SELF, SubstitutionMethod, keyToString } from './Constants'
 import {
-  coarseHashArguments, hashArguments, identityHashArguments, lastHashMemoUses, lastHashMetWide, lastHashWasApproximate,
-  lastNarrowHash, newOperation, refinedHashArguments, stillWide
+  coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetWide, lastHashShapeUses,
+  lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn
 } from './utilities'
 
 let substitutionOrder = 0
@@ -18,21 +18,21 @@ let substitutionOrder = 0
  * E18: the structural hash may use what earlier operations found out about wide containers among the arguments, and
  * be stale when one of them changed since. Such a lookup that finds nothing looks again with the fresh hash before it
  * takes the call as unmatched, wherever a candidate could exist: one with the same narrow hash (see
- * ArgumentHash.lastNarrowHash, CallSubstitutions.match, SubstituteState.callEntry). The arguments of a setup (`setup`)
- * are hashed fresh to begin with, so that they are filed under their contents.
+ * ArgumentHash.narrowHashArguments, CallSubstitutions.match, SubstituteState.callEntry). The arguments of a setup
+ * (`setup`) are hashed fresh to begin with, so that they are filed under their contents.
  */
 export class ArgumentHashes {
   private readonly _operation = newOperation()
   private _structural?: number
-  private _narrow = 0
   private _wide = false
   private _approximate = false
-  /** The containers whose memos of earlier operations the structural hash used (undefined: none). */
-  private _memoUses?: readonly object[]
+  /** The containers whose hashes, or whose being wide, the structural hash took from memos of earlier operations. */
+  private _contentUses?: ReadonlySet<object>
+  private _shapeUses?: ReadonlySet<object>
+  private _memoBased?: boolean
   private _fresh?: number
-  private _freshNarrow = 0
-  private _freshWide = false
-  private _stillWide?: boolean
+  private _narrow?: number
+  private _narrowWide = false
   private _refined?: number
   private _identity?: number | null
   private _coarse?: number
@@ -42,63 +42,64 @@ export class ArgumentHashes {
   public get structural(): number {
     if (this._structural === undefined) {
       this._structural = hashArguments(this.args, this._operation, this._setup)
-      this._narrow = lastNarrowHash()
       this._wide = lastHashMetWide()
       this._approximate = lastHashWasApproximate()
-      this._memoUses = lastHashMemoUses()
+      this._contentUses = lastHashContentUses()
+      this._shapeUses = lastHashShapeUses()
     }
     return this._structural
   }
 
-  /** E18: whether the structural hash used what an earlier operation found out (then it may be stale). */
+  /**
+   * E18: whether the structural hash may be stale: it used the hash of a container remembered by an earlier operation,
+   * or took a container to be wide from such a memo while it no longer is.
+   */
   public get memoBased(): boolean {
     void this.structural
-    return this._memoUses !== undefined
+    if (this._memoBased === undefined)
+      this._memoBased = this._contentUses !== undefined || (this._shapeUses !== undefined && ![...this._shapeUses].every(stillWideIn(this._operation)))
+    return this._memoBased
   }
 
   /** E18: the structural hash from what this operation finds out alone (the structural hash, unless memoBased). */
   public get fresh(): number {
     if (!this.memoBased) return this._structural!
-    if (this._fresh === undefined) {
-      this._fresh = hashArguments(this.args, this._operation, true)
-      this._freshNarrow = lastNarrowHash()
-      this._freshWide = lastHashMetWide()
-    }
+    if (this._fresh === undefined) this._fresh = hashArguments(this.args, this._operation, true)
     return this._fresh
   }
 
+  /** Whether the hash to file and look these arguments up under is known to be exact: not memoBased, or fresh. */
+  public get exact(): boolean {
+    return !this.memoBased || this._fresh !== undefined
+  }
+
+  /** The hash to file a new entry under: the fresh one if it is known, else the structural one. */
+  public get best(): number {
+    return this.exact ? this.fresh : this._structural!
+  }
+
   /**
-   * E18: whether the hash met a wide container among the arguments: only then can it have used memos, or can a call
-   * whose hash used memos be equal to these arguments.
+   * E18: whether the structural hash met a wide container among the arguments: only then can it use memos, or can a
+   * call whose hash used memos be equal to these arguments.
    */
   public get wide(): boolean {
     void this.structural
     return this._wide
   }
 
-  /** Whether the fresh hash met a wide container among the arguments (see wide). */
-  public get freshWide(): boolean {
-    void this.fresh
-    return this.memoBased ? this._freshWide : this._wide
-  }
-
-  /** Whether the fresh hash has been computed (it is the one to file a new entry under then). */
-  public get hasFresh(): boolean {
-    return this._fresh !== undefined || !this.memoBased
-  }
-
-  /**
-   * E18: the narrow hash of the arguments (see ArgumentHash.lastNarrowHash): exact, whatever memos the structural hash
-   * used. That of the structural hash, if every container whose memo it used is still wide; otherwise the fresh one.
-   */
+  /** E18: the narrow hash of the arguments (see ArgumentHash.narrowHashArguments): exact, whatever memos there are. */
   public get narrow(): number {
-    if (!this.memoBased) return this._narrow
-    if (this._fresh === undefined) {
-      if (this._stillWide === undefined) this._stillWide = this._memoUses!.every(stillWide)
-      if (this._stillWide) return this._narrow
-      void this.fresh
+    if (this._narrow === undefined) {
+      this._narrow = narrowHashArguments(this.args, this._operation)
+      this._narrowWide = lastHashMetWide()
     }
-    return this._freshNarrow
+    return this._narrow
+  }
+
+  /** Whether the arguments hold a wide container now (as the narrow hash finds). */
+  public get narrowWide(): boolean {
+    void this.narrow
+    return this._narrowWide
   }
 
   /**
@@ -275,16 +276,21 @@ type CallEntryIndex = {
   byHash: Buckets<AutoEntry>
   /** The entries handed out for arguments with objects, by their identity hash. */
   byIdentity?: Buckets<AutoEntry>
-  /**
-   * E18: the narrow hashes of the entries for arguments with wide containers (whether a call whose hash used memos can
-   * have a candidate at all), each with the entry that was filed under a hash that used memos without a check, if
-   * there is one (see callEntry).
-   */
-  byNarrow?: Map<number, Unchecked | null>
+  /** E18: the coarse hashes of the entries for arguments with objects (see callEntry). */
+  coarse?: Set<number>
+  /** E18: per coarse hash, the entries that met a wide container or that were filed unchecked (see callEntry). */
+  groups?: Map<number, CoarseGroup>
 }
 
-/** An entry filed under a hash that used memos of earlier operations, and that hash. */
+/** An entry filed under a hash that may be stale (it used memos of earlier operations), and that hash. */
 type Unchecked = { entry: AutoEntry, hash: number }
+
+/**
+ * E18: the entries of one coarse hash that callEntry knows more about: the first one, if it was filed unchecked when
+ * no other entry had the coarse hash, and the narrow hashes of those that met a wide container, each with the one that
+ * was filed unchecked under it, if there is one.
+ */
+type CoarseGroup = { first?: Unchecked, byNarrow?: Map<number, Unchecked | null> }
 
 /**
  * The entry in the bucket of `hash` whose arguments match the call. `sameHash`: the bucket is that of the call's
@@ -296,14 +302,19 @@ const findEntry = (byHash: Buckets<AutoEntry>, hash: number, actual: ArgumentHas
   return bucket.find(candidate => (!sameHash || actual.mayEqual(candidate.argumentList, bucket.length)) && candidate.matchesCall(actual.args))
 }
 
-/** E18: files an entry that was filed under a hash with memos of earlier operations under its fresh hash. */
-const refile = (byHash: Buckets<AutoEntry>, unchecked: Unchecked): void => {
-  const current = hashArguments(unchecked.entry.argumentList!, newOperation(), true)
-  if (current === unchecked.hash) return
-  bucketRemove(byHash, unchecked.hash, unchecked.entry)
-  bucketAdd(byHash, current, unchecked.entry)
+/**
+ * E18: files an entry that was filed unchecked under its fresh hash, and gives the fresh hashes of its arguments (for
+ * their narrow hash).
+ */
+const refile = (byHash: Buckets<AutoEntry>, unchecked: Unchecked): ArgumentHashes => {
+  const hashes = new ArgumentHashes(unchecked.entry.argumentList!, true)
+  const current = hashes.structural
+  if (current !== unchecked.hash) {
+    bucketRemove(byHash, unchecked.hash, unchecked.entry)
+    bucketAdd(byHash, current, unchecked.entry)
+  }
+  return hashes
 }
-
 /**
  * The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`.
  * `sameHash`: `list` holds the substitutions with the structural hash of the actual arguments (E13, see mayEqual).
@@ -429,6 +440,34 @@ class CallSubstitutions {
     yield* allBucketItems(this._literal)
     yield* this._withMatchers
   }
+}
+
+/** E18: notes a narrow hash in a coarse group (an unchecked entry there is kept). */
+const noteNarrow = (group: CoarseGroup, narrow: number, unchecked: Unchecked | null): void => {
+  const byNarrow = group.byNarrow ?? (group.byNarrow = new Map())
+  if (unchecked !== null || !byNarrow.has(narrow)) byNarrow.set(narrow, unchecked)
+}
+
+/**
+ * E18: files a new entry for arguments with objects in the coarse and narrow index of callEntry: unchecked, when its
+ * hash may be stale (and the first of its coarse hash, or of its narrow hash, as callEntry looked for the others).
+ */
+const fileNew = (index: CallEntryIndex, actual: ArgumentHashes, entry: AutoEntry, hash: number): void => {
+  const coarse = actual.coarse
+  const known = index.coarse ?? (index.coarse = new Set())
+  const firstOfCoarse = !known.has(coarse)
+  if (firstOfCoarse) known.add(coarse)
+  const stale = !actual.exact
+  if (!stale && !actual.wide) return
+  const groups = index.groups ?? (index.groups = new Map())
+  let group = groups.get(coarse)
+  if (group === undefined) {
+    group = {}
+    groups.set(coarse, group)
+  }
+  if (stale && firstOfCoarse) group.first = { entry, hash }
+  else if (stale) noteNarrow(group, actual.narrow, { entry, hash })
+  else noteNarrow(group, actual.narrow, null)
 }
 
 const memberPath = (state: SubstituteState, key: PropertyKey): string =>
@@ -605,51 +644,63 @@ export class SubstituteState {
       if (known !== undefined) return known
     }
 
-    let hash = actual.structural
-    let entry = findEntry(index.byHash, hash, actual, true)
-    let unchecked = false
-    if (entry === undefined && actual.wide) {
-      const groups = index.byNarrow ?? (index.byNarrow = new Map())
-      const narrow = actual.narrow
-      const group = groups.get(narrow)
-      if (actual.memoBased && actual.hasFresh) {
-        // the fresh hash is known already (the literal substitutions looked with it, or a container whose memo the
-        // hash used is no longer wide, so that an equal entry may have no wide container and no group): it tells
-        hash = actual.fresh
-        entry = findEntry(index.byHash, hash, actual, false)
-        if (entry === undefined && group !== undefined && group !== null) {
-          refile(index.byHash, group)
-          groups.set(narrow, null)
-          entry = findEntry(index.byHash, hash, actual, false)
-        }
-        if (entry === undefined && actual.freshWide && group === undefined) groups.set(narrow, null)
-      } else if (group === undefined) {
-        // no entry can be equal: file the new one under the fresh hash if there is one, else note it as unchecked
-        if (actual.hasFresh) groups.set(narrow, null)
-        else unchecked = true
-      } else {
-        // an entry may be equal: the unchecked one is filed under its fresh hash first, then the call looks again
-        if (group !== null) {
-          refile(index.byHash, group)
-          groups.set(narrow, null)
-          if (!actual.memoBased) entry = findEntry(index.byHash, hash, actual, false)
-        }
-        if (entry === undefined && actual.memoBased) {
-          hash = actual.fresh
-          entry = findEntry(index.byHash, hash, actual, false)
-        }
-      }
-    }
+    let hash = actual.best
+    let entry = findEntry(index.byHash, hash, actual, !actual.memoBased)
+    if (entry === undefined && identity !== undefined) entry = this.lookAgain(index, actual)
     if (entry === undefined) {
+      hash = actual.best
       entry = new AutoEntry('call', this, key, actualArguments)
       bucketAdd(index.byHash, hash, entry)
-      if (unchecked) index.byNarrow!.set(actual.narrow, { entry, hash })
+      if (identity !== undefined) fileNew(index, actual, entry, hash)
     }
     if (identity !== undefined) {
       if (index.byIdentity === undefined) index.byIdentity = new Map()
       bucketAdd(index.byIdentity, identity, entry)
     }
     return entry
+  }
+
+  /**
+   * E18: a call with objects among its arguments found no entry with its hash: where an entry could be equal to it, the
+   * entry filed unchecked there is filed under its fresh hash, and the call looks again (with its fresh hash, when its
+   * own hash may be stale). The coarse hash, which uses no memos, tells whether any entry has objects at the same
+   * places, and the narrow hash (see ArgumentHash.narrowHashArguments) which entries with wide containers can be equal.
+   */
+  private lookAgain(index: CallEntryIndex, actual: ArgumentHashes): AutoEntry | undefined {
+    const coarse = actual.coarse
+    if (index.coarse === undefined || !index.coarse.has(coarse)) return undefined
+    const stale = !actual.exact
+    const group = index.groups?.get(coarse)
+    let entry: AutoEntry | undefined
+    if (group?.first !== undefined) {
+      const first = group.first
+      group.first = undefined
+      const hashes = refile(index.byHash, first)
+      if (hashes.wide) noteNarrow(group, hashes.narrow, null)
+      if (!stale) entry = findEntry(index.byHash, actual.best, actual, false)
+    }
+    if (entry !== undefined || !stale) {
+      if (entry === undefined && actual.wide) {
+        const unchecked = group?.byNarrow?.get(actual.narrow)
+        if (unchecked !== undefined && unchecked !== null) {
+          refile(index.byHash, unchecked)
+          group!.byNarrow!.set(actual.narrow, null)
+          entry = findEntry(index.byHash, actual.best, actual, false)
+        }
+      }
+      return entry
+    }
+    // a hash that may be stale: an equal entry is filed under the narrow hash of the arguments, if they hold a wide
+    // container now, else (no wide container is left) it has none, and the fresh hash finds it
+    if (actual.narrowWide) {
+      const unchecked = group?.byNarrow?.get(actual.narrow)
+      if (unchecked === undefined) return undefined
+      if (unchecked !== null) {
+        refile(index.byHash, unchecked)
+        group!.byNarrow!.set(actual.narrow, null)
+      }
+    }
+    return findEntry(index.byHash, actual.fresh, actual, false)
   }
 
   /** The auto-substitute for a call specification used in a nested setup (`a(Arg.any()).b.returns(1)`). */
