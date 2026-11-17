@@ -79,7 +79,11 @@ const brandOf = (value: unknown): ArgumentBrand | undefined => {
   // and reading a property from them would be recorded as a property access.
   if (typeof value !== 'object' || value === null) return undefined
   try {
-    return (value as any)[argumentBrand]
+    // E46: only the two brand values make a matcher. An object that inherits from a substitute (an instance of
+    // `class Plugin extends sdk.Base`) reaches the substitute with this read, which answers undefined (see the get trap
+    // in Engine), and a substitute of another copy of the library may answer it with anything.
+    const brand = (value as any)[argumentBrand]
+    return brand === 'single' || brand === 'all' ? brand : undefined
   } catch {
     return undefined
   }

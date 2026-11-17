@@ -10,7 +10,7 @@ import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import { assertCall, assertPropertyRead, assertSet, settle, validateExpectedCount, ExpectedCount } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, SubstitutionMethod,
-  contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
+  answersOnlyItself, contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
@@ -327,6 +327,10 @@ const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwne
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
+    if ((answersOnlyItself(property) || isPrinting()) && inheritsFromSubstitute(receiver)) {
+      const inherited = inheritedMember(target(), property, receiver)
+      if (inherited !== AS_USUAL) return inherited
+    }
     const face = target()
     const value = faceGet(face, property, get)
     return value === REAL_READ ? realGet(faceState(face), property, adjacentHandOut(face), captureStack(get)) : value
@@ -370,6 +374,34 @@ const faceHandler: ProxyHandler<FaceTarget> = {
 const inheritsFromSubstitute = (receiver: unknown): receiver is object =>
   (typeof receiver === 'object' && receiver !== null) ||
   (typeof receiver === 'function' && Object.getPrototypeOf(receiver) !== faceTargetPrototype)
+
+const AS_USUAL: unique symbol = Symbol('as usual')
+
+/**
+ * E46: what an object that inherits from a substitute (see inheritsFromSubstitute) reads for one of the members that a
+ * substitute answers in its own way only for itself (see answersOnlyItself): such an object is an ordinary object to
+ * the library and to the code that looks at it, so it reads nothing for the library's own symbols (it is no
+ * substitute, matcher or library value: `isSubstituteProxy`, the matcher brand) and for the printing and conversion
+ * members (then, toJSON, Symbol.toPrimitive, util.inspect.custom): JSON.stringify, util.inspect, String(), template
+ * strings and pretty-format see its own fields. toString and valueOf are those of Object.prototype (Function.prototype's
+ * toString for a class that extends a substitute), as for an empty base class, unless the substitute configures or
+ * mimicks them (then AS_USUAL: the read is a member read like any other). Nothing is recorded.
+ * While the library prints (an argument in a message or a path), any read that reaches a substitute through such an
+ * object reads undefined and is not recorded either: util.inspect probes the objects it prints (Node.js 22 reads
+ * `href`), and printing never records anything.
+ */
+const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): unknown => {
+  if (property !== 'toString' && property !== 'valueOf') return undefined
+  const state = face instanceof AutoEntry ? face.materializedState : face
+  if (state !== undefined && configuresMember(state, property)) return AS_USUAL
+  return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
+}
+
+/** Whether a member has a setup of its own (as a property or as a method), or the mimicked instance has it. */
+const configuresMember = (state: SubstituteState, key: PropertyKey): boolean =>
+  state.propertySubstitution(key) !== undefined ||
+  state.hasCallSubstitutions(key) ||
+  (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
 
 /**
  * E36: what an ordinary prototype without the property does with such an assignment: the property is created on the
