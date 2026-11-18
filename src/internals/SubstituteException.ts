@@ -82,30 +82,49 @@ class Printer {
   value(value: unknown, bounds: PrintBounds): string {
     // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
     if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return formatValue(value, this.colors, bounds)
-    return this.printed(this.values, this.reuse?.values, value, bounds, () => formatValue(value, this.colors, bounds))
-  }
-
-  arguments(args: readonly unknown[], bounds: PrintBounds): string {
-    return this.printed(this.lists, this.reuse?.lists, args, bounds, () => formatArguments(args, this.colors, bounds, value => this.value(value, bounds)))
-  }
-
-  private printed<K>(cache: Map<PrintBounds, Map<K, Printed>>, reusable: Map<PrintBounds, Map<K, Printed>> | undefined, key: K, bounds: PrintBounds, print: () => string): string {
-    let known = cache.get(bounds)
-    if (known === undefined) cache.set(bounds, known = new Map())
-    let printed = known.get(key)
+    const known = Printer.known(this.values, bounds)
+    let printed = known.get(value)
     if (printed === undefined) {
-      const reused = reusable?.get(bounds)?.get(key)
-      if (reused !== undefined && reused.unnumbered) printed = reused
-      else {
-        // (the texts of values that an argument list takes from the cache count, too)
+      printed = this.reused(this.reuse?.values, bounds, value)
+      if (printed === undefined) {
         const before = rootLabelCount() + this.numbered
-        const text = print()
+        const text = formatValue(value, this.colors, bounds)
         printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
       }
-      known.set(key, printed)
+      known.set(value, printed)
     }
     if (!printed.unnumbered) this.numbered++
     return printed.text
+  }
+
+  arguments(args: readonly unknown[], bounds: PrintBounds): string {
+    const known = Printer.known(this.lists, bounds)
+    let printed = known.get(args)
+    if (printed === undefined) {
+      printed = this.reused(this.reuse?.lists, bounds, args)
+      if (printed === undefined) {
+        // (the texts of values that it takes from the cache count, too)
+        const before = rootLabelCount() + this.numbered
+        const text = formatArguments(args, this.colors, bounds, value => this.value(value, bounds))
+        printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
+      }
+      known.set(args, printed)
+    }
+    if (!printed.unnumbered) this.numbered++
+    return printed.text
+  }
+
+  private static known<K>(cache: Map<PrintBounds, Map<K, Printed>>, bounds: PrintBounds): Map<K, Printed> {
+    let known = cache.get(bounds)
+    if (known === undefined) cache.set(bounds, known = new Map())
+    return known
+  }
+
+  /** A text of `reuse` that shows no substitute (see above). */
+  private reused<K>(reusable: Map<PrintBounds, Map<K, Printed>> | undefined, bounds: PrintBounds, key: K): Printed | undefined {
+    if (reusable === undefined) return undefined
+    const printed = reusable.get(bounds)?.get(key)
+    return printed !== undefined && printed.unnumbered ? printed : undefined
   }
 }
 
