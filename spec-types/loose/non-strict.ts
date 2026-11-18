@@ -26,6 +26,12 @@ calculator.received(2).isEnabled = true
 calculator[received]().add(1, 2)
 calculator[configure]().add(1, 2).returns(3)
 calculator[mimick]({} as Calculator)
+// R12FE-5 / T72: a partial instance, with its member types checked
+calculator[mimick]({ add: (a, b) => a + b, isEnabled: true })
+// @ts-expect-error isEnabled is a boolean
+calculator[mimick]({ isEnabled: 'yes' })
+// @ts-expect-error an object literal has no other members
+calculator[mimick]({ subtract: (a: number, b: number) => a - b })
 // without strictNullChecks every parameter accepts undefined, so Arg.any('undefined') fits everywhere (T38)
 calculator.add(Arg.any('undefined'), 2).returns(3)
 const asCalculator: Calculator = calculator

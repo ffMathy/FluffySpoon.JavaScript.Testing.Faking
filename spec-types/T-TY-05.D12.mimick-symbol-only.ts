@@ -9,7 +9,7 @@ calculator[mimick](real)
 calculator[mimick]({ add: () => 0 })
 // @ts-expect-error the string form is not a library method
 calculator.mimick(real)
-// @ts-expect-error the instance must implement T
+// @ts-expect-error the instance has only members of T (a partial instance is enough, T72)
 calculator[mimick]({ subtract: (a: number, b: number) => a - b })
 
 // A member called `mimick` is just a member.
