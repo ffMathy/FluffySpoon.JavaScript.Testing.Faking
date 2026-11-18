@@ -5,6 +5,9 @@ import * as path from 'path'
 import * as library from '../../../src'
 import { Substitute, Arg, didNotReceive, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import {
+  MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, deepestMatcher, firstVisibleDifference, formatArguments, formatValue, messageBounds, noteMatcherHolder
+} from '../../../src/internals/utilities/Stringify'
 import { VIEW_SITES_PER_RUN } from '../../../src/internals/Assertions'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -252,4 +255,119 @@ test('R10-ADV-1 (E59) where only a matcher that does not match tells the lines a
   const mixed = linesOf(messageOf(() => s.received(1).f(Arg.any('number'), { a: { b: { c: { d: 2 } } } })))
   t.is(mixed.expected, 'f(Arg.any{number}, { a: { b: { c: { d: 2 } } } })')
   t.deepEqual(mixed.received, ['@Substitute.f(3, { a: { b: { c: { d: 1 } } } })', '@Substitute.f(4, { a: 1 })'])
+})
+
+// ---- E59, E60: the comparison that decides how deep the lines are printed agrees with the printed texts ------------
+
+class Point { constructor(readonly x: unknown, readonly y: unknown) { } }
+class OtherPoint { constructor(readonly x: unknown, readonly y: unknown) { } }
+
+test('R10-ADV-1, R10V-1 (E59, E60) firstVisibleDifference finds the least depth at which two calls print differently, matchers left out', t => {
+  let seed = 7
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+  const below = (count: number) => Math.floor(random() * count)
+  const substitutes = [Substitute.for<any>(), Substitute.for<any>(), Substitute.for<any>().child]
+  const leaf = (): unknown => {
+    const pick = random()
+    if (pick < 0.2) return below(5)
+    if (pick < 0.3) return ['a', 'b', 'x'.repeat(250), 'x'.repeat(249) + 'y', 'y'.repeat(1200), 'y'.repeat(1199) + 'z'][below(6)]
+    if (pick < 0.35) return [null, undefined, true, -0, 0, NaN][below(6)]
+    if (pick < 0.38) return new Date(below(3) * 1000)
+    if (pick < 0.41) return new Map([[below(2), below(2)]])
+    if (pick < 0.43) return new Set(below(2) === 1 ? [1] : [])
+    if (pick < 0.46) return new Error(`e${below(2)}`)
+    if (pick < 0.49) return [Symbol('s'), Symbol.for('r')][below(2)]
+    if (pick < 0.55) return substitutes[below(3)]
+    if (pick < 0.6) return new [Point, OtherPoint][below(2)](below(2), below(2))
+    if (pick < 0.63) return Object.defineProperty({}, 'g', { get: () => 1, enumerable: true })
+    if (pick < 0.65) return Object.create(null)
+    if (pick < 0.67) { const holes = [1, 2, 3]; delete holes[below(3)]; return holes }
+    return {}
+  }
+  const build = (level: number): unknown => {
+    const pick = random()
+    if (level > 6 || pick < 0.3) return leaf()
+    if (pick < 0.5) return Array.from({ length: below(4) + (random() < 0.05 ? 22 : 0) }, () => build(level + 1))
+    if (pick < 0.55) return new Point(build(level + 1), build(level + 1))
+    const object: Record<string, unknown> = {}
+    const width = below(4) + (random() < 0.05 ? 21 : 0)
+    for (let index = 0; index < width; index++) object[`k${below(30)}`] = build(level + 1)
+    return object
+  }
+  const isPlain = (value: unknown): value is Record<string, unknown> =>
+    typeof value === 'object' && value !== null && (Array.isArray(value) || Object.getPrototypeOf(value) === Object.prototype)
+  const clone = (value: unknown): unknown => {
+    if (Array.isArray(value) && Object.keys(value).length === value.length) return value.map(clone)
+    if (isPlain(value) && !Array.isArray(value)) {
+      const copy: Record<string, unknown> = {}
+      for (const key of Object.keys(value)) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)!
+        if ('value' in descriptor) copy[key] = clone(value[key])
+        else Object.defineProperty(copy, key, descriptor)
+      }
+      return copy
+    }
+    return value instanceof Point ? new Point(clone(value.x), clone(value.y)) : value
+  }
+  // the ways to the values in plain containers
+  const pathsIn = (root: unknown): string[][] => {
+    const found: string[][] = []
+    const visit = (value: unknown, path: string[], depth: number) => {
+      if (depth > 7 || !isPlain(value)) return
+      for (const key of Object.keys(value)) {
+        if (!('value' in Object.getOwnPropertyDescriptor(value, key)!)) continue
+        found.push([...path, key])
+        visit(value[key], [...path, key], depth + 1)
+      }
+    }
+    visit(root, [], 0)
+    return found
+  }
+  const at = (root: unknown, path: string[]) => path.reduce((value: any, key) => value?.[key], root)
+  const put = (root: unknown, path: string[], value: unknown) => { at(root, path.slice(0, -1))[path[path.length - 1]] = value }
+  const noteHolders = (root: unknown, path: string[]) => path.forEach((_, index) => noteMatcherHolder(at(root, path.slice(0, index))))
+  const textAt = (args: unknown[], depth: number) => formatArguments(args, false, messageBounds(depth), value => formatValue(value, false, messageBounds(depth)))
+
+  let compared = 0
+  let deeper = 0
+  let withMatchers = 0
+  for (let sample = 0; sample < 700; sample++) {
+    const expected = [build(0)]
+    const actual = [clone(expected[0])]
+    const paths = pathsIn(actual[0])
+    if (paths.length === 0) continue
+    // the received call differs somewhere
+    put(actual[0], paths[below(paths.length)], random() < 0.3 ? build(3) : leaf())
+    // and the expected call may hold matchers: the received call with the same matchers in the same places prints as
+    // the comparison should see it
+    const masked = [clone(actual[0])]
+    if (random() < 0.5) {
+      const places = pathsIn(expected[0]).filter(path => isPlain(at(actual[0], path.slice(0, -1))) && isPlain(at(masked[0], path.slice(0, -1))))
+      for (let index = 0; index < 2 && places.length > 0; index++) {
+        const path = places[below(places.length)]
+        if (!isPlain(at(expected[0], path.slice(0, -1))) || !isPlain(at(masked[0], path.slice(0, -1)))) continue
+        const matcher = Arg.any()
+        put(expected[0], path, matcher)
+        put(masked[0], path, matcher)
+        noteHolders(expected[0], path)
+        noteHolders(masked[0], path)
+      }
+    }
+    const matchers = deepestMatcher(expected, 32)
+    if (matchers >= 0) withMatchers++
+    const search = { bounds: MESSAGE_BOUNDS, maxDepth: MAX_MESSAGE_DEPTH, textOf: (value: unknown, depth: number) => formatValue(value, false, messageBounds(depth)), keys: new Map(), entries: 100_000 }
+    const depth = firstVisibleDifference(search, expected, actual, -1)
+    // (with matchers, a message compares the lines from the depth that shows the matchers' containers on)
+    const from = matchers < 0 ? 0 : Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, matchers - 1))
+    compared++
+    for (let shallower = from; shallower < Math.min(depth, MAX_MESSAGE_DEPTH + 1); shallower++)
+      t.is(textAt(masked, shallower), textAt(expected, shallower), `sample ${sample}: alike ${shallower} levels deep`)
+    if (depth >= from && depth <= MAX_MESSAGE_DEPTH) {
+      if (depth > 0) deeper++
+      const text = textAt(expected, depth)
+      // (unless the difference is in a part that is cut off)
+      if (!text.includes('more characters)')) t.not(textAt(masked, depth), text, `sample ${sample}: different ${depth} levels deep`)
+    }
+  }
+  t.true(compared > 250 && deeper > 50 && withMatchers > 100, `${compared} compared, ${deeper} different deeper down, ${withMatchers} with matchers`)
 })
