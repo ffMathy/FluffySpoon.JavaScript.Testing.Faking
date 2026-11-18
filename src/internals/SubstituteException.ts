@@ -63,26 +63,38 @@ export const MAX_LISTED_CHARACTERS = 20000
 type Deeper = { readonly depth: number, readonly records: ReadonlySet<CallRecord> }
 
 /**
- * Prints a value of a message within bounds. E54: a message compares and prints the same values more than once (see
- * deeperLines, printsAlike), so without colours each object is printed once per depth in a message.
+ * Prints the values and argument lists of one message within bounds. E54: a message compares and prints the same values
+ * more than once (see deeperLines, printsAlike), so each value and each argument list is printed once per depth.
  */
-type Printer = (value: unknown, bounds: PrintBounds) => string
+class Printer {
+  private readonly values = new Map<PrintBounds, Map<unknown, string>>()
+  private readonly lists = new Map<PrintBounds, Map<readonly unknown[], string>>()
 
-const printerFor = (colors: boolean): Printer => {
-  if (colors) return (value, bounds) => formatValue(value, true, bounds)
-  const texts = new Map<PrintBounds, Map<unknown, string>>()
-  return (value, bounds) => {
-    if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return formatValue(value, false, bounds)
-    let known = texts.get(bounds)
-    if (known === undefined) texts.set(bounds, known = new Map())
+  constructor(private readonly colors: boolean) { }
+
+  value(value: unknown, bounds: PrintBounds): string {
+    // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
+    if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return formatValue(value, this.colors, bounds)
+    let known = this.values.get(bounds)
+    if (known === undefined) this.values.set(bounds, known = new Map())
     let text = known.get(value)
-    if (text === undefined) known.set(value, text = formatValue(value, false, bounds))
+    if (text === undefined) known.set(value, text = formatValue(value, this.colors, bounds))
+    return text
+  }
+
+  arguments(args: readonly unknown[], bounds: PrintBounds): string {
+    let known = this.lists.get(bounds)
+    if (known === undefined) this.lists.set(bounds, known = new Map())
+    let text = known.get(args)
+    if (text === undefined) known.set(args, text = formatArguments(args, this.colors, bounds, value => this.value(value, bounds)))
     return text
   }
 }
 
+const NO_ARGUMENTS: readonly unknown[] = []
+
 const printArguments = (args: readonly unknown[] | undefined, print: Printer, bounds: PrintBounds): string =>
-  formatArguments(args, false, bounds, value => print(value, bounds))
+  print.arguments(args ?? NO_ARGUMENTS, bounds)
 
 const expectedBounds = (deeper: Deeper | undefined): PrintBounds => deeper === undefined ? MESSAGE_BOUNDS : messageBounds(deeper.depth)
 
@@ -95,7 +107,7 @@ const describeExpectedCall = (mismatch: CallCountMismatch, print: Printer, deepe
   const bounds = expectedBounds(deeper)
   switch (expected.kind) {
     case 'method': return `${name}${printArguments(expected.specification?.value ?? [], print, bounds)}`
-    case 'set': return `${name} = ${print(expected.specification?.value?.[0], bounds)}`
+    case 'set': return `${name} = ${print.value(expected.specification?.value?.[0], bounds)}`
     default: return name
   }
 }
@@ -103,8 +115,8 @@ const describeExpectedCall = (mismatch: CallCountMismatch, print: Printer, deepe
 const describeRecord = (record: CallRecord, print: Printer, colors: boolean, deeper: Deeper | undefined): string => {
   switch (record.kind) {
     case 'get': return ''
-    case 'call': return printArguments(record.args, print, recordBounds(record, deeper)) + describeOtherReading(record, colors)
-    case 'set': return ` = ${print(record.args?.[0], recordBounds(record, deeper))}`
+    case 'call': return (record.args === undefined ? '' : printArguments(record.args, print, recordBounds(record, deeper))) + describeOtherReading(record, colors)
+    case 'set': return ` = ${print.value(record.args?.[0], recordBounds(record, deeper))}`
   }
 }
 
@@ -188,14 +200,14 @@ export class SubstituteException extends Error {
 
   public static forCallCountMismatch(mismatch: CallCountMismatch, stackStart?: Function): SubstituteException {
     const colors = colorsEnabled()
-    const plain = printerFor(false)
+    const plain = new Printer(false)
     // E54: lines that print alike are printed deeper
     const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
-    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, colors ? printerFor(true) : plain, deeper))
+    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, colors ? new Printer(true) : plain, deeper))
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them
     if (withPrintGuard(() => printsAlike(mismatch, plain, deeper))) {
-      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, printerFor(colors), deeper)))
+      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, new Printer(colors), deeper)))
       if (numbered.roots > 1) message = numbered.value + (numbered.value.endsWith('\n') ? '' : '\n') + new TextBuilder()
         .add('The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', t => t.faint())
         .newLine()
