@@ -135,6 +135,37 @@ const definePropertyError = (target: () => Printer, start: Function) =>
 const preventExtensionsError = (target: () => Printer, start: Function) =>
   viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', viewPrinter(target), start)
 
+/*
+ * E65 (R11FE-5): every function has own `length` and `name` properties, and code that adapts functions relies on them:
+ * Node.js' util.callbackify reads Object.getOwnPropertyDescriptors(fn).length.value, and util.promisify and mimic-fn
+ * copy them. So substitutes, auto-substitutes and the views report them as own data properties, non-enumerable and
+ * configurable, as for a function: `length` is 0, and `name` is the member of a member handle (`getKey` for
+ * `keys.getKey`, `[description]` for a symbol), '' otherwise. They are only reported: reading `sub.length` or
+ * `sub.name` is a read of a member like any other (recorded, configurable, an auto-substitute when unconfigured), `in`
+ * answers as before (E26), and Object.keys, spread, for-in, Object.assign and JSON.stringify see nothing new (the
+ * properties are not enumerable). The targets have own `length` and `name` too (bound functions, see isLibraryTarget),
+ * but configurable ones, so what the traps report cannot conflict with them. A substitute that is frozen, sealed or
+ * made non-extensible (E25) reports the properties of its target from then on, exactly: a proxy whose target is not
+ * extensible cannot report a property its target does not have, and its target has only those that the code under
+ * test defined (see takeOver).
+ */
+const FUNCTION_KEYS: readonly string[] = ['length', 'name']
+
+/** The keys with `length` and `name` added (the list is a fresh one, which this changes). */
+const withFunctionKeys = (keys: Array<string | symbol>): Array<string | symbol> => {
+  for (const key of FUNCTION_KEYS) if (!keys.includes(key)) keys.push(key)
+  return keys
+}
+
+/** The descriptor of a function's own `length` or `name` (undefined for any other key). */
+const functionDescriptor = (property: PropertyKey, name: () => string): PropertyDescriptor | undefined => {
+  if (property === 'length') return { value: 0, writable: false, enumerable: false, configurable: true }
+  if (property === 'name') return { value: name(), writable: false, enumerable: false, configurable: true }
+  return undefined
+}
+
+const anonymous = () => ''
+
 /** The traps that every view shares (E58: one set for all of them, see createView). */
 const viewTraps = {
   defineProperty: function defineProperty(target: () => Printer): boolean {
@@ -144,8 +175,9 @@ const viewTraps = {
     throw preventExtensionsError(target, preventExtensions)
   },
   deleteProperty: (): boolean => true,
-  ownKeys: (): Array<string | symbol> => [],
-  getOwnPropertyDescriptor: (): PropertyDescriptor | undefined => undefined
+  // E65: only the `length` and `name` that every function has
+  ownKeys: (): Array<string | symbol> => FUNCTION_KEYS.slice(),
+  getOwnPropertyDescriptor: (_target: unknown, property: PropertyKey): PropertyDescriptor | undefined => functionDescriptor(property, anonymous)
 }
 
 /**
@@ -413,10 +445,11 @@ const isFaceProxy = (value: unknown): value is Function => typeof value === 'fun
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
  * is a bound function whose only own properties, `length` and `name`, the proxy hides (ownKeys and
- * getOwnPropertyDescriptor report none). The first such change removes them from the target ("takes it over"), so that
- * from then on the target's own properties are exactly the ones the code under test defined, and the proxy's answers
- * cannot conflict with them (a frozen target without own properties constrains nothing). A defined property is a real
- * property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
+ * getOwnPropertyDescriptor report a function's `length` and `name` of their own instead, E65). The first such change
+ * removes them from the target ("takes it over"), so that from then on the target's own properties are exactly the ones
+ * the code under test defined, and the proxy's answers cannot conflict with them (a frozen target without own
+ * properties constrains nothing; frozen `length` and `name` would bind what reading them answers). A defined property is
+ * a real property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
  * Taking over is rare, so the hot path only checks a counter.
  */
 const ownedTargets = new WeakSet<object>()
@@ -492,10 +525,18 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return true
   },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
-  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
-  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
-  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
-    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : mimickedDescriptor(target(), property),
+  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys);
+  // E65: and every substitute has the `length` and `name` of a function, while it is extensible (see FUNCTION_KEYS)
+  ownKeys: (target: FaceTarget) => {
+    if (!isOwned(target)) return withFunctionKeys(mimickedKeys(target()))
+    const keys = Reflect.ownKeys(target)
+    return Reflect.isExtensible(target) ? withFunctionKeys(keys) : keys
+  },
+  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) => {
+    if (!isOwned(target)) return mimickedDescriptor(target(), property) ?? functionDescriptor(property, () => functionName(target()))
+    const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
+    return descriptor !== undefined || !Reflect.isExtensible(target) ? descriptor : functionDescriptor(property, () => functionName(target()))
+  },
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
@@ -629,6 +670,20 @@ const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | 
   if (instance === undefined || !isEnumerableOwn(instance, key)) return undefined
   const descriptor = Reflect.getOwnPropertyDescriptor(instance, key)
   return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+}
+
+/**
+ * E65: the `name` a substitute reports as its own: a member handle is named after its member, as a method is (`getKey`,
+ * `[description]` for a symbol), so that what util.promisify, util.callbackify and mimic-fn make of it is named as for a
+ * real method; a substitute itself and the result of a call are anonymous. (The `length` reported with it, 0, keeps
+ * what binding or wrapping it gives apart from the library's targets, even for a member called `substitute`: see
+ * isLibraryTarget.)
+ */
+const functionName = (face: Face): string => {
+  if (!(face instanceof AutoEntry) || face.kind !== 'get') return ''
+  const key = face.key
+  // (String(symbol) is `Symbol(description)`; Node.js 10 has no Symbol.prototype.description)
+  return typeof key === 'symbol' ? `[${String(key).slice(7, -1)}]` : String(key)
 }
 
 /** E51: toJSON of a substitute: the mimicked object's (its own toJSON, or the object itself), otherwise the printout. */

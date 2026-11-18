@@ -498,7 +498,8 @@ test('R8FE-2 (E51) a mimicked substitute has the instance\'s enumerable own keys
 
   t.true('port' in config)
   t.deepEqual(Object.keys(config), ['port', 'host'])
-  t.deepEqual(Reflect.ownKeys(config), ['port', 'host', shown])
+  // (E65: then the `length` and `name` that every function has)
+  t.deepEqual(Reflect.ownKeys(config), ['port', 'host', shown, 'length', 'name'])
   t.deepEqual(Object.entries(config), [['port', 80], ['host', 'example.org']])
   t.deepEqual({ ...config }, { port: 80, host: 'example.org', [shown]: true })
   t.deepEqual(Object.assign({ port: 1, debug: true }, config), { port: 80, host: 'example.org', debug: true, [shown]: true })

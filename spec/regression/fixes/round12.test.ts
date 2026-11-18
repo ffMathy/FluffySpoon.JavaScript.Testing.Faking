@@ -1,7 +1,8 @@
 import test, { ExecutionContext } from 'ava'
-import { format, inspect, promisify } from 'util'
+import { deepStrictEqual } from 'assert'
+import { callbackify, format, inspect, isDeepStrictEqual, promisify } from 'util'
 
-import { Substitute, Arg, received } from '../../../src'
+import { Substitute, Arg, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 // Round 12: the engine part of the round-11 findings (R11-ADV-2, R11-ADV-3, R11FE-5, R11FE-3), decided in the fix spec
@@ -209,4 +210,119 @@ test('E64 the brand of the targets is not reproduced by a function named like th
   const inheriting = Object.create(prototype)
   t.not(inspect(inheriting), '')
   t.false(printout(api).includes('getUser('), printout(api))
+})
+
+// ---- E65 (R11FE-5): substitutes have the own `length` and `name` of a function ------------------------------------------
+
+test('R11FE-5 util.callbackify(sub.method), util.callbackify(sub) and util.callbackify of a bound method work as for a plain function', async t => {
+  const keys = Substitute.for<any>()
+  keys.getKey(Arg.any()).resolves('secret')
+  const fn = Substitute.for<any>()
+  fn(Arg.all()).resolves(42)
+  const api = Substitute.for<any>()
+  api.load(1).rejects(new Error('offline'))
+
+  const callbackified = (original: any) => {
+    let adapted: any
+    t.notThrows(() => { adapted = callbackify(original) })
+    return (...args: any[]) => new Promise<[unknown, unknown]>(resolve => adapted(...args, (error: unknown, value: unknown) => resolve([error, value])))
+  }
+  t.deepEqual(await callbackified(keys.getKey)('kid'), [null, 'secret'])
+  t.deepEqual(await callbackified(fn)(1, 2), [null, 42])
+  const [error] = await callbackified(api.load.bind(api))(1)
+  t.is((error as Error).message, 'offline')
+
+  keys.received(1).getKey('kid')
+  fn.received(1)(1, 2)
+  api.received(1).load(1)
+  // named and sized as Node.js names and sizes the adapter of a function
+  const adapted = callbackify(keys.getKey)
+  t.is(adapted.name, 'getKeyCallbackified')
+  t.is(adapted.length, 1)
+  const promisified = promisify(keys.getKey)
+  t.is(promisified.name, 'getKey')
+  t.is(promisified.length, 0)
+})
+
+test('E65 substitutes, auto-substitutes and the views report own, non-enumerable, configurable `length` and `name` data properties', t => {
+  const sub = Substitute.for<any>()
+  const symbol = Symbol('handler')
+  const descriptor = (value: number | string) => ({ value, writable: false, enumerable: false, configurable: true })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub), { length: descriptor(0), name: descriptor('') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub.getKey), { length: descriptor(0), name: descriptor('getKey') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub[symbol]), { length: descriptor(0), name: descriptor('[handler]') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub.make(1)), { length: descriptor(0), name: descriptor('') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub.load.bind(null)), { length: descriptor(0), name: descriptor('') })
+  const check = sub[received](0)
+  t.deepEqual(Reflect.ownKeys(check), ['length', 'name'])
+  check.neverRead
+  t.deepEqual(Reflect.ownKeys(sub), ['length', 'name'])
+  t.deepEqual(Object.getOwnPropertyNames(sub), ['length', 'name'])
+  t.true(Object.prototype.hasOwnProperty.call(sub, 'length'))
+})
+
+test('E65 reads, `in`, Object.keys, spread, for-in, JSON, printing and equality of a substitute are as before', t => {
+  const sub = Substitute.for<any>()
+  sub.f(1)
+  const printed = printout(sub)
+  t.deepEqual(Object.keys(sub), [])
+  t.deepEqual({ ...sub }, {})
+  t.deepEqual(Object.assign({}, sub), {})
+  const forIn: string[] = []
+  for (const key in sub) forIn.push(key)
+  t.deepEqual(forIn, [])
+  t.is(JSON.stringify({ sub }), JSON.stringify({ sub: printed }))
+  t.false('length' in sub)
+  t.false('name' in sub)
+  t.is(printout(sub), printed, 'enumerating recorded nothing')
+
+  // reads of `length` and `name` are member reads, as before: recorded, and configurable
+  t.is(typeof sub.length, 'function')
+  t.notThrows(() => sub.received(1).length)
+  sub.name.returns('svc')
+  t.is(sub.name, 'svc')
+  t.is(Object.getOwnPropertyDescriptor(sub, 'name')!.value, '')
+
+  // equality compares a substitute by identity, as before
+  const other = Substitute.for<any>()
+  t.true(isDeepStrictEqual({ a: sub }, { a: sub }))
+  t.false(isDeepStrictEqual({ a: sub }, { a: other }))
+  t.notThrows(() => deepStrictEqual([sub], [sub]))
+  t.throws(() => deepStrictEqual([sub], [other]))
+
+  // a substitute that mimicks an object lists the instance's enumerable keys first
+  const mimicking = Substitute.for<any>()
+  mimicking[mimick]({ name: 'Ann', a: 1 })
+  t.deepEqual(Object.keys(mimicking), ['name', 'a'])
+  t.deepEqual(Reflect.ownKeys(mimicking), ['name', 'a', 'length'])
+  t.is(Object.getOwnPropertyDescriptor(mimicking, 'name')!.value, 'Ann')
+  t.deepEqual({ ...mimicking }, { name: 'Ann', a: 1 })
+})
+
+test('E65 freeze, seal, preventExtensions and defineProperty work on substitutes, auto-substitutes and call results, without Proxy invariant errors', t => {
+  const restrict: Record<string, (value: unknown) => unknown> = { freeze: Object.freeze, seal: Object.seal, preventExtensions: Object.preventExtensions }
+  for (const how of ['freeze', 'seal', 'preventExtensions', 'defineProperty']) {
+    const app = Substitute.for<any>()
+    for (const value of [app, app.logger, app.make(1)]) {
+      if (how === 'defineProperty') Object.defineProperty(value, 'k', { value: 1, enumerable: true })
+      else restrict[how](value)
+      t.notThrows(() => Object.getOwnPropertyDescriptors(value), how)
+      t.is(Object.isExtensible(value), how === 'defineProperty')
+      t.is(Object.isFrozen(value), how === 'freeze' || how === 'seal' || how === 'preventExtensions')
+      value.x(1)
+      t.notThrows(() => value.received(1).x(1), how)
+      t.true(printout(value).includes('x(1)'), how)
+      if (how === 'defineProperty') {
+        // still extensible: the defined property, and a function's `length` and `name`
+        t.deepEqual(Reflect.ownKeys(value), ['k', 'length', 'name'])
+        t.deepEqual(Object.keys(value), ['k'])
+        t.is(value.k, 1)
+        t.is(typeof callbackify(value), 'function')
+      } else {
+        // not extensible: exactly the properties of its target, which has none of its own (so util.callbackify, which
+        // reads the descriptor of `length`, cannot adapt it: README documents the arrow function workaround)
+        t.deepEqual(Reflect.ownKeys(value), [])
+      }
+    }
+  }
 })
