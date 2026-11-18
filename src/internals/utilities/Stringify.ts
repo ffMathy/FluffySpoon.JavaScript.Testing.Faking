@@ -300,7 +300,8 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  * are compared, the way printing shows them, to find the least depth at which the lines can print differently, with
  * the matchers of the expected call left out (a matcher stands where the received value it was given stands):
  * - a value at level L (an argument is at level 0, a value inside it at 1, ...) shows once its container shows its
- *   entries, at depth L - 1 (an argument at any depth), and an object there shows as `[Object]`, `[Array]`, `[Foo]`;
+ *   entries, at depth L - 1 (an argument at any depth), and an object there shows as `[Object]`, `[Array]`, `[Foo]`
+ *   (`{}`, `[]`, `Foo {}` when it is empty);
  * - the entries of a container at level L show from depth L on: its keys (the first PrintBounds.keys of them, and how
  *   many there are), or its length and first maxArrayLength items;
  * - two strings longer than util.inspect shows of them print alike if what shows is the same, and so do two symbols with
@@ -388,6 +389,11 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
   }
   if (isArray !== Array.isArray(actual) || Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual) ||
     (!isArray && typeof (actual as any)[inspectCustom] === 'function'))
+    return differs(comparison, shows)
+  // an empty container shows as `{}`, `[]` or `Foo {}` at any depth, others as `[Object]`, `[Array]` or `[Foo]` where it
+  // is deeper than the lines are printed
+  if ((isArray ? (expected as unknown[]).length === 0 : keysOf(search, expected).length === 0) !==
+    (isArray ? (actual as unknown[]).length === 0 : keysOf(search, actual).length === 0))
     return differs(comparison, shows)
   // deeper than the lines are printed, both show as `[Object]`, `[Array]` or `[Foo]`; the expected call shows a container
   // that holds a matcher in full, though (see matcherHolders)
