@@ -104,7 +104,7 @@ const restoreLimit = (limit: unknown): void => {
  * not a number or is below 1 (V8 itself collects no frames for any error then). It has no stack, so it shows no
  * "called at" line, and has no frame (D25 falls back to adjacency, E2).
  */
-const NO_FRAMES: StackHolder = Object.freeze({})
+export const NO_FRAMES: StackHolder = Object.freeze({})
 
 /** Error.stackTraceLimit as a number of frames, or 0 when V8 collects none (see NO_FRAMES). */
 const currentLimit = (): number => {

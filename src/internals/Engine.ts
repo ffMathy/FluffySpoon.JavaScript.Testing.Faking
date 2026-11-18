@@ -8,7 +8,7 @@ import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from '
 import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import {
-  assertCall, assertPropertyRead, assertSet, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
+  assertCall, assertPropertyRead, assertSet, checkViewSite, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
 } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, StringAssertionKey, SubstitutionMethod,
@@ -1249,12 +1249,12 @@ const contextFunction = (context: ContextMethod, getState: () => SubstituteState
       return function received(count?: unknown) {
         const expected = validateExpectedCount(count, received)
         retract(chainHead)
-        return createAssertionProxy(getState(), expected, captureStack(received))
+        return createAssertionProxy(getState(), expected, checkViewSite(received))
       }
     case 'didNotReceive':
       return function didNotReceive() {
         retract(chainHead)
-        return createAssertionProxy(getState(), 0, captureStack(didNotReceive))
+        return createAssertionProxy(getState(), 0, checkViewSite(didNotReceive))
       }
     case 'clearReceivedCalls':
       return function clearReceivedCalls() {
