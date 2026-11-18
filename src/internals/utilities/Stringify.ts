@@ -301,7 +301,7 @@ export const printSettings = { budget: true }
  * can change the layout of a container that ends within some 500 characters of the point where entries are left out.
  * Everything before that is printed as it would be with every entry.
  */
-const BUDGET_MARGIN = 1500
+const BUDGET_MARGIN = 1000
 
 /**
  * One preparation of a value for printing (see prepared).

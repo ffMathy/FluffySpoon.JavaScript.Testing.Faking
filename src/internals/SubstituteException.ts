@@ -108,18 +108,27 @@ const describeRecord = (record: CallRecord, print: Printer, colors: boolean, dee
   }
 }
 
-/** The listed calls or assignments that do not match the expected one and can print like it. */
-const unmatchedOfExpectedKind = (mismatch: CallCountMismatch): CallRecord[] => {
+/**
+ * The listed calls or assignments that do not match the expected one and can print like it. Only those that the
+ * message can show: within MAX_LISTED_CALLS, and before the listed calls take MAX_LISTED_CHARACTERS characters with their
+ * values MESSAGE_BOUNDS.depth levels deep (printed deeper, they take at least as many).
+ */
+const unmatchedOfExpectedKind = (mismatch: CallCountMismatch, print: Printer): CallRecord[] => {
   const { expected } = mismatch
   if (expected.kind !== 'method' && expected.kind !== 'set') return []
   const kind = expected.kind === 'method' ? 'call' : 'set'
   const records: CallRecord[] = []
-  for (let index = 0; index < mismatch.listed.length && index < MAX_LISTED_CALLS; index++) {
+  let characters = 0
+  for (let index = 0; index < mismatch.listed.length && index < MAX_LISTED_CALLS && characters < MAX_LISTED_CHARACTERS; index++) {
     const { record, matches } = mismatch.listed[index]
     if (!matches && record.kind === kind) records.push(record)
+    if (record.kind !== 'get') characters += printArguments(record.args ?? [], print, MESSAGE_BOUNDS).length
   }
   return records
 }
+
+/** E54: how deep the expected arguments are searched for matchers (the D27 search goes as deep). */
+const MATCHER_SEARCH_DEPTH = 32
 
 /**
  * E54 (R9-ADV-1): values are printed MESSAGE_BOUNDS.depth levels deep. When the expected call prints like received
@@ -131,11 +140,11 @@ const unmatchedOfExpectedKind = (mismatch: CallCountMismatch): CallRecord[] => {
  * no line needs to be printed deeper. `print`: without colours.
  */
 const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | undefined => {
-  const records = unmatchedOfExpectedKind(mismatch)
+  const records = unmatchedOfExpectedKind(mismatch, print)
   if (records.length === 0) return undefined
   const expectedArguments = mismatch.expected.specification?.value ?? []
   const textAt = (args: readonly unknown[], depth: number) => printArguments(args, print, messageBounds(depth))
-  const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, deepestMatcher(expectedArguments, MAX_MESSAGE_DEPTH + 1) - 1))
+  const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, deepestMatcher(expectedArguments, MATCHER_SEARCH_DEPTH) - 1))
   const expectedText = textAt(expectedArguments, base)
   let alike = records.filter(record => textAt(record.args ?? [], base) === expectedText)
   let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
@@ -155,7 +164,7 @@ const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | unde
  */
 const printsAlike = (mismatch: CallCountMismatch, print: Printer, deeper: Deeper | undefined): boolean => {
   const expectedText = printArguments(mismatch.expected.specification?.value ?? [], print, expectedBounds(deeper))
-  return unmatchedOfExpectedKind(mismatch).some(record => printArguments(record.args ?? [], print, recordBounds(record, deeper)) === expectedText)
+  return unmatchedOfExpectedKind(mismatch, print).some(record => printArguments(record.args ?? [], print, recordBounds(record, deeper)) === expectedText)
 }
 
 const describeError = (error: unknown): string => {
