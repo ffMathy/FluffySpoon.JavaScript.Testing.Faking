@@ -4,7 +4,7 @@ import * as path from 'path'
 
 import { Substitute, configure } from '../../../src'
 import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
-import { assertWithin, timeLimit } from '../../helpers/timing'
+import { assertRatiosWithin, assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 7, engine A: the structural hash, its memos and the call sites (fix spec E18 to E21). Tests that change
 // process-wide state (Error.stackTraceLimit, Error itself, the families of the hash) run in child processes.
@@ -216,21 +216,24 @@ test.serial('R6-ADV-5 (E20) fresh batches of 257 to 1,000 records with nested ob
   for (const [name, record, limit] of [['nested records', row, 1.6], ['flat records with a Date', flatRow, 2]] as const) {
     for (const rows of [257, 300, 1000]) {
       // E29: 256 and `rows` rows by turns (in both orders), and the median of the ratios of seven rounds, so that a busy
-      // machine slows both sides of each ratio alike and a round that it slowed on one side does not count
-      const ratios: number[] = []
+      // machine slows both sides of each ratio alike and a round that it slowed on one side does not count. E58: a
+      // measurement over the limit is made again (see assertRatiosWithin)
       let cost = Infinity
       const costLimit = timeLimit(1000)
-      for (let round = 0; round < 7; round++) {
-        const baseFirst = round % 2 === 0
-        const before = run(baseFirst ? 256 : rows, 200, record, ++seed)
-        const after = run(baseFirst ? rows : 256, 200, record, ++seed)
-        const [base, current] = baseFirst ? [before, after] : [after, before]
-        ratios.push(current / base)
-        cost = Math.min(cost, current)
+      const measure = () => {
+        const ratios: number[] = []
+        for (let round = 0; round < 7; round++) {
+          const baseFirst = round % 2 === 0
+          const before = run(baseFirst ? 256 : rows, 200, record, ++seed)
+          const after = run(baseFirst ? rows : 256, 200, record, ++seed)
+          const [base, current] = baseFirst ? [before, after] : [after, before]
+          ratios.push(current / base)
+          cost = Math.min(cost, current)
+        }
+        return { 'per record': median(ratios) }
       }
-      const ratio = median(ratios)
-      t.log(`${name}: ${rows} rows cost ${ratio.toFixed(2)}x per record of 256 rows (${(cost * rows * 1000).toFixed(1)} ms for 1,000 calls)`)
-      t.true(ratio < limit, `${name}: ${rows} rows cost ${ratio}x per record (rounds: ${ratios.map(value => value.toFixed(2)).join(', ')})`)
+      assertRatiosWithin(t, measure, limit, `${name}: ${rows} rows against 256 rows`)
+      t.log(`${name}: ${(cost * rows * 1000).toFixed(1)} ms for 1,000 calls with ${rows} rows`)
       // 1,000 calls with fresh batches of 300 records (45facfb: 0.29 s, 74b8588: 1 s for nested records on Node.js 22)
       if (rows <= 300) assertWithin(t, cost * rows * 1000, costLimit, `${name}: 1,000 calls with ${rows} rows`)
     }
@@ -274,13 +277,13 @@ test('R6V-3 / R6-ADV-3 (E19) families do not slow down small records that share 
     const ratio = kind => median(times.withFamilies[kind].map((time, run) => time / times.plain[kind][run]).slice(1))
     console.log(JSON.stringify({ batches: ratio('batches'), singles: ratio('singles') }))
   `)
-  const [one, other] = [ratios(true), ratios(false)]
-  const batches = Math.sqrt(one.batches * other.batches)
-  const singles = Math.sqrt(one.singles * other.singles)
-  t.log(`with 16 families: 500 calls with 100 small records take ${batches.toFixed(2)}x, 10,000 calls with a small record ${singles.toFixed(2)}x`)
-  // 74b8588: 3.2x and 1.5x (on an idle machine this takes 0.9x to 1.05x; other tests running at the same time add noise)
-  t.true(batches < 1.3, `batches: ${batches}x`)
-  t.true(singles < 1.3, `singles: ${singles}x`)
+  const measure = () => {
+    const [one, other] = [ratios(true), ratios(false)]
+    return { batches: Math.sqrt(one.batches * other.batches), singles: Math.sqrt(one.singles * other.singles) }
+  }
+  // 74b8588: 3.2x and 1.5x (on an idle machine this takes 0.9x to 1.15x; other tests running at the same time add noise).
+  // E58 (R9V-3): a measurement over the limit is made again (see assertRatiosWithin)
+  assertRatiosWithin(t, measure, 1.3, 'with 16 families: 500 calls with 100 small records (batches), 10,000 calls with a small record (singles)')
 })
 
 /** Runs a script with the library in a child process, and returns what it prints as JSON. */

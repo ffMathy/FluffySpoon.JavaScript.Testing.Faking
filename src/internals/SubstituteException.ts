@@ -1,5 +1,5 @@
 import { EXCEPTION, SELF, SubstituteExceptionType, keyToString } from './Constants'
-import { colorsEnabled, describeOtherReading, firstStackFrame, formatArguments, formatValue, plural, TextBuilder, TextPart, withPrintGuard } from './utilities'
+import { colorsEnabled, deepestMatcher, describeOtherReading, firstStackFrame, formatArguments, formatValue, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, messageBounds, plural, PrintBounds, TextBuilder, TextPart, withPrintGuard } from './utilities'
 import type { CallRecord } from './CallRecord'
 import type { RecordedArguments } from './RecordedArguments'
 import { withRootNumbers } from './Paths'
@@ -56,38 +56,127 @@ export const MAX_LISTED_CALLS = 50
  */
 export const MAX_LISTED_CHARACTERS = 20000
 
-const describeExpectedCall = (mismatch: CallCountMismatch, colors: boolean): string => {
+/**
+ * E54: the expected call and the received calls that print alike with values MESSAGE_BOUNDS.depth levels deep, printed
+ * `depth` levels deep instead (see deeperLines).
+ */
+type Deeper = { readonly depth: number, readonly records: ReadonlySet<CallRecord> }
+
+/**
+ * Prints the values and argument lists of one message within bounds. E54: a message compares and prints the same values
+ * more than once (see deeperLines, printsAlike), so each value and each argument list is printed once per depth.
+ */
+class Printer {
+  private readonly values = new Map<PrintBounds, Map<unknown, string>>()
+  private readonly lists = new Map<PrintBounds, Map<readonly unknown[], string>>()
+
+  constructor(private readonly colors: boolean) { }
+
+  value(value: unknown, bounds: PrintBounds): string {
+    // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
+    if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return formatValue(value, this.colors, bounds)
+    let known = this.values.get(bounds)
+    if (known === undefined) this.values.set(bounds, known = new Map())
+    let text = known.get(value)
+    if (text === undefined) known.set(value, text = formatValue(value, this.colors, bounds))
+    return text
+  }
+
+  arguments(args: readonly unknown[], bounds: PrintBounds): string {
+    let known = this.lists.get(bounds)
+    if (known === undefined) this.lists.set(bounds, known = new Map())
+    let text = known.get(args)
+    if (text === undefined) known.set(args, text = formatArguments(args, this.colors, bounds, value => this.value(value, bounds)))
+    return text
+  }
+}
+
+const NO_ARGUMENTS: readonly unknown[] = []
+
+const printArguments = (args: readonly unknown[] | undefined, print: Printer, bounds: PrintBounds): string =>
+  print.arguments(args ?? NO_ARGUMENTS, bounds)
+
+const expectedBounds = (deeper: Deeper | undefined): PrintBounds => deeper === undefined ? MESSAGE_BOUNDS : messageBounds(deeper.depth)
+
+const recordBounds = (record: CallRecord, deeper: Deeper | undefined): PrintBounds =>
+  deeper !== undefined && deeper.records.has(record) ? messageBounds(deeper.depth) : MESSAGE_BOUNDS
+
+const describeExpectedCall = (mismatch: CallCountMismatch, print: Printer, deeper: Deeper | undefined): string => {
   const { key, expected } = mismatch
   const name = key === SELF ? mismatch.substitutePath : keyToString(key)
+  const bounds = expectedBounds(deeper)
   switch (expected.kind) {
-    case 'method': return `${name}${formatArguments(expected.specification?.value ?? [], colors)}`
-    case 'set': return `${name} = ${formatValue(expected.specification?.value?.[0], colors)}`
+    case 'method': return `${name}${printArguments(expected.specification?.value ?? [], print, bounds)}`
+    case 'set': return `${name} = ${print.value(expected.specification?.value?.[0], bounds)}`
     default: return name
   }
 }
 
-const describeRecord = (record: CallRecord, colors: boolean): string => {
+const describeRecord = (record: CallRecord, print: Printer, colors: boolean, deeper: Deeper | undefined): string => {
   switch (record.kind) {
     case 'get': return ''
-    case 'call': return formatArguments(record.args, colors) + describeOtherReading(record, colors)
-    case 'set': return ` = ${formatValue(record.args?.[0], colors)}`
+    case 'call': return (record.args === undefined ? '' : printArguments(record.args, print, recordBounds(record, deeper))) + describeOtherReading(record, colors)
+    case 'set': return ` = ${print.value(record.args?.[0], recordBounds(record, deeper))}`
   }
 }
 
 /**
- * E52: whether the expected call or assignment prints like one that was received (and is listed) but does not match
- * it.
+ * The listed calls or assignments that do not match the expected one and can print like it. Only those that the
+ * message can show: within MAX_LISTED_CALLS, and before the listed calls take MAX_LISTED_CHARACTERS characters with their
+ * values MESSAGE_BOUNDS.depth levels deep (printed deeper, they take at least as many).
  */
-const printsAlike = (mismatch: CallCountMismatch): boolean => {
+const unmatchedOfExpectedKind = (mismatch: CallCountMismatch, print: Printer): CallRecord[] => {
   const { expected } = mismatch
-  if (expected.kind !== 'method' && expected.kind !== 'set') return false
+  if (expected.kind !== 'method' && expected.kind !== 'set') return []
   const kind = expected.kind === 'method' ? 'call' : 'set'
-  const expectedText = formatArguments(expected.specification?.value ?? [], false)
-  for (let index = 0; index < mismatch.listed.length && index < MAX_LISTED_CALLS; index++) {
+  const records: CallRecord[] = []
+  let characters = 0
+  for (let index = 0; index < mismatch.listed.length && index < MAX_LISTED_CALLS && characters < MAX_LISTED_CHARACTERS; index++) {
     const { record, matches } = mismatch.listed[index]
-    if (!matches && record.kind === kind && formatArguments(record.args ?? [], false) === expectedText) return true
+    if (!matches && record.kind === kind) records.push(record)
+    if (record.kind !== 'get') characters += printArguments(record.args ?? [], print, MESSAGE_BOUNDS).length
   }
-  return false
+  return records
+}
+
+/** E54: how deep the expected arguments are searched for matchers (the D27 search goes as deep). */
+const MATCHER_SEARCH_DEPTH = 32
+
+/**
+ * E54 (R9-ADV-1): values are printed MESSAGE_BOUNDS.depth levels deep. When the expected call prints like received
+ * calls that it does not match (they differ deeper down), those lines are printed deeper, at the least depth up to
+ * MAX_MESSAGE_DEPTH at which all of them that differ at all by then print differently from the expected call, so that
+ * the message shows where they differ. When the expected call holds a matcher deeper than that (shown in any case, see
+ * Stringify), the received calls it does not match are printed as deep as the container that the matcher is in (up to
+ * MAX_MESSAGE_DEPTH), so that they show the values the matcher was given, and so is the expected call. Undefined when
+ * no line needs to be printed deeper. `print`: without colours.
+ */
+const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | undefined => {
+  const records = unmatchedOfExpectedKind(mismatch, print)
+  if (records.length === 0) return undefined
+  const expectedArguments = mismatch.expected.specification?.value ?? []
+  const textAt = (args: readonly unknown[], depth: number) => printArguments(args, print, messageBounds(depth))
+  const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, deepestMatcher(expectedArguments, MATCHER_SEARCH_DEPTH) - 1))
+  const expectedText = textAt(expectedArguments, base)
+  let alike = records.filter(record => textAt(record.args ?? [], base) === expectedText)
+  let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
+  const deepened = new Set(depth === undefined ? alike : records)
+  for (let candidate = base + 1; candidate <= MAX_MESSAGE_DEPTH && alike.length > 0; candidate++) {
+    const expectedDeeper = textAt(expectedArguments, candidate)
+    const still = alike.filter(record => textAt(record.args ?? [], candidate) === expectedDeeper)
+    if (still.length < alike.length) depth = candidate
+    alike = still
+  }
+  return depth === undefined ? undefined : { depth, records: deepened }
+}
+
+/**
+ * E52: whether the expected call or assignment prints like one that was received (and is listed) but does not match
+ * it (each printed as deep as the message prints it, see deeperLines). `print`: without colours.
+ */
+const printsAlike = (mismatch: CallCountMismatch, print: Printer, deeper: Deeper | undefined): boolean => {
+  const expectedText = printArguments(mismatch.expected.specification?.value ?? [], print, expectedBounds(deeper))
+  return unmatchedOfExpectedKind(mismatch, print).some(record => printArguments(record.args ?? [], print, recordBounds(record, deeper)) === expectedText)
 }
 
 const describeError = (error: unknown): string => {
@@ -111,11 +200,14 @@ export class SubstituteException extends Error {
 
   public static forCallCountMismatch(mismatch: CallCountMismatch, stackStart?: Function): SubstituteException {
     const colors = colorsEnabled()
-    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors))
+    const plain = new Printer(false)
+    // E54: lines that print alike are printed deeper
+    const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
+    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, colors ? new Printer(true) : plain, deeper))
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them
-    if (withPrintGuard(() => printsAlike(mismatch))) {
-      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors)))
+    if (withPrintGuard(() => printsAlike(mismatch, plain, deeper))) {
+      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, new Printer(colors), deeper)))
       if (numbered.roots > 1) message = numbered.value + (numbered.value.endsWith('\n') ? '' : '\n') + new TextBuilder()
         .add('The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', t => t.faint())
         .newLine()
@@ -124,7 +216,7 @@ export class SubstituteException extends Error {
     return new this(message, EXCEPTION.callCountMismatch, stackStart)
   }
 
-  private static buildCallCountMismatchMessage(mismatch: CallCountMismatch, colors: boolean): string {
+  private static buildCallCountMismatchMessage(mismatch: CallCountMismatch, colors: boolean, print: Printer, deeper: Deeper | undefined): string {
     const { expected, key } = mismatch
     const substitutePath = mismatch.subject?.path ?? mismatch.substitutePath
     const memberPath = key === SELF ? substitutePath : `${substitutePath}.${keyToString(key)}`
@@ -142,7 +234,7 @@ export class SubstituteException extends Error {
       .add(' ')
       .add(kindPhrase(expected.kind, expected.count), t => t.bold())
       .add(' matching ')
-      .add(describeExpectedCall(mismatch, colors), t => t.bold())
+      .add(describeExpectedCall(mismatch, print, deeper), t => t.bold())
       .add(', but received ')
       .add(mismatch.receivedText, t => t.faint())
       .add('.')
@@ -158,7 +250,7 @@ export class SubstituteException extends Error {
       for (const listed of shown) {
         if (listedCharacters >= MAX_LISTED_CHARACTERS) break
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
-        const call = describeRecord(listed.record, colors)
+        const call = describeRecord(listed.record, print, colors, deeper)
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
           .add(listed.record.constructed === true ? `new ${memberPath}` : memberPath, style)

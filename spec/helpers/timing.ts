@@ -109,5 +109,40 @@ export const assertFast = (t: ExecutionContext, milliseconds: number, label: str
   return best
 }
 
+/** How many measurements assertRatiosWithin makes at most. */
+export const RATIO_ATTEMPTS = 3
+
+/**
+ * E58 (R9V-3): checks ratios of timings (with a feature against without it) against `limit`. `measure` measures them,
+ * running both sides by turns, so that a busy machine slows both alike; still, load that comes and goes can slow one
+ * side of a measurement more than the other, and push its ratio over the limit (1.34x against 1.3 at a load average of
+ * 13 on 4 cores, where the same test measures 1.12x to 1.18x most of the time). So a measurement with a ratio over its
+ * limit is made again, up to RATIO_ATTEMPTS measurements in all, and the smallest ratio of each kind decides: noise has
+ * to push every measurement over the limit, while a real slowdown is over it in every measurement. Every measurement is
+ * logged. Returns the smallest ratios.
+ */
+export const assertRatiosWithin = <Kind extends string>(
+  t: ExecutionContext,
+  measure: () => Record<Kind, number>,
+  limit: number,
+  label: string,
+  attempts = RATIO_ATTEMPTS
+): Record<Kind, number> => {
+  const measurements: Array<Record<Kind, number>> = []
+  let smallest: Record<Kind, number> | undefined
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const ratios = measure()
+    measurements.push(ratios)
+    if (smallest === undefined) smallest = { ...ratios }
+    else for (const kind of Object.keys(ratios) as Kind[]) smallest[kind] = Math.min(smallest[kind], ratios[kind])
+    if ((Object.keys(smallest) as Kind[]).every(kind => smallest![kind] < limit)) break
+  }
+  const text = (ratios: Record<Kind, number>) => (Object.keys(ratios) as Kind[]).map(kind => `${kind} ${ratios[kind].toFixed(2)}x`).join(', ')
+  const summary = `${label}: ${text(smallest!)} (limit ${limit}x; measured ${measurements.map(text).join(' / ')})`
+  if (typeof t.log === 'function') t.log(summary)
+  for (const kind of Object.keys(smallest!) as Kind[]) t.true(smallest![kind] < limit, `${summary}: ${kind}`)
+  return smallest!
+}
+
 /** For the workload's result, so that it is not optimized away. */
 export const workloadSink = (): number => sink

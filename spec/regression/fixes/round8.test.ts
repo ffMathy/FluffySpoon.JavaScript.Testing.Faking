@@ -8,7 +8,7 @@ import { inspect } from 'util'
 import { Substitute, Arg, configure, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
-import { assertWithin, timeLimit } from '../../helpers/timing'
+import { assertRatiosWithin, assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 8: the behaviour findings of round 7 (R7V-*, R7FE-*, R7-ADV-*), decided in the fix spec as E33-E41.
 
@@ -286,13 +286,16 @@ test('R7-ADV-1 (E35) key in sub does not scan the auto-substitutes: 10,000 probe
     return { probed: median(probed), plain: median(plain), total: probed.reduce((sum, value) => sum + value, 0) }
   }
   round() // warm-up
-  const rounds = [round(), round(), round(), round(), round()]
-  const ratios = rounds.map(({ probed, plain }) => probed / plain).sort((a, b) => a - b)
-  const ratio = ratios[2]
-  t.log(`a report with an in probe against one without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratio.toFixed(2)}x; ` +
-    `10,000 reports with the probe in ${rounds.map(({ total }) => total.toFixed(0)).join(', ')} ms)`)
-  // at 89e4175 the probes made it 15 to 50 times slower; at 74b8588 (no in trap) they cost nothing
-  t.true(ratio < 1.3, `${ratio.toFixed(2)}x`)
+  const measure = () => {
+    const rounds = [round(), round(), round(), round(), round()]
+    const ratios = rounds.map(({ probed, plain }) => probed / plain).sort((a, b) => a - b)
+    t.log(`a report with an in probe against one without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratios[2].toFixed(2)}x; ` +
+      `10,000 reports with the probe in ${rounds.map(({ total }) => total.toFixed(0)).join(', ')} ms)`)
+    return { 'with the probe': ratios[2] }
+  }
+  // at 89e4175 the probes made it 15 to 50 times slower; at 74b8588 (no in trap) they cost nothing. E58: a measurement
+  // over the limit is made again (see assertRatiosWithin)
+  assertRatiosWithin(t, measure, 1.3, 'a report with an in probe against one without')
 })
 
 test('R7-ADV-1 (E35) the cost of key in sub does not grow with the auto-substitutes of the substitute', t => {

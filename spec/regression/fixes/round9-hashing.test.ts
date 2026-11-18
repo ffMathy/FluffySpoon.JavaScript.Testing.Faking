@@ -266,16 +266,17 @@ test('R8-ADV-4 (E44) long strings, long arrays, wide Maps and Sets and calls wit
   t.true(message.length < 2000, `${message.length} characters`)
 })
 
-test('R8-ADV-4 (E44) small values print as util.inspect shows them, one level of nesting included', t => {
+test('R8-ADV-4 (E44, E54) small values print as util.inspect shows them, two levels of nesting included', t => {
   class User { constructor(readonly id: number, readonly name: string) { } }
   const values: unknown[] = [
     1, 'ann', undefined, null, BigInt(10), Symbol('id'), { id: 1, name: 'ann', tags: ['a', 'b'] }, [1, [2, 3]], new User(1, 'ann'),
     Object.assign(Object.create(null), { a: 1 }), new Date(0), /x/g, new Map([['a', { b: 1 }]]), new Set([1, 2]),
     { a: { b: 1 } }, [{ a: 1 }], Buffer.from('abc'), new Uint8Array(3), { [Symbol('s')]: 1, 'content-type': 'json' }
   ]
-  for (const value of values) t.is(formatValue(value, false), inspect(value, { depth: 1 }), inspect(value))
-  // one level of nesting less than util.inspect's default
-  t.is(formatValue({ a: { b: { c: 1 } } }, false), '{ a: { b: [Object] } }')
+  // E54 (round 10): two levels deep, util.inspect's default (round 9 printed one level: `{ a: { b: [Object] } }`)
+  for (const value of values) t.is(formatValue(value, false), inspect(value, { depth: 2 }), inspect(value))
+  t.is(formatValue({ a: { b: { c: 1 } } }, false), '{ a: { b: { c: 1 } } }')
+  t.is(formatValue({ a: { b: { c: { d: 1 } } } }, false), '{ a: { b: { c: [Object] } } }')
   // matchers and substitutes as before
   const app = Substitute.for<any>()
   t.is(formatValue({ id: Arg.any() }, false), '{ id: Arg.any{any} }')

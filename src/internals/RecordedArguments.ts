@@ -2,6 +2,7 @@ import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
 import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument, matcherFactoryOf } from '../shared'
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
+import { noteMatcherHolder } from './utilities/Stringify'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -393,6 +394,8 @@ export class RecordedArguments {
       if (containers === undefined) containers = new Set()
       collectMatcherContainers(argument, containers, new Set())
     }
+    // E54: messages and printouts show these containers at any depth, so that the matchers in them show
+    if (containers !== undefined) containers.forEach(noteMatcherHolder)
     this._matcherContainers = containers
     this._argumentsClass = this.classifyArguments(rawArguments)
   }

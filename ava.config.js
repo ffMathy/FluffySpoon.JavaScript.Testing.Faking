@@ -20,7 +20,9 @@ module.exports = {
 			'/': 'dist-spec/'
 		}
 	},
-  cache: false,
+  // E58 (R9V-6): ava keeps its cache in node_modules/.cache/ava. With `cache: false` it creates an empty directory in
+  // os.tmpdir() for every run instead, and never removes it.
+  cache: true,
   failFast: true,
   failWithoutAssertions: true,
   // ava's stall timeout (10 seconds by default): how long ava waits for news from the test files before it gives up.
