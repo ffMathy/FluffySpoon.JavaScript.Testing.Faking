@@ -112,7 +112,9 @@ test('R7V-4 (E34) __esModule reads like any other member: truthy unless configur
   const configured = Substitute.for<any>()
   configured.__esModule.returns(false)
   t.is(configured.__esModule, false, 'the plain setup works again (no configure view needed)')
-  t.deepEqual(Object.keys(tsImportStar(configured)), ['default'])
+  // (E65: tsc's __importStar copies the own properties, as for a module that exports a plain function: the `length` and
+  // `name` that every function has, then `default`)
+  t.deepEqual(Object.keys(tsImportStar(configured)), ['length', 'name', 'default'])
 
   const mimicking = Substitute.for<any>()
   mimicking[mimick]({ send: () => 'real' })
