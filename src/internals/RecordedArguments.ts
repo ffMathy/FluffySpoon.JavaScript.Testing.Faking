@@ -1,8 +1,10 @@
 import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
+// (from the module itself rather than '../shared', whose re-exports are getters in CommonJS output: the matcher search
+// runs on the arguments of every call, and a getter per lookup cost more than E75's own check)
 import {
   MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
   isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf
-} from '../shared'
+} from '../shared/Arguments'
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 import { noteMatcherHolder } from './utilities/Stringify'
