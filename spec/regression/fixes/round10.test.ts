@@ -5,6 +5,7 @@ import { Substitute, Arg, clearReceivedCalls, configure, didNotReceive, mimick, 
 import { isSubstituteProxy } from '../../../src/shared'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
+import { deferredReports } from '../../../src/internals/Assertions'
 
 // Round 10: the behaviour findings of round 9 (R9-ADV-*, R9V-*) assigned to engine B, decided in the fix spec as
 // E55-E58.
@@ -345,6 +346,75 @@ test('R9-ADV-4 (E56) a dangling check view is reported, also when the same check
     later.a()
     t.is(reportsOf(clock).length, 1)
   } finally {
+    clock.uninstall()
+  }
+})
+
+// ---- E58: what a check costs -----------------------------------------------------------------------------------
+
+/** `file:line` of a stack frame line. */
+const lineOf = (frame: string): string => {
+  const match = /\(?([^\s()]+):(\d+):\d+\)?\s*$/.exec(frame)
+  return match === null ? frame : `${match[1]}:${match[2]}`
+}
+
+test('R9-ADV-5 (E58) the checks of one synchronous run schedule one microtask, not one each, and their reports come one per microtask, in order', t => {
+  const clock = interceptDeferredReports()
+  const intercepted = deferredReports.schedule
+  let scheduled = 0
+  deferredReports.schedule = callback => {
+    scheduled++
+    intercepted(callback)
+  }
+  try {
+    const s = Substitute.for<any>()
+    s.f(1)
+    for (let i = 0; i < 100; i++) {
+      s[received](1).f(1) // a check view, and the property-style half of .f (f was called: decided when it is invoked)
+      s[didNotReceive]().g()
+      s.received(1).f(1)
+      s.logger.didNotReceive().warn(Arg.all())
+    }
+    t.is(scheduled, 1)
+    t.deepEqual(reportsOf(clock), [])
+    t.is(scheduled, 1)
+
+    // three reports in one run: thrown one per microtask, in the order of the checks
+    scheduled = 0
+    s[received](1)
+    s.didNotReceive()
+    void s.received(2).f
+    const messages = reportsOf(clock)
+    t.is(messages.length, 3, messages.join('\n'))
+    t.true(messages[0].startsWith('@Substitute[received](1) checked nothing'), messages[0])
+    t.true(messages[1].startsWith('@Substitute.didNotReceive() checked nothing'), messages[1])
+    t.true(messages[2].includes('Expected to receive 2 property reads matching f, but received none. f was never read as a property'), messages[2])
+    t.is(scheduled, 3)
+  } finally {
+    clock.uninstall()
+  }
+})
+
+test('R9-ADV-5 (E58) the report of a property-style check that fails later points at the line of the check, with that frame only', t => {
+  const clock = interceptDeferredReports()
+  const limit = Error.stackTraceLimit
+  try {
+    Error.stackTraceLimit = 30
+    const calculator = Substitute.for<any>()
+    calculator.add(1, 2)
+    void calculator.received(2).add; const line = new Error().stack!.split('\n')[1]
+    void calculator[received](2).add; const symbolLine = new Error().stack!.split('\n')[1]
+    const errors = clock.run()
+    t.is(errors.length, 2)
+    for (const [index, error] of errors.entries()) {
+      t.true(error instanceof SubstituteException)
+      const frames = (error as Error).stack!.split('\n').filter(text => /^\s+at /.test(text))
+      t.is(frames.length, 1, (error as Error).stack)
+      t.is(lineOf(frames[0]), lineOf(index === 0 ? line : symbolLine))
+    }
+    t.true(Error.stackTraceLimit === 30)
+  } finally {
+    Error.stackTraceLimit = limit
     clock.uninstall()
   }
 })

@@ -4,7 +4,7 @@ import { SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
-import { StackHolder, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
+import { StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
 import { keyToString } from './Constants'
 import { plural } from './utilities'
 
@@ -116,6 +116,8 @@ export const assertSet = (state: SubstituteState, key: PropertyKey, value: unkno
 export type DeferredAssertion = {
   error: () => SubstituteException
   settled: boolean
+  /** The stack captured where the check was written (its member read, or the check view itself, E48). */
+  site?: StackHolder
 }
 
 type Schedule = (callback: () => void) => void
@@ -229,11 +231,10 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
 }
 
 /**
- * The deferred report scheduled last (see cancelDeferredReportOf), and the stack captured where its check was written:
- * where the member of a property-style check was read (D9, D33), or (E56) where a check view that nothing has followed
- * yet was created (E48).
+ * The deferred report scheduled last (see cancelDeferredReportOf): of a property-style check (its site: where its member
+ * was read), or (E56) of a check view that nothing has followed yet (its site: where the view was created).
  */
-let latestDeferred: { deferred: DeferredAssertion, site: StackHolder } | undefined
+let latestDeferred: DeferredAssertion | undefined
 
 /**
  * E37, E47: cancels the deferred report of the check that a matcher usage error (Arg.any('String'), Arg.is('x')) was
@@ -252,25 +253,73 @@ let latestDeferred: { deferred: DeferredAssertion, site: StackHolder } | undefin
  */
 export const cancelDeferredReportOf = (matcherStart: Function): void => {
   const latest = latestDeferred
-  if (latest === undefined || latest.deferred.settled) return
+  if (latest === undefined || latest.settled || latest.site === undefined) return
   const read = frameOfStack(latest.site)
   const matcher = currentFrame(matcherStart)
   if (read === null || matcher === null || !sameExpression(read, matcher)) return
   if (typeof read.line !== 'number' || read.line !== matcher.line ||
     typeof read.column !== 'number' || typeof matcher.column !== 'number' || matcher.column <= read.column) return
-  settle(latest.deferred)
+  settle(latest)
   latestDeferred = undefined
+}
+
+/**
+ * A report that is thrown later, from a microtask, unless it is settled before. `applies` (E48, string forms): asked
+ * when it is due.
+ */
+type PendingReport = DeferredAssertion & { applies?: () => boolean }
+
+/**
+ * E58 (R9-ADV-5): the reports scheduled since the last microtask (D9, D33, E48) are checked together by one microtask,
+ * scheduled with the scheduler in place when the batch was started, instead of one microtask per report: nearly every
+ * report is settled right away (the check goes on), and a microtask per check made every check about a third slower.
+ * A batch still throws one report per microtask: after throwing one, it checks the rest of the batch in a microtask of
+ * its own, so the reports come in the order they were scheduled, as before.
+ */
+type ReportBatch = { schedule: Schedule, reports: PendingReport[] }
+let reportBatch: ReportBatch | undefined
+
+const flushReports = (batch: ReportBatch): void => {
+  if (reportBatch === batch) reportBatch = undefined
+  const reports = batch.reports
+  for (let index = 0; index < reports.length; index++) {
+    const report = reports[index]
+    if (latestDeferred === report) latestDeferred = undefined
+    if (report.settled) continue
+    report.settled = true
+    if (report.applies !== undefined && !report.applies()) continue
+    if (index + 1 < reports.length) {
+      const rest: ReportBatch = { schedule: batch.schedule, reports: reports.slice(index + 1) }
+      batch.schedule(() => flushReports(rest))
+    }
+    throw report.error()
+  }
+}
+
+/** Schedules a report (see flushReports). It is the report scheduled last (see cancelDeferredReportOf). */
+const scheduleReport = (report: PendingReport): void => {
+  const schedule = deferredReports.schedule
+  let batch = reportBatch
+  if (batch === undefined || batch.schedule !== schedule) {
+    const started: ReportBatch = batch = reportBatch = { schedule, reports: [] }
+    schedule(() => flushReports(started))
+  }
+  batch.reports.push(report)
+  latestDeferred = report
 }
 
 /**
  * Schedules a failure that is only reported if the assertion is not invoked (see assertPropertyRead).
  * The message is only built if the failure is really reported (usually the member is invoked right away).
+ * E58: its stack is the call site only (the line of the check, as for a check view that nothing follows), captured as
+ * cheaply as the call sites of records: a check of a member that was called defers its property-style half every time
+ * (`sub[received](1).f(1)`), and capturing the whole stack made such a check about a fifth slower.
  */
 const defer = (stackStart: Function | undefined, createError: () => SubstituteException): DeferredAssertion => {
-  const site: StackHolder = {}
-  if (typeof Error.captureStackTrace === 'function' && stackStart !== undefined) Error.captureStackTrace(site, stackStart)
+  const site: StackHolder = stackStart === undefined ? {} : captureStack(stackStart)
   const deferred: DeferredAssertion = {
     settled: false,
+    site,
     error: () => {
       const error = createError()
       // (as text: its call sites may have been read, see cancelDeferredReportOf)
@@ -280,13 +329,7 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
       return error
     }
   }
-  deferredReports.schedule(() => {
-    if (latestDeferred?.deferred === deferred) latestDeferred = undefined
-    if (deferred.settled) return
-    deferred.settled = true
-    throw deferred.error()
-  })
-  latestDeferred = { deferred, site }
+  scheduleReport(deferred)
   return deferred
 }
 
@@ -321,8 +364,10 @@ const danglingCheckError = (state: SubstituteState, form: CheckForm, count: Expe
  * cancelDeferredReportOf).
  */
 export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, count: ExpectedCount, site: StackHolder, applies?: () => boolean): DeferredAssertion => {
-  const deferred: DeferredAssertion = {
+  const report: PendingReport = {
     settled: false,
+    site,
+    applies,
     error: () => {
       const error = danglingCheckError(state, form, count)
       const stack = stackText(site)
@@ -331,14 +376,8 @@ export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, coun
       return error
     }
   }
-  deferredReports.schedule(() => {
-    if (latestDeferred?.deferred === deferred) latestDeferred = undefined
-    if (deferred.settled) return
-    deferred.settled = true
-    if (applies === undefined || applies()) throw deferred.error()
-  })
-  latestDeferred = { deferred, site }
-  return deferred
+  scheduleReport(report)
+  return report
 }
 
 /** What was received, for a failure that does not know yet whether it is about reads or calls. */

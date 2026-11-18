@@ -39,20 +39,32 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 
 /**
  * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
- * target of a proxy (it does not trigger traps), so the target carries the printer as its inspect.custom hook.
- * It is a bound function: it can be constructed (E23), and it has no non-configurable `prototype`, so that the
- * traps can hide its own properties (E25, see viewTraps).
+ * target of a proxy (it does not trigger traps), so the target carries the printer: it is a bound function that
+ * returns its printer, and its inspect.custom hook is inherited from a shared prototype (E58: cheaper than a hook of its
+ * own per view). It can be constructed (E23), and it has no non-configurable `prototype`, so that the traps can hide
+ * its own properties (E25, see viewTraps).
  */
 // E40: a neutral name for util.inspect without custom inspection (see returnThis)
-const viewFunction = function substitute() { }
-const viewTarget = (print: Printer): any => {
-  const target = viewFunction.bind(undefined)
-  Object.defineProperty(target, inspect.custom, {
-    value: (_depth: number, options?: InspectOptions) => print(options),
+const viewFunction = function substitute(this: Printer): Printer { return this }
+
+const viewTargetPrototype = Object.create(Function.prototype, {
+  [inspect.custom]: {
+    value: function (this: unknown, _depth: number, options?: InspectOptions) {
+      // (the target itself, as util.inspect sees it; never invoke a proxy, that would be an assertion or a setup)
+      return typeof this === 'function' && !types.isProxy(this) ? (this() as Printer)(options) : ''
+    },
     configurable: true
-  })
+  }
+})
+
+const viewTarget = (print: Printer): any => {
+  const target = viewFunction.bind(print)
+  Object.setPrototypeOf(target, viewTargetPrototype)
   return target
 }
+
+/** The printer of a view, from its target (see viewTarget). */
+const viewPrinter = (target: () => Printer): Printer => target()
 
 /**
  * E25: the views (assertions, configure views, bound functions, members configured both as a property and as a method)
@@ -66,26 +78,36 @@ const viewChangeError = (operation: string, print: Printer, start: Function) => 
   start
 )
 
-const viewTraps = (print: Printer, onUse?: () => void): ProxyHandler<any> => ({
-  defineProperty: function defineProperty() {
-    onUse?.()
-    throw viewChangeError('Object.defineProperty()', print, defineProperty)
+const definePropertyError = (target: () => Printer, start: Function) =>
+  viewChangeError('Object.defineProperty()', viewPrinter(target), start)
+const preventExtensionsError = (target: () => Printer, start: Function) =>
+  viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', viewPrinter(target), start)
+
+/** The traps that every view shares (E58: one set for all of them, see createView). */
+const viewTraps = {
+  defineProperty: function defineProperty(target: () => Printer): boolean {
+    throw definePropertyError(target, defineProperty)
   },
-  preventExtensions: function preventExtensions() {
-    onUse?.()
-    throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
+  preventExtensions: function preventExtensions(target: () => Printer): boolean {
+    throw preventExtensionsError(target, preventExtensions)
   },
-  deleteProperty: () => true,
-  ownKeys: () => [],
-  getOwnPropertyDescriptor: () => undefined
-})
+  deleteProperty: (): boolean => true,
+  ownKeys: (): Array<string | symbol> => [],
+  getOwnPropertyDescriptor: (): PropertyDescriptor | undefined => undefined
+}
 
 /**
- * A short-lived proxy (see viewTarget and viewTraps). `onUse` (E48): told when the code changes the view (which is a
- * usage error), as the handler's own traps are told when it is used.
+ * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty and preventExtensions traps, if
+ * it has them, take the place of the shared ones (E48: an assertion view is told that the code changes it).
  */
-const createView = (print: Printer, handler: ProxyHandler<any>, onUse?: () => void): any =>
-  new Proxy(viewTarget(print), { ...viewTraps(print, onUse), ...handler })
+const createView = (print: Printer, handler: ProxyHandler<any>): any => {
+  if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
+  if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
+  handler.deleteProperty = viewTraps.deleteProperty
+  handler.ownKeys = viewTraps.ownKeys
+  handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
+  return new Proxy(viewTarget(print), handler)
+}
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -1281,8 +1303,17 @@ const createAssertionProxy = (state: SubstituteState, count: ExpectedCount, site
       settle(dangling)
       assertDirectCall(state, args, count, construct)
       return {}
+    },
+    // a usage error on the view itself is reported instead (E48)
+    defineProperty: function defineProperty(target: () => Printer): boolean {
+      settle(dangling)
+      throw definePropertyError(target, defineProperty)
+    },
+    preventExtensions: function preventExtensions(target: () => Printer): boolean {
+      settle(dangling)
+      throw preventExtensionsError(target, preventExtensions)
     }
-  }, () => settle(dangling))
+  })
 }
 
 /**
