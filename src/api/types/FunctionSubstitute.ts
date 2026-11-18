@@ -1,4 +1,4 @@
-import { AllArguments } from '../../shared'
+import { AllArguments, Argument } from '../../shared'
 import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
 import { Equals, GenericKind, IsAny, ObjectKind, Primitive, UnionToIntersection } from './Utilities'
 
@@ -341,9 +341,16 @@ type GenericSignatureKind<F, TOverloads extends any[]> = F extends (...args: any
 // The positional signature of a generic method: its parameter list with the type parameters replaced by their
 // constraints, as a constraint of the arguments `P`, so that callbacks are typed from it (R7TD-1, T53). Its result
 // takes what the method returns for the arguments (see `CallReturnTypeOf`).
+// The parameters are `P | TArguments`, not just `P` (R9FE-1, T60): an argument that is itself a generic call
+// (`Arg.is(sql => sql.startsWith('S'))`) takes its type from the parameter's type, which TypeScript computes with `P`
+// replaced by `never` while it infers `P` (it has no inference for `P` yet), so that `P[0]` alone gave the predicate
+// `unknown`. With `P[0] | TArguments[0]` it gets the parameter's type with the type parameters replaced by their
+// constraints (`string`). `P` is still inferred from the arguments (`get('port')` keeps `'port'`), and the arguments
+// are still checked against its constraint.
 type GenericPositionalSignature<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
   [TOverload['arguments']] extends [never] ? unknown :
-  <P extends TOverload['arguments']>(...args: P) => CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
+  <P extends TOverload['arguments']>(...args: P | TOverload['arguments']) =>
+    CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
 // When the signature takes at least one argument, the first one is a parameter of its own, which carries the check of
 // all arguments: a call without arguments would otherwise infer nothing for `P` and check the arguments against its
 // constraint, which accepts none.
@@ -391,9 +398,18 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // signature (`same(1, 'x')` of `same<T extends string | number>(a: T, b: T): T`, `log(1, 'x')` of `log<T>(a: T, b: T):
 // void`) take what that list returns (`TReturnType`), never `any` (R8TD-1, T54): `same(1, 'x').returns({})` and
 // `log(1, 'x').returns(5)` do not compile.
+// Matchers (`Arg.is(key => ...)`, whose type is `Argument<keyof Config> & keyof Config`) fit the method's parameters,
+// but TypeScript cannot infer the return type from them when it uses the type parameter as an index (`Config[K]`): for
+// such a call the return type is inferred from the matchers' value types instead (`keyof Config`, R9FE-1, T60), never
+// `any`. Only a return type that is conditional on a type parameter stays `any`.
 type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => any ? (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
+  F extends (...args: P) => any ?
+  (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : MatcherValuesReturnType<F, MatcherValues<P>, TReturnType>) :
   TReturnType
+type MatcherValuesReturnType<F, P, TReturnType> =
+  F extends (...args: Extract<P, any[]>) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any
+type MatcherValues<P> = { [K in keyof P]: MatcherValue<P[K]> }
+type MatcherValue<T> = T extends Argument<infer V> ? V : T
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
