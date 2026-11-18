@@ -4,7 +4,7 @@ import { SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
-import { StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
+import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
 import { keyToString } from './Constants'
 import { plural } from './utilities'
 
@@ -281,6 +281,7 @@ let reportBatch: ReportBatch | undefined
 
 const flushReports = (batch: ReportBatch): void => {
   if (reportBatch === batch) reportBatch = undefined
+  viewSitesLeft = VIEW_SITES_PER_RUN
   const reports = batch.reports
   for (let index = 0; index < reports.length; index++) {
     const report = reports[index]
@@ -354,6 +355,26 @@ const danglingCheckError = (state: SubstituteState, form: CheckForm, count: Expe
     message += ` If the substituted type has a member called ${name} of its own, configure its calls ` +
       `(${asExpression(state)}[configure]().${name}(Arg.all()).returns(...)): then such a call is not taken for a check.`
   return SubstituteException.generic(message)
+}
+
+/**
+ * E61 (R10V-2): how many check views of the symbol forms (`sub[received](n)`, `sub[didNotReceive]()`) record where they
+ * were created, per synchronous run (until the reports scheduled in it are checked, see flushReports). Recording it is
+ * what such a view costs most (a stack capture, about 1.5 us), and it is only used when nothing follows the view: for
+ * the stack of its "checked nothing" report (E48), and to tell whether a matcher usage error in its arguments belongs
+ * to it (E56). A test makes far fewer checks than this in one synchronous run; a loop of thousands of checks pays for
+ * the first ones only. A view after them that nothing follows is still reported, without the line of the check (as
+ * with Error.stackTraceLimit = 0), and its report stays when a matcher in its arguments throws a usage error.
+ * The string forms record nothing for this: their call is recorded, with its call site, anyway.
+ */
+export const VIEW_SITES_PER_RUN = 1000
+let viewSitesLeft = VIEW_SITES_PER_RUN
+
+/** Where a check view of a symbol form is created (`stackStart`: the function that creates it), see VIEW_SITES_PER_RUN. */
+export const checkViewSite = (stackStart: Function): StackHolder => {
+  if (viewSitesLeft <= 0) return NO_FRAMES
+  viewSitesLeft--
+  return captureStack(stackStart)
 }
 
 /**

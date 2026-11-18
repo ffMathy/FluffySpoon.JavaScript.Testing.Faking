@@ -1,8 +1,8 @@
 import { EXCEPTION, SELF, SubstituteExceptionType, keyToString } from './Constants'
-import { colorsEnabled, deepestMatcher, describeOtherReading, firstStackFrame, formatArguments, formatValue, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, messageBounds, plural, PrintBounds, TextBuilder, TextPart, withPrintGuard } from './utilities'
+import { colorsEnabled, deepestMatcher, describeOtherReading, DIFFERENCE_ENTRIES, DifferenceSearch, firstStackFrame, firstVisibleDifference, formatArguments, formatValue, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, messageBounds, plural, PrintBounds, TextBuilder, TextPart, withPrintGuard } from './utilities'
 import type { CallRecord } from './CallRecord'
 import type { RecordedArguments } from './RecordedArguments'
-import { withRootNumbers } from './Paths'
+import { rootLabelCount, withRootNumbers } from './Paths'
 
 export type ExpectedKind = 'method' | 'property' | 'set' | 'unknown'
 
@@ -62,32 +62,72 @@ export const MAX_LISTED_CHARACTERS = 20000
  */
 type Deeper = { readonly depth: number, readonly records: ReadonlySet<CallRecord> }
 
+/** A printed value or argument list. `unnumbered`: it shows no substitute, so it prints the same with the roots numbered. */
+type Printed = { readonly text: string, readonly unnumbered: boolean }
+
 /**
  * Prints the values and argument lists of one message within bounds. E54: a message compares and prints the same values
  * more than once (see deeperLines, printsAlike), so each value and each argument list is printed once per depth.
+ * E60 (R10V-1): when the message is built again with the roots numbered (E52), the printer of that build takes over
+ * the texts of `reuse` (a printer with the same colours) that show no substitute: only the others are printed again.
  */
 class Printer {
-  private readonly values = new Map<PrintBounds, Map<unknown, string>>()
-  private readonly lists = new Map<PrintBounds, Map<readonly unknown[], string>>()
+  private readonly values = new Map<PrintBounds, Map<unknown, Printed>>()
+  private readonly lists = new Map<PrintBounds, Map<readonly unknown[], Printed>>()
+  /**
+   * How many of the texts this printer gave out show a substitute: an argument list that takes the text of such a value
+   * from the cache shows one, too.
+   */
+  private numbered = 0
 
-  constructor(private readonly colors: boolean) { }
+  constructor(private readonly colors: boolean, private readonly reuse?: Printer) { }
 
   value(value: unknown, bounds: PrintBounds): string {
     // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
     if (typeof value !== 'function' && (typeof value !== 'object' || value === null)) return formatValue(value, this.colors, bounds)
-    let known = this.values.get(bounds)
-    if (known === undefined) this.values.set(bounds, known = new Map())
-    let text = known.get(value)
-    if (text === undefined) known.set(value, text = formatValue(value, this.colors, bounds))
-    return text
+    const known = Printer.known(this.values, bounds)
+    let printed = known.get(value)
+    if (printed === undefined) {
+      printed = this.reused(this.reuse?.values, bounds, value)
+      if (printed === undefined) {
+        const before = rootLabelCount() + this.numbered
+        const text = formatValue(value, this.colors, bounds)
+        printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
+      }
+      known.set(value, printed)
+    }
+    if (!printed.unnumbered) this.numbered++
+    return printed.text
   }
 
   arguments(args: readonly unknown[], bounds: PrintBounds): string {
-    let known = this.lists.get(bounds)
-    if (known === undefined) this.lists.set(bounds, known = new Map())
-    let text = known.get(args)
-    if (text === undefined) known.set(args, text = formatArguments(args, this.colors, bounds, value => this.value(value, bounds)))
-    return text
+    const known = Printer.known(this.lists, bounds)
+    let printed = known.get(args)
+    if (printed === undefined) {
+      printed = this.reused(this.reuse?.lists, bounds, args)
+      if (printed === undefined) {
+        // (the texts of values that it takes from the cache count, too)
+        const before = rootLabelCount() + this.numbered
+        const text = formatArguments(args, this.colors, bounds, value => this.value(value, bounds))
+        printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
+      }
+      known.set(args, printed)
+    }
+    if (!printed.unnumbered) this.numbered++
+    return printed.text
+  }
+
+  private static known<K>(cache: Map<PrintBounds, Map<K, Printed>>, bounds: PrintBounds): Map<K, Printed> {
+    let known = cache.get(bounds)
+    if (known === undefined) cache.set(bounds, known = new Map())
+    return known
+  }
+
+  /** A text of `reuse` that shows no substitute (see above). */
+  private reused<K>(reusable: Map<PrintBounds, Map<K, Printed>> | undefined, bounds: PrintBounds, key: K): Printed | undefined {
+    if (reusable === undefined) return undefined
+    const printed = reusable.get(bounds)?.get(key)
+    return printed !== undefined && printed.unnumbered ? printed : undefined
   }
 }
 
@@ -150,24 +190,62 @@ const MATCHER_SEARCH_DEPTH = 32
  * Stringify), the received calls it does not match are printed as deep as the container that the matcher is in (up to
  * MAX_MESSAGE_DEPTH), so that they show the values the matcher was given, and so is the expected call. Undefined when
  * no line needs to be printed deeper. `print`: without colours.
+ *
+ * E59 (R10-ADV-1): a line "prints like" the expected call when it does so with the matchers of the expected call left
+ * out: a matcher prints by its label where the received value stands, so that alone does not tell them apart (a
+ * generated id or a callback next to a DTO that differs three levels down).
+ * E60 (R10V-1): firstVisibleDifference finds the least depth at which a line can print differently, from the values
+ * themselves, so that lines are printed deeper only from that depth on, and only until they print differently (each
+ * value's text is printed once per depth, see Printer). Lines that print alike up to MAX_MESSAGE_DEPTH are not printed
+ * deeper at all. All the lines that print alike are printed as deep as the deepest of them needs, so a line is only
+ * looked at further when it could need more than that, and the comparisons of one message look at no more than
+ * DIFFERENCE_ENTRIES entries in all: the lines after that are printed as deep as the ones before. Without matchers in
+ * the expected call, the printed lines decide (the comparison only skips the depths at which they cannot differ); with
+ * matchers, the comparison does.
  */
 const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | undefined => {
   const records = unmatchedOfExpectedKind(mismatch, print)
   if (records.length === 0) return undefined
-  const expectedArguments = mismatch.expected.specification?.value ?? []
+  const expectedArguments = mismatch.expected.specification?.value ?? NO_ARGUMENTS
   const textAt = (args: readonly unknown[], depth: number) => printArguments(args, print, messageBounds(depth))
-  const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, deepestMatcher(expectedArguments, MATCHER_SEARCH_DEPTH) - 1))
-  const expectedText = textAt(expectedArguments, base)
-  let alike = records.filter(record => textAt(record.args ?? [], base) === expectedText)
-  let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
-  const deepened = new Set(depth === undefined ? alike : records)
-  for (let candidate = base + 1; candidate <= MAX_MESSAGE_DEPTH && alike.length > 0; candidate++) {
-    const expectedDeeper = textAt(expectedArguments, candidate)
-    const still = alike.filter(record => textAt(record.args ?? [], candidate) === expectedDeeper)
-    if (still.length < alike.length) depth = candidate
-    alike = still
+  const matcherLevel = deepestMatcher(expectedArguments, MATCHER_SEARCH_DEPTH)
+  const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, matcherLevel - 1))
+  const expectedText = matcherLevel < 0 ? textAt(expectedArguments, base) : undefined
+  const search: DifferenceSearch = {
+    bounds: MESSAGE_BOUNDS,
+    maxDepth: MAX_MESSAGE_DEPTH,
+    textOf: (value, depth) => print.value(value, messageBounds(depth)),
+    keys: new Map(),
+    entries: DIFFERENCE_ENTRIES
   }
-  return depth === undefined ? undefined : { depth, records: deepened }
+  let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
+  const alike: CallRecord[] = []
+  for (const record of records) {
+    const args = record.args ?? NO_ARGUMENTS
+    if (expectedText !== undefined && textAt(args, base) !== expectedText) continue
+    // only a difference deeper than `floor` can make the message print the lines deeper
+    const floor = depth ?? base
+    const difference = search.entries > 0 ? firstVisibleDifference(search, expectedArguments, args, floor) : undefined
+    // the depth at which the line prints differently from the expected call, if that makes the message print deeper
+    let shows: number | undefined
+    if (expectedText === undefined) {
+      if (difference === undefined || difference <= base) continue
+      if (difference > floor && difference <= MAX_MESSAGE_DEPTH) shows = difference
+    } else if (difference !== undefined) {
+      // a difference that the printed lines do not show (one of a value compared by its text): every depth is tried
+      const from = difference <= base ? floor + 1 : difference > floor ? difference : Infinity
+      for (let candidate = from; candidate <= MAX_MESSAGE_DEPTH; candidate++) {
+        if (textAt(args, candidate) !== textAt(expectedArguments, candidate)) {
+          shows = candidate
+          break
+        }
+      }
+    }
+    alike.push(record)
+    if (shows !== undefined) depth = shows
+  }
+  if (depth === undefined) return undefined
+  return { depth, records: new Set(base > MESSAGE_BOUNDS.depth ? records : alike) }
 }
 
 /**
@@ -203,11 +281,12 @@ export class SubstituteException extends Error {
     const plain = new Printer(false)
     // E54: lines that print alike are printed deeper
     const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
-    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, colors ? new Printer(true) : plain, deeper))
+    const print = colors ? new Printer(true) : plain
+    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, print, deeper))
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them
     if (withPrintGuard(() => printsAlike(mismatch, plain, deeper))) {
-      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, new Printer(colors), deeper)))
+      const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, new Printer(colors, print), deeper)))
       if (numbered.roots > 1) message = numbered.value + (numbered.value.endsWith('\n') ? '' : '\n') + new TextBuilder()
         .add('The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', t => t.faint())
         .newLine()
