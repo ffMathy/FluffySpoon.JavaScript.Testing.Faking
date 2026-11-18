@@ -653,6 +653,7 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
   const candidate = adjacentHandOut(face)
   if (face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key)) {
+    useStringCheck(face)
     const assertion = resolveStringAssertion(face, continuedChain(candidate, frameAt(stackStart)), stackStart)
     assertSet(assertion.state, property, value, assertion.count, stackStart)
     return
@@ -675,6 +676,7 @@ const faceApply = (face: Face, self: Self, args: any[], stackStart: Function, si
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self, site)
   // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
   if (isStringAssertionKey(face.key)) {
+    useStringCheck(face)
     const assertion = resolveStringAssertion(face, continuedChain(face.adjacentHandOut(), frameAt(stackStart)), stackStart)
     assertDirectCall(assertion.state, args, assertion.count, stackStart)
     return undefined
@@ -1066,7 +1068,10 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
  * received or didNotReceive of its own configures it, or checks it with the symbols.
  */
 
-/** E48: the pending reports of the string-form calls that handed out an auto-substitute, until it is used. */
+/**
+ * E48: the pending reports of the string-form calls that handed out an auto-substitute, in the order of the calls, until
+ * it is used. E56: one per call, because calls with the same arguments hand out the same auto-substitute (D2).
+ */
 const danglingStringChecks = new WeakMap<AutoEntry, DeferredAssertion[]>()
 /** E48: the members called received or didNotReceive that a check named, per substitute (see deferStringCheck). */
 const checkedAssertionMembers = new WeakMap<SubstituteState, Set<PropertyKey>>()
@@ -1089,12 +1094,24 @@ const deferStringCheck = (state: SubstituteState, key: StringAssertionKey, args:
 
 const isValidCount = (count: unknown): boolean => count === undefined || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
 
-/** E48: the auto-substitute of a string-form call is used: its pending reports are settled. */
+/**
+ * E48: the auto-substitute of a string-form call is used (the caller is the trap of the use). E56 (R9-ADV-4): that
+ * settles one report, the latest one still pending, so that a dangling `repo.didNotReceive()` followed by a complete
+ * `repo.didNotReceive().delete(Arg.all())` is still reported. The use of a view right after the call that handed it
+ * out is a use of that call's view, whose report is the latest one. A view that was stored and is used later cannot be
+ * told apart from another view of the same call, so its use settles the latest pending report as well: every view
+ * that is used settles a report, so no view that is used is reported, while a view used twice can leave a dangling
+ * one unreported.
+ */
 const useStringCheck = (entry: AutoEntry): void => {
-  const pending = danglingStringChecks.get(entry)
-  if (pending === undefined) return
-  danglingStringChecks.delete(entry)
-  for (const deferred of pending) settle(deferred)
+  const reports = danglingStringChecks.get(entry)
+  if (reports === undefined) return
+  // (reports that were due by now are settled: they were thrown, or did not apply)
+  let pending = 0
+  for (const report of reports) if (!report.settled) reports[pending++] = report
+  reports.length = pending
+  if (pending > 0) settle(reports.pop())
+  if (reports.length === 0) danglingStringChecks.delete(entry)
 }
 
 /** E48: notes that a check named a member called received or didNotReceive (see deferStringCheck). */
@@ -1146,8 +1163,8 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
   }
 }
 
+/** `sub.received(n)` followed by a member access, an assignment or an invocation (the caller has called useStringCheck). */
 const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefined, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
-  useStringCheck(entry)
   const args = actualArgumentsOf(entry, chainHead)
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)

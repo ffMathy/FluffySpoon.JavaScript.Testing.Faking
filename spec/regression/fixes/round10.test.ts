@@ -235,3 +235,116 @@ test('R9V-2 (E57) comparing arguments that inherit from a substitute records not
   const lines = printout(sdk).split('\n').map(line => line.trim()).filter(line => line !== '' && !/^[@}]|received:|configured:/.test(line))
   t.deepEqual([...new Set(lines)], ['Base.prototype', 'new Base()'], printout(sdk))
 })
+
+// ---- E56: dangling check views, tracked one by one ---------------------------------------------------------------
+
+const anyOf = Arg.any as unknown as (type: string) => unknown
+const isOf = Arg.is as unknown as (predicate: unknown) => unknown
+
+/** The messages of every report that the scheduled reports throw. */
+const reportsOf = (clock: ReturnType<typeof interceptDeferredReports>): string[] =>
+  clock.run().map(error => {
+    if (!(error instanceof SubstituteException)) throw error
+    return plain(error.message)
+  })
+
+test('R9V-1 (E56) a check whose matcher argument throws a usage error leaves no "checked nothing" report behind', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const listener = Substitute.for<any>()
+    listener('x')
+    t.throws(() => listener.received(1)(anyOf('String')), { instanceOf: TypeError })
+    t.throws(() => listener.didNotReceive()(isOf('x')), { instanceOf: TypeError })
+    t.throws(() => listener[received](1)(anyOf('Strin')), { instanceOf: TypeError })
+    t.throws(() => listener[didNotReceive]()(isOf(5)), { instanceOf: TypeError })
+    const sub = Substitute.for<any>()
+    t.throws(() => sub.m.received(1)(isOf('bad')), { instanceOf: TypeError })
+    t.throws(() => sub.m[didNotReceive]()(anyOf('Number')), { instanceOf: TypeError })
+    t.deepEqual(reportsOf(clock), [])
+
+    // the member forms, as before
+    sub.add(1, 2)
+    t.throws(() => sub.received(1).add(anyOf('String'), 2), { instanceOf: TypeError })
+    t.throws(() => sub[received](1).add(anyOf('String'), 2), { instanceOf: TypeError })
+    t.deepEqual(reportsOf(clock), [])
+
+    // a check view that nothing followed on an earlier line is still reported
+    listener[received](1)
+    t.throws(() => listener[received](1)(anyOf('Strin')), { instanceOf: TypeError })
+    listener.didNotReceive()
+    t.throws(() => listener.didNotReceive()(anyOf('Strin')), { instanceOf: TypeError })
+    const messages = reportsOf(clock)
+    t.is(messages.length, 2, messages.join('\n'))
+    t.true(messages[0].startsWith('@Substitute[received](1) checked nothing'), messages[0])
+    t.true(messages[1].startsWith('@Substitute.didNotReceive() checked nothing'), messages[1])
+  } finally {
+    clock.uninstall()
+  }
+})
+
+test('R9-ADV-4 (E56) a dangling check view is reported, also when the same check is completed later in the same tick', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const repo = Substitute.for<any>()
+    repo.didNotReceive()
+    repo.didNotReceive().delete(Arg.all())
+    let messages = reportsOf(clock)
+    t.is(messages.length, 1, messages.join('\n'))
+    t.true(messages[0].startsWith('@Substitute.didNotReceive() checked nothing'), messages[0])
+
+    const s = Substitute.for<any>()
+    s.a()
+    s.received(1)
+    s.received(1).a()
+    s.logger.info('x')
+    s.logger.received()
+    s.logger.received().info('x')
+    messages = reportsOf(clock)
+    t.is(messages.length, 2, messages.join('\n'))
+    t.true(messages[0].startsWith('@Substitute.received(1) checked nothing'), messages[0])
+    t.true(messages[1].startsWith('@Substitute.logger.received() checked nothing'), messages[1])
+
+    // the symbol forms (as before)
+    repo[didNotReceive]()
+    repo[didNotReceive]().delete(Arg.all())
+    t.is(reportsOf(clock).length, 1)
+
+    // the report points at the line of the dangling view
+    s.received(1); const danglingLine = new Error().stack!.split('\n')[1]
+    s.received(1).a()
+    const errors = clock.run()
+    t.is(errors.length, 1)
+    const at = (frame: string) => frame.replace(/^.*\((.*):\d+\)$/, '$1').replace(/^\s*at /, '')
+    t.is(at((errors[0] as Error).stack!.split('\n').find(line => line.includes('round10.test'))!), at(danglingLine))
+
+    // complete checks, and a view stored and used later in the same tick, report nothing
+    s.received(1).a()
+    s.received(1).a()
+    const stored = s.received(1)
+    s.b()
+    stored.a()
+    const twice = s.didNotReceive()
+    twice.c()
+    twice.d()
+    t.deepEqual(reportsOf(clock), [])
+    // two views of the same call (the same auto-substitute, D2), each used: nothing is reported, in either order
+    const first = s.received(1)
+    const second = s.received(1)
+    first.a()
+    second.a()
+    const third = s.received(1)
+    const fourth = s.received(1)
+    s.b()
+    fourth.a()
+    third.a()
+    t.deepEqual(reportsOf(clock), [])
+    // a stored view used later is matched with the latest of the calls still pending: one report for two views
+    s.received(1)
+    const later = s.received(1)
+    s.b()
+    later.a()
+    t.is(reportsOf(clock).length, 1)
+  } finally {
+    clock.uninstall()
+  }
+})

@@ -228,7 +228,11 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   return defer(stackStart, createError)
 }
 
-/** The deferred report scheduled last, and the stack captured where its member was read (see cancelDeferredReportOf). */
+/**
+ * The deferred report scheduled last (see cancelDeferredReportOf), and the stack captured where its check was written:
+ * where the member of a property-style check was read (D9, D33), or (E56) where a check view that nothing has followed
+ * yet was created (E48).
+ */
 let latestDeferred: { deferred: DeferredAssertion, site: StackHolder } | undefined
 
 /**
@@ -242,6 +246,9 @@ let latestDeferred: { deferred: DeferredAssertion, site: StackHolder } | undefin
  * positions (before source maps). The report of an earlier statement (`void sub.received(3).log` on one line, a caught
  * `Arg.any('Strin')` on the next, or inside `expect(() => ...)`) is still thrown. A check whose matcher is on another
  * line than its member (`.log(\n  Arg.any('String'))`), or a run without stack traces, keeps its report as well.
+ * E56 (R9V-1): the same holds for the report of a check view that nothing followed (E48), whose matcher is an argument
+ * of the view itself: in `listener.received(1)(Arg.any('String'))` the invocation of the view never happens either, so
+ * the view would be reported as one that checks nothing.
  */
 export const cancelDeferredReportOf = (matcherStart: Function): void => {
   const latest = latestDeferred
@@ -310,6 +317,8 @@ const danglingCheckError = (state: SubstituteState, form: CheckForm, count: Expe
  * E48: schedules the usage error of a check view that is created now (`site`: where), thrown from a microtask (as D9)
  * unless the view is used before (settle the result): a member access, an assignment, a call or `new` on it. For the
  * string forms, `applies` is asked at that time: the type may have a member of that name of its own.
+ * E56: it is the report scheduled last, too, so that a matcher usage error in the view's own arguments cancels it (see
+ * cancelDeferredReportOf).
  */
 export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, count: ExpectedCount, site: StackHolder, applies?: () => boolean): DeferredAssertion => {
   const deferred: DeferredAssertion = {
@@ -323,10 +332,12 @@ export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, coun
     }
   }
   deferredReports.schedule(() => {
+    if (latestDeferred?.deferred === deferred) latestDeferred = undefined
     if (deferred.settled) return
     deferred.settled = true
     if (applies === undefined || applies()) throw deferred.error()
   })
+  latestDeferred = { deferred, site }
   return deferred
 }
 
