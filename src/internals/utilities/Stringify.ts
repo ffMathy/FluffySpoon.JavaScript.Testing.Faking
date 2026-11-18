@@ -1,23 +1,24 @@
 import { inspect, InspectOptions, types } from 'util'
 import { isArgumentMatcher } from '../../shared'
-
-let printDepth = 0
+import { libraryGuard } from './Guard'
 
 /**
  * Runs `print` while marking that the library is printing. Substitutes met while printing (for example a
  * substitute recorded as an argument of another substitute) are printed in their short form, so
  * printing never recurses through substitutes, even when they reference each other.
+ * E63: the mark is shared by every copy of the package (see Guard), so that a substitute of another copy met while
+ * printing is printed in its short form, and records nothing, too.
  */
 export const withPrintGuard = <T>(print: () => T): T => {
-  printDepth++
+  libraryGuard.printing++
   try {
     return print()
   } finally {
-    printDepth--
+    libraryGuard.printing--
   }
 }
 
-export const isPrinting = (): boolean => printDepth > 0
+export const isPrinting = (): boolean => libraryGuard.printing > 0
 
 /*
  * E44: bounded printing. Every value that a failure message, a printout of a substitute (String(), util.inspect) or a

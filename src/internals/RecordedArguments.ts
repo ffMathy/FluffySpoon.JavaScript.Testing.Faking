@@ -3,6 +3,7 @@ import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMat
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 import { noteMatcherHolder } from './utilities/Stringify'
+import { libraryGuard } from './utilities/Guard'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -22,24 +23,22 @@ export type ArgumentsMatch = {
 const MATCH: ArgumentsMatch = { matches: true, predicateThrew: false }
 const NO_MATCH: ArgumentsMatch = { matches: false, predicateThrew: false }
 
-let comparing = 0
-
 /**
  * E57: whether the library is comparing arguments with util.isDeepStrictEqual. Reads that reach a substitute through an
  * object that inherits from it are then the runtime's probes (Node.js 20 looks for KeyObjects and URLs), which record
- * nothing (see the get trap in Engine).
+ * nothing (see the get trap in Engine). E63: in any copy of the package (see Guard).
  */
-export const isComparing = (): boolean => comparing > 0
+export const isComparing = (): boolean => libraryGuard.comparing > 0
 
 const literalEquals = (expected: unknown, actual: unknown): boolean => {
   if (expected === actual) return expected !== 0 || Object.is(expected, actual)
-  comparing++
+  libraryGuard.comparing++
   try {
     return isDeepStrictEqual(expected, actual)
   } catch {
     return false
   } finally {
-    comparing--
+    libraryGuard.comparing--
   }
 }
 
