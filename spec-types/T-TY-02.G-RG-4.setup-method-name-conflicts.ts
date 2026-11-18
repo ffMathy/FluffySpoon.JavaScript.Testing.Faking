@@ -69,10 +69,11 @@ shop.find('1').mimicks(() => o)
 shop.load().returns(Promise.resolve(o))
 shop.load().resolves(o)
 
-// (C) resolves / rejects on a promise type that has members with those names
+// (C) resolves / rejects on a promise type that has members with those names (optional ones: a native promise is a
+// valid Deferred, so resolves/rejects are offered, T63)
 interface Deferred<T> extends Promise<T> {
-  resolves: number
-  rejects: number
+  resolves?: number
+  rejects?: number
 }
 interface Scheduler { next(): Deferred<string> }
 const scheduler = Substitute.for<Scheduler>()

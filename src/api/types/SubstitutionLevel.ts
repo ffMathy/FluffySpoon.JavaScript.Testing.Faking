@@ -31,21 +31,28 @@ type ResolvesFunction<TResolved> = ValueFunction<TResolved>
 type RejectsFunction = OneArgumentRequiredFunction<any, void>
 
 // A value that may be a promise offers resolves/rejects, which configure a native promise (`resolves(x)` is
-// `returns(Promise.resolve(x))`): a `Promise` or a subtype of it, and any other thenable (`PromiseLike<T>`, also as part
-// of a union such as `void | Promise<void>` or `T | Promise<T>`, R7FE-8, T52) of which a native promise of its value is
-// a valid value. A thenable with members of its own (a query builder that `extends PromiseLike<Row[]>` and has
-// `where()`) does not offer them: the promise they configure has no such members (R8TD-2, T55).
+// `returns(Promise.resolve(x))`): a thenable (`Promise<T>`, `PromiseLike<T>`, also as part of a union such as `void |
+// Promise<void>` or `T | Promise<T>`, R7FE-8, T52) of which a native promise of its value is a valid value. A thenable
+// with members of its own does not offer them, as the promise they configure has no such members: a query builder that
+// `extends PromiseLike<Row[]>` and has `where()` (R8TD-2, T55), and a subtype of `Promise` with members of its own
+// (knex's `QueryBuilder`, ky's `ResponsePromise`, `CancellablePromise` with `cancel()`, R9-ADV-3, R9TD-3, T63), unless
+// a native promise fits its other members (they are optional). A subtype of `Promise` without members of its own is
+// a promise for this purpose (Prisma's `PrismaPromise<T>`, which only narrows `[Symbol.toStringTag]`).
 // `null | undefined` are ignored: `Promise<T> | undefined` offers them as well. The value they take is what the
 // promises of the union resolve to.
 type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ? PromiseValueOf<TValue, TReturnType> : never
 type PromiseValueOf<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
-  (TValue extends Promise<any> ? U : Promise<U> extends TReturnType ? U : never) :
+  (NativePromiseFits<TValue, U, TReturnType> extends true ? U : never) :
   never
 // (`PromiseLike<any>` first: inferring the value of every member type that is not a promise at all costs more.)
 type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>, TReturnType> ? true : false
 type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<any> ?
-  (TValue extends Promise<any> ? true : TValue extends PromiseLike<infer U> ? (Promise<U> extends TReturnType ? true : false) : false) :
+  (TValue extends PromiseLike<infer U> ? NativePromiseFits<TValue, U, TReturnType> : false) :
   false
+type NativePromiseFits<TValue, U, TReturnType> =
+  TValue extends Promise<any> ? ([Exclude<keyof TValue, keyof Promise<any>>] extends [never] ? true : NativePromiseOf<U, TReturnType>) :
+  NativePromiseOf<U, TReturnType>
+type NativePromiseOf<U, TReturnType> = Promise<U> extends TReturnType ? true : false
 
 type SymbolSetupMethods<TReturnType, TImplementation> = {
   /**
