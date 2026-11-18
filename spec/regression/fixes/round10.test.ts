@@ -418,3 +418,31 @@ test('R9-ADV-5 (E58) the report of a property-style check that fails later point
     clock.uninstall()
   }
 })
+
+test('R9-ADV-5 (E58) the views that share their traps and printer still print as before: util.inspect, String(), nested, without custom inspection', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const p = Substitute.for<any>()
+    p.flag.returns(1)
+    p.both(1).returns(2)
+    p[configure]().both.returns({ v: 1 })
+    const views: Array<[unknown, string]> = [
+      [p[received](), '@Substitute.received()'],
+      [p.didNotReceive().flag, '@Substitute.didNotReceive().flag'],
+      [p[configure](), '@Substitute[configure]()'],
+      [p[configure]().flag, '@Substitute.flag (configure)'],
+      [p.x.bind(null), '@Substitute.x.bind(null)'],
+      [p.both, '@Substitute.both']
+    ]
+    for (const [view, label] of views) {
+      t.is(plain(inspect(view)), label)
+      t.is(plain(inspect(view, { colors: true })), label)
+      t.is(String(view), label)
+      t.is(plain(inspect({ view })), `{ view: ${label} }`)
+      t.is(inspect([view], { customInspect: false }), '[ [Function: bound substitute] ]')
+    }
+    clock.run() // (the check views above were left on their own on purpose)
+  } finally {
+    clock.uninstall()
+  }
+})

@@ -47,14 +47,20 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 // E40: a neutral name for util.inspect without custom inspection (see returnThis)
 const viewFunction = function substitute(this: Printer): Printer { return this }
 
+/**
+ * The inspect.custom hook of the views' targets. util.inspect reads it from the target of a proxy, but calls it with the
+ * proxy itself as `this`: then it asks the view for its hook (its traps answer inspect.custom with the printer, see
+ * special), and never invokes the proxy, which would be a check or a setup. Called on the target, it asks the target.
+ */
+const inspectView = function (this: unknown, depth: number, options?: InspectOptions): string {
+  if (typeof this !== 'function') return ''
+  if (!types.isProxy(this)) return (this() as Printer)(options)
+  const hook = (this as any)[inspect.custom]
+  return typeof hook === 'function' && hook !== inspectView ? hook(depth, options) : ''
+}
+
 const viewTargetPrototype = Object.create(Function.prototype, {
-  [inspect.custom]: {
-    value: function (this: unknown, _depth: number, options?: InspectOptions) {
-      // (the target itself, as util.inspect sees it; never invoke a proxy, that would be an assertion or a setup)
-      return typeof this === 'function' && !types.isProxy(this) ? (this() as Printer)(options) : ''
-    },
-    configurable: true
-  }
+  [inspect.custom]: { value: inspectView, configurable: true }
 })
 
 const viewTarget = (print: Printer): any => {
