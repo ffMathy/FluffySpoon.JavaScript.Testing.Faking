@@ -220,7 +220,7 @@ session.timeout().returns()
 ```
 
 ## Working with promises
-For members that return a promise, `resolves()` and `rejects()` are shortcuts for returning a resolved or rejected promise. They work on methods and on promise-typed properties. They configure a native promise, so in TypeScript they are offered on every member that a native promise of the value fits: `Promise<T>` (and its subtypes), `PromiseLike<T>`, and unions such as `void | Promise<void>` (a hook that may be `async`), `string | Promise<string>` or `Promise<T> | undefined`. They take what the promise resolves to, and `resolves()` can be called without a value when `undefined` is a valid one (`Promise<void>`, `Promise<any>`, `Promise<User | undefined>`, Koa's `next: () => Promise<any>`).
+For members that return a promise, `resolves()` and `rejects()` are shortcuts for returning a resolved or rejected promise. They work on methods and on promise-typed properties. They configure a native promise, so in TypeScript they are offered on every member that a native promise of the value fits: `Promise<T>` and its subtypes without members of their own (such as Prisma's `PrismaPromise<T>`, which only narrows `[Symbol.toStringTag]`, or subtypes whose own members are all optional), `PromiseLike<T>`, and unions such as `void | Promise<void>` (a hook that may be `async`), `string | Promise<string>` or `Promise<T> | undefined`. They take what the promise resolves to, and `resolves()` can be called without a value when `undefined` is a valid one (`Promise<void>`, `Promise<any>`, `Promise<User | undefined>`, Koa's `next: () => Promise<any>`).
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -269,7 +269,7 @@ async function start(p: Plugin) {
 start(plugin)
 ```
 
-A thenable with members of its own, such as a query builder (`interface Query extends PromiseLike<Row[]> { where(...): Query }`), is not a promise, so `resolves()` and `rejects()` are not offered for it: a native promise has no `where()`. Configure such a member with `.returns()` and a substitute of the thenable:
+A thenable with members of its own, such as a query builder (`interface Query extends PromiseLike<Row[]> { where(...): Query }`), is not a promise, so `resolves()` and `rejects()` are not offered for it: a native promise has no `where()`. Neither are they for a subtype of `Promise` with members of its own, such as ky's `ResponsePromise` (`json()`, `text()`), knex's `QueryBuilder` (`where()`), execa's result (`kill()`) or a `CancellablePromise` with `cancel()`: the code under test would call these members on a native promise, which has none, and fail with "... is not a function". Configure such a member with `.returns()` and a substitute of the thenable, for code under test that calls its members:
 
 ```typescript
 import { Substitute } from '@fluffy-spoon/substitute'
@@ -290,6 +290,33 @@ const query = Substitute.for<Query>()
 database.query('users').returns(query)
 query.where('id', 1).returns(query)
 console.log(database.query('users').where('id', 1) === query) // prints true
+```
+
+A substitute is never a thenable (see [Special members](#special-members)), so for code under test that `await`s such a value, return a native promise with the members added:
+
+```typescript
+import { Substitute } from '@fluffy-spoon/substitute'
+
+interface CancellablePromise<T> extends Promise<T> {
+  cancel(): void
+}
+interface Jobs {
+  run(name: string): CancellablePromise<number>
+}
+
+const jobs = Substitute.for<Jobs>()
+// @ts-expect-error a native promise has no cancel()
+jobs.run('backup').resolves(1)
+
+// the code under test awaits the result
+jobs.run('backup').returns(Object.assign(Promise.resolve(1), { cancel: () => { } }))
+jobs.run('backup').then(count => console.log(count)) // prints 1
+
+// the code under test calls cancel()
+const job = Substitute.for<CancellablePromise<number>>()
+jobs.run('report').returns(job)
+jobs.run('report').cancel()
+job.received(1).cancel()
 ```
 
 ## Throwing exceptions
@@ -398,6 +425,8 @@ host.received(1).register(plugin)
 host.received(1).register(Arg.any('object'))
 console.log(JSON.stringify(plugin)) // prints {"name":"audit","ready":true}
 console.log(plugin) // prints Plugin { name: 'audit', ready: true }
+// a symbol that is not registered with Symbol.for() reads as undefined through the instance
+console.log(plugin[Symbol('internal')]) // prints undefined
 
 // without a setup, every `new` gives a new instance
 const Unconfigured = definePlugin(Substitute.for())
@@ -408,16 +437,16 @@ Instances of such a class, and any other object whose prototype chain leads to a
 
 * Passed to a substitute, they are recorded, checked and matched like other objects: by [deep strict equality](#how-arguments-are-compared) of their own fields and their prototype, and `Arg.any('object')` matches them.
 * `JSON.stringify(plugin)` gives their own fields. `util.inspect()`, `console.log()`, failure messages, and the messages and snapshots of jest and vitest show them with their class, as `Plugin { name: 'audit', ready: true }`. `String(plugin)`, template strings and `plugin + ''` give `[object Object]`, as with an empty base class.
-* Through such an object, the substitute answers `then`, `toJSON`, `Symbol.toPrimitive`, `util.inspect.custom` and the library's own symbols with `undefined`, and `toString` and `valueOf` with those of `Object.prototype` (with `Function.prototype.toString` for the class itself), unless the substitute configures or mimicks them.
+* Through such an object, the substitute answers `then`, `toJSON`, `Symbol.toPrimitive`, `util.inspect.custom`, the library's own symbols and every other symbol that is not registered with `Symbol.for()` (such as `Symbol('id')`, or the private symbols that Node.js' own checks look for) with `undefined`, without recording these reads, and `toString` and `valueOf` with those of `Object.prototype` (with `Function.prototype.toString` for the class itself), unless the substitute configures or mimicks them.
 * A class that extends a substitute is not a substitute itself: `Arg.any('object')` does not match it (`Arg.any('function')` does), and it has no `[received]()`.
 
-Other members that neither the instance nor its class has are still read from the `prototype` of the substitute, which is an auto-substitute, and these reads are recorded there. For example, `util.inspect()` on Node.js 22 and newer reads `href` of every object it prints, so calling it on such an instance, in the test or in the code under test, records a read of `Base.prototype.href` on `sdk` (the library's own printing reads nothing). On Node.js 20 only, `String(plugin)` is `[object Function]`: V8 there takes every object whose prototype is a proxy of a function for a function, with or without the library.
+Other members that neither the instance nor its class has, symbols registered with `Symbol.for()` among them, are still read from the `prototype` of the substitute, which is an auto-substitute, and these reads are recorded there. The library itself reads nothing from the substitute through such an object, when it compares it with the arguments of setups and checks or prints it. Other code may: `util.inspect()` on Node.js 20.20 and newer reads `href` of every object it prints, so calling it on such an instance, in the test or in the code under test, records a read of `Base.prototype.href` on `sdk`, and on Node.js 20.20, `util.isDeepStrictEqual()` called by your own code on such instances reads their `href`, `protocol` and `auth`, recorded as `Base.prototype.href` and so on (on Node.js 18, 22 and newer, it reads nothing there). On Node.js 20 only, `String(plugin)` is `[object Function]`: V8 there takes every object whose prototype is a proxy of a function for a function, with or without the library.
 
 # Argument matchers
 There are several ways of matching arguments. They work the same when you set up calls and when you verify them, and they also work for property assignments (`calculator.received().isEnabled = Arg.any()`).
 
 ## Matching specific arguments
-`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns a truthy value (`Arg.is(user => user.name)` matches `{ name: 'ann' }`). When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument.
+`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns a truthy value (`Arg.is(user => user.name)` matches `{ name: 'ann' }`). When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument. That holds for generic methods, too, with the method's type parameters replaced by their constraints, also when they appear only in the return type, as in a database client's `query<T>(sql: string): Promise<T[]>` (see the second example).
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -432,6 +461,27 @@ console.log(calculator.subtract(-5, 3)) // prints 0
 
 // matchers verify received calls, too
 calculator.received().add(Arg.is(x => x > 1000), 2)
+```
+
+```typescript
+import { Substitute, Arg, configure } from '@fluffy-spoon/substitute'
+
+interface Database {
+  query<T = unknown>(sql: string, params?: readonly unknown[]): Promise<T[]>
+}
+interface Cache {
+  get: <T>(key: string) => Promise<T | undefined>
+}
+
+const database = Substitute.for<Database>()
+// sql is inferred as a string
+database.query(Arg.is(sql => sql.startsWith('SELECT'))).resolves([])
+database[configure]().query('DELETE FROM users', Arg.is(params => params !== undefined && params.length === 1)).resolves([])
+database.query('SELECT 1').then(rows => console.log(rows)) // prints []
+database.received(1).query(Arg.is(sql => sql.startsWith('SELECT')))
+
+const cache = Substitute.for<Cache>()
+cache.get(Arg.is(key => key.startsWith('user:'))).resolves(undefined)
 ```
 
 Outside of an argument position, for example in a variable, there is nothing to infer the type from, so annotate the parameter:
@@ -511,7 +561,7 @@ console.log(printer.print(10n)) // prints a bigint
 Arg.any.not('strnig') // throws TypeError: Arg.any.not expects one of
 ```
 
-In TypeScript, a type matcher must fit the parameter: `Arg.any('string')` only fits a parameter that accepts strings, and `Arg.any('undefined')` only one that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)). `Arg.any('undefined')` also matches an argument that the call leaves out (see [How arguments are compared](#how-arguments-are-compared)).
+In TypeScript, a type matcher must fit the parameter. `Arg.any('string')` fits a parameter that accepts strings, including a union of string literals (`'EUR' | 'USD'`), a string enum and a branded string (`string & { __brand: 'OrderId' }`). Likewise, `'number'` fits unions of number literals, numeric enums and branded numbers, and `'boolean'`, `'symbol'` and `'bigint'` fit the subtypes of their types. A type matcher does not fit a parameter that takes no value of its type, such as `Arg.any('string')` for a number. A matcher created on its own (`const anyString = Arg.any('string')`) has the type `string`, so it only fits parameters that accept every string. `Arg.any('undefined')` only fits a parameter that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)). `Arg.any('undefined')` also matches an argument that the call leaves out (see [How arguments are compared](#how-arguments-are-compared)).
 
 ```typescript
 import { Substitute, Arg } from '@fluffy-spoon/substitute'
@@ -528,6 +578,33 @@ console.log(users.find()) // prints all users
 
 // @ts-expect-error a number parameter does not accept undefined
 users.count(Arg.any('undefined'))
+```
+
+```typescript
+import { Substitute, Arg } from '@fluffy-spoon/substitute'
+
+type Currency = 'EUR' | 'USD'
+enum Status { Open = 'open', Paid = 'paid' }
+enum Priority { Low, High }
+type OrderId = string & { readonly __brand: 'OrderId' }
+
+interface Payments {
+  charge(currency: Currency, cents: number): string
+  setStatus(id: OrderId, status: Status): void
+  setPriority(id: OrderId, priority: Priority): void
+}
+
+const payments = Substitute.for<Payments>()
+payments.charge(Arg.any('string'), Arg.any('number')).returns('charged')
+payments.setStatus(Arg.any('string'), Arg.any('string')).returns()
+payments.setPriority(Arg.any('string'), Arg.any('number')).returns()
+console.log(payments.charge('EUR', 100)) // prints charged
+
+// @ts-expect-error a string matcher does not fit a number parameter
+payments.charge('EUR', Arg.any('string'))
+const anyString = Arg.any('string')
+// @ts-expect-error a matcher created on its own is typed string, which is not a Currency
+payments.charge(anyString, 100)
 ```
 
 ## Inverse matchers
