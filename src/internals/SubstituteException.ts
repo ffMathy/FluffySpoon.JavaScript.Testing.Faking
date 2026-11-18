@@ -80,7 +80,15 @@ class Printer {
    */
   private numbered = 0
 
-  constructor(private readonly colors: boolean, private readonly reuse?: Printer) { }
+  /**
+   * E73 (R11-ADV-6): the own enumerable keys of the objects printed and compared for the message (see
+   * DifferenceSearch.keys), shared by its printers, so that each object is listed once per message.
+   */
+  readonly keys: Map<object, PropertyKey[]>
+
+  constructor(private readonly colors: boolean, private readonly reuse?: Printer, keys?: Map<object, PropertyKey[]>) {
+    this.keys = keys ?? reuse?.keys ?? new Map()
+  }
 
   value(value: unknown, bounds: PrintBounds): string {
     // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
@@ -91,7 +99,7 @@ class Printer {
       printed = this.reused(this.reuse?.values, bounds, value)
       if (printed === undefined) {
         const before = rootLabelCount() + this.numbered
-        const text = formatValue(value, this.colors, bounds)
+        const text = formatValue(value, this.colors, bounds, this.keys)
         printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
       }
       known.set(value, printed)
@@ -225,7 +233,7 @@ const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | unde
     bounds: MESSAGE_BOUNDS,
     maxDepth: MAX_MESSAGE_DEPTH,
     textOf: (value, depth) => print.value(value, messageBounds(depth)),
-    keys: new Map(),
+    keys: print.keys,
     entries: DIFFERENCE_ENTRIES
   }
   let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
@@ -293,7 +301,7 @@ export class SubstituteException extends Error {
     const plain = new Printer(false)
     // E54: lines that print alike are printed deeper
     const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
-    const print = colors ? new Printer(true) : plain
+    const print = colors ? new Printer(true, undefined, plain.keys) : plain
     let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, print, deeper))
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them

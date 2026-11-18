@@ -408,11 +408,13 @@ export const arrayExtraKeys = (array: readonly unknown[], limit: number): Proper
 /** How the comparison looks at a value (see above). */
 type Shape = 'array' | 'collection' | 'keyed' | 'text'
 
-const shapeOf = (value: object): Shape => {
-  if (typeof value === 'function' || types.isProxy(value)) return 'text'
-  if (Array.isArray(value)) return typeof (value as any)[inspectCustom] === 'function' ? 'text' : 'array'
+/** The shape of an object (not a function or a proxy) whose prototype is `prototype`. */
+const shapeOf = (value: object, prototype: object | null): Shape => {
+  if (typeof (value as any)[inspectCustom] === 'function') return 'text'
+  if (Array.isArray(value)) return 'array'
+  if (prototype === Object.prototype || prototype === null) return 'keyed'
   if (isError(value)) return 'text'
-  if (types.isMap(value) || types.isSet(value)) return typeof (value as any)[inspectCustom] === 'function' ? 'text' : 'collection'
+  if (types.isMap(value) || types.isSet(value)) return 'collection'
   return printsByKeys(value) ? 'keyed' : 'text'
 }
 
@@ -444,9 +446,11 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
     comparison.stopped = true
     return
   }
-  const shape = shapeOf(expected)
-  if (shape === 'text' || shape !== shapeOf(actual) || Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual))
+  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual))
     return compareTexts(search, comparison, expected, actual, level)
+  const prototype = Object.getPrototypeOf(expected)
+  const shape = prototype === Object.getPrototypeOf(actual) ? shapeOf(expected, prototype) : 'text'
+  if (shape === 'text' || shape !== shapeOf(actual, prototype)) return compareTexts(search, comparison, expected, actual, level)
   if (shape === 'array') return compareArrays(search, comparison, expected as unknown[], actual as unknown[], level, literal)
   if (shape === 'collection')
     return compareCollections(search, comparison, expected as Map<unknown, unknown> | Set<unknown>, actual as Map<unknown, unknown> | Set<unknown>, level)
@@ -461,7 +465,6 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
     if (!literal && matcherHolders.has(expected)) differs(comparison, shows)
     return
   }
-  const prototype = Object.getPrototypeOf(expected)
   const instance = prototype !== Object.prototype && prototype !== null
   compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, search.bounds.keys, level, literal || instance)
 }
@@ -622,12 +625,24 @@ const BUDGET_MARGIN = 1000
  *   (`exhausted`).
  * Shared values are prepared again wherever they are printed (util.inspect prints them there again, too), so the budget
  * counts what is printed.
+ * - `keys`: E73, the own enumerable keys of the objects listed so far, when the caller keeps them (a failure message
+ *   prints its values at several depths and compares them, see DifferenceSearch.keys): an object with 5,000 keys is
+ *   listed once per message.
  */
 type Walk = {
   readonly bounds: PrintBounds
   readonly ancestors: Map<object, unknown>
   budget: number
   exhausted: boolean
+  readonly keys?: Map<object, PropertyKey[]>
+}
+
+/** The own enumerable keys of an object (see Walk.keys). */
+const listedKeys = (walk: Walk, object: object): PropertyKey[] => {
+  if (walk.keys === undefined) return ownEnumerableKeys(object)
+  let keys = walk.keys.get(object)
+  if (keys === undefined) walk.keys.set(object, keys = ownEnumerableKeys(object))
+  return keys
 }
 
 /** At least how many characters util.inspect prints for a value (for a container: before its entries). */
@@ -766,7 +781,7 @@ const copyKeys = (object: object, copy: object, keys: readonly PropertyKey[], co
 
 /** An object shown by its keys: its first `keys` own enumerable keys, data properties prepared, accessors as they are. */
 const preparedKeyed = (object: object, level: number, walk: Walk): unknown => {
-  const keys = ownEnumerableKeys(object)
+  const keys = listedKeys(walk, object)
   const count = Math.min(keys.length, walk.bounds.keys)
   const more: More = { hidden: keys.length - count, unit: 'keys' }
   const copy = Object.create(Object.getPrototypeOf(object))
@@ -823,7 +838,7 @@ const preparedCollection = (collection: Map<unknown, unknown> | Set<unknown>, is
     // E69: and its own keys, which util.inspect shows after the entries (in a copy that leaves entries out, before the
     // `... N more items` that the copy shows at its end)
     if (!truncated) {
-      const keys = ownEnumerableKeys(collection)
+      const keys = listedKeys(walk, collection)
       if (keys.length > 0 && copyKeys(collection, copy, keys, Infinity, level, walk)) {
         if (walk.exhausted) truncated = true
         else changed = true
@@ -846,9 +861,9 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
 
 /**
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
- * anything else with a bounded util.inspect, cut after `bounds.characters` characters.
+ * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
  */
-export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean): string => {
+export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
@@ -856,7 +871,7 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
     colors
   }
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
-  const walk: Walk = { bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false }
+  const walk: Walk = { bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys }
   let printable: unknown
   try {
     printable = prepared(value, 0, walk)
@@ -870,9 +885,9 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
   return truncateText(colors ? inspect(printable, { ...options, colors: false }) : text, bounds.characters, walk.exhausted)
 }
 
-export const formatValue = (value: unknown, colors: boolean, bounds: PrintBounds = MESSAGE_BOUNDS): string => {
+export const formatValue = (value: unknown, colors: boolean, bounds: PrintBounds = MESSAGE_BOUNDS, keys?: Map<object, PropertyKey[]>): string => {
   try {
-    return withPrintGuard(() => formatBounded(value, bounds, colors))
+    return withPrintGuard(() => formatBounded(value, bounds, colors, keys))
   } catch {
     return `<${typeof value}>`
   }
