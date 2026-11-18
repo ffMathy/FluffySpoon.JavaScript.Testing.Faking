@@ -2,7 +2,7 @@ import test, { ExecutionContext } from 'ava'
 import { deepStrictEqual } from 'assert'
 import { callbackify, format, inspect, isDeepStrictEqual, promisify } from 'util'
 
-import { Substitute, Arg, mimick, received } from '../../../src'
+import { Substitute, Arg, configure, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 // Round 12: the engine part of the round-11 findings (R11-ADV-2, R11-ADV-3, R11FE-5, R11FE-3), decided in the fix spec
@@ -325,4 +325,48 @@ test('E65 freeze, seal, preventExtensions and defineProperty work on substitutes
       }
     }
   }
+})
+
+// ---- E66 (R11FE-3): a substitute is no sinon spy to sinon-chai --------------------------------------------------------
+
+/** sinon-chai's own predicates (sinon-chai 3.7), which decide whether its assertions can check a value. */
+const sinonChai = {
+  isSpy: (putativeSpy: any): boolean => typeof putativeSpy === 'function' &&
+    typeof putativeSpy.getCall === 'function' &&
+    typeof putativeSpy.calledWithExactly === 'function',
+  isCall: (putativeCall: any): boolean => Boolean(putativeCall) && sinonChai.isSpy(putativeCall.proxy)
+}
+
+test('R11FE-3 sinon-chai does not take a substitute, an auto-substitute or a configured substitute for a spy, so its assertions throw instead of passing', t => {
+  const next = Substitute.for<any>()
+  const app = Substitute.for<any>()
+  const calc = Substitute.for<any>()
+  app.getCalc().returns(calc)
+  for (const [label, value] of [['root', next], ['auto-substitute', next.member], ['call result', next.load(1)], ['configured', app.getCalc()]] as const) {
+    t.false(sinonChai.isSpy(value), label)
+    t.false(sinonChai.isCall(value), label)
+    // the probe reads `calledWithExactly` as undefined, and does not record it
+    t.is(value.calledWithExactly, undefined, label)
+    t.false(printout(value).includes('calledWithExactly'), label)
+  }
+  t.false(printout(next).includes('called'), 'nothing such as `called` was read as a spy property')
+
+  // a substitute standing in for a sinon spy can still be given the member, as with every protocol key
+  const spy = Substitute.for<any>()
+  spy[configure]().calledWithExactly('x').returns(true)
+  t.true(spy.calledWithExactly('x'))
+  t.is(typeof spy.calledWithExactly, 'function')
+})
+
+test('R11FE-3 jest\'s spy probe (calls.all and calls.count) still answers: a substitute is no jest mock, but `calls` is an ordinary member', t => {
+  // jest's isSpy (Jasmine compatibility): what makes jest's toHaveBeenCalled*() accept a value. It cannot be answered
+  // with undefined without breaking APIs that have a `calls` member (README 'Test runners': use received() instead).
+  const isJestSpy = (received: any) => typeof received.calls?.all === 'function' && typeof received.calls?.count === 'function'
+  const client = Substitute.for<any>()
+  t.true(isJestSpy(client))
+  client.calls.create({ to: '+1' }).resolves({ sid: 'c1' })
+  return client.calls.create({ to: '+1' }).then((call: { sid: string }) => {
+    t.is(call.sid, 'c1')
+    client.calls.received(1).create({ to: '+1' })
+  })
 })

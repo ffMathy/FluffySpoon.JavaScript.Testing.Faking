@@ -76,6 +76,12 @@ const protocolKeys = new Set<PropertyKey>([
   // E33: the probe of the jest and vitest mock serializers (snapshots, pretty-format). Answered truthy, a substitute was
   // printed as a jest mock function from its `getMockName()` and `mock.calls`, which vitest followed without end.
   '_isMockFunction',
+  // E66 (R11FE-3): half of sinon-chai's spy probe (`typeof x.getCall === 'function' && typeof x.calledWithExactly ===
+  // 'function'`). Answered with an auto-substitute, a substitute passed for a sinon spy, so sinon-chai's `called`,
+  // `calledOnce` and `calledWith(x)` passed on a substitute that was never called (they read truthy auto-substitutes).
+  // Now its assertions throw "... is not a spy or a call to a spy!". (jest's spy probe, `calls.all` and `calls.count`,
+  // cannot be answered the same way without breaking APIs with a `calls` member, such as `client.calls.create()`.)
+  'calledWithExactly',
   // E38: DOM event targets call `listener.handleEvent(event)` when it is there (happy-dom checks it first), so a function
   // substitute added as an event listener records the event as a call of itself in happy-dom, jsdom and Node.js
   'handleEvent',
