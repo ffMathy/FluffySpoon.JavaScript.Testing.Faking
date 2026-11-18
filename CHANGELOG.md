@@ -88,6 +88,7 @@ The first stable release of version 2 (there was no 2.0.0 release). It is publis
 - TypeScript: a union whose variants declare a member as only `null` or `undefined`, like `{ data: string[]; error: null } | { data: null; error: Error }`, turned the substitute into `never`.
 - TypeScript: on a union whose variants have a string index signature (`{ kind: 'a'; [key: string]: unknown; speak(): 'meow' } | ...`), `.returns()` was missing or took `never`. It now takes the union of the variants' return types, as for other unions.
 - Under native ES modules, the default import was the CommonJS module object, so `Substitute.for` was not a function.
+- A function of the code under test that copies the prototype of a substitute or of a bound substitute method, as `mem`, `p-memoize`, `debounce-fn` and `onetime` do through `mimic-fn`, was taken for a substitute: `util.inspect` and `console.log` of it threw or called it (recording phantom calls), and failure messages printed it as a substitute. It now prints as an ordinary function, and printing never calls it.
 - The package could not be loaded on Node.js versions before 14.18.
 - A manual `npm publish` after `npm test` could publish a package without its entry point.
 

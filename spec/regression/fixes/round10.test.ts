@@ -447,3 +447,49 @@ test('R9-ADV-5 (E58) the views that share their traps and printer still print as
     clock.uninstall()
   }
 })
+
+// ---- R10-ADV-3, R10-ADV-4: functions that copy a substitute's prototype are not the library's -------------------
+
+/** What mimic-fn does (used by mem, p-memoize, debounce-fn and onetime 6+): the wrapper takes the wrapped function's prototype. */
+const mimic = <T extends Function>(wrapper: T, wrapped: Function): T => {
+  Object.setPrototypeOf(wrapper, Object.getPrototypeOf(wrapped))
+  return wrapper
+}
+
+const memoize = (fn: (...args: any[]) => any) => {
+  const cache = new Map<string, unknown>()
+  return mimic(function memoized(...args: any[]) {
+    const key = JSON.stringify(args)
+    if (!cache.has(key)) cache.set(key, fn(...args))
+    return cache.get(key)
+  }, fn)
+}
+
+test('R10-ADV-3 a function that copies the prototype of a substitute method prints as a function, is never called by printing and is no substitute', t => {
+  const api = Substitute.for<any>()
+  api.getUser(1).returns({ id: 1 })
+  const getUser = memoize(api.getUser)
+  t.deepEqual(getUser(1), { id: 1 })
+
+  t.is(plain(inspect(getUser)), '[Function: memoized]')
+  t.false(isSubstituteProxy(getUser))
+  t.notThrows(() => api.didNotReceive().getUser(undefined), 'printing did not call the wrapper')
+
+  const registry = Substitute.for<any>()
+  registry.register('user', getUser)
+  const error = t.throws(() => registry.received(1).register('order', Arg.any()), { instanceOf: SubstituteException })
+  t.true(plain(error!.message).includes("register('user', [Function: memoized])"))
+  t.notThrows(() => api.received(1).getUser(1))
+})
+
+test('R10-ADV-4 a function that copies the prototype of a bound substitute method prints as a function and is never called by printing', t => {
+  const api = Substitute.for<any>()
+  api.getUser(1).returns({ id: 1 })
+  const getUser = memoize(api.getUser.bind(api))
+  t.deepEqual(getUser(1), { id: 1 })
+
+  t.is(plain(inspect(getUser)), '[Function: memoized]')
+  t.notThrows(() => api.didNotReceive().getUser(), 'printing did not call the wrapper')
+  t.false(printout(api).includes('stylize'))
+  t.notThrows(() => api.received(1).getUser(1))
+})

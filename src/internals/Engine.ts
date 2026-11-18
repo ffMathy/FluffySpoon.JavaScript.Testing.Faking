@@ -54,10 +54,32 @@ const viewFunction = function substitute(this: Printer): Printer { return this }
  */
 const inspectView = function (this: unknown, depth: number, options?: InspectOptions): string {
   if (typeof this !== 'function') return ''
-  if (!types.isProxy(this)) return (this() as Printer)(options)
+  if (!types.isProxy(this)) return isLibraryTarget(this) ? (this() as Printer)(options) : inspectForeign(this, options)
   const hook = (this as any)[inspect.custom]
   return typeof hook === 'function' && hook !== inspectView ? hook(depth, options) : ''
 }
+
+/*
+ * R10-ADV-3, R10-ADV-4: a function of the code under test can inherit the shared prototypes of the targets (mimic-fn,
+ * used by mem, p-memoize, debounce-fn and onetime, copies the prototype of the function it wraps, here a substitute or
+ * a bound substitute method). Such a function is not the library's: the inherited inspect.custom hooks print it as an
+ * ordinary function and never call it, and it is not taken for a substitute (isFaceProxy requires a proxy). The targets
+ * themselves are bound functions, whose source text is native; a wrapper of the code under test has its own source.
+ * (No per-target bookkeeping: D30 keeps an auto-substitute small.)
+ */
+const functionToString = Function.prototype.toString
+const boundSourceText = functionToString.call(function () { /* empty */ }.bind(null))
+const isLibraryTarget = (value: Function): boolean => {
+  try {
+    return functionToString.call(value) === boundSourceText
+  } catch {
+    return false
+  }
+}
+
+/** An ordinary printout of a function that merely inherits one of the hooks (see isLibraryTarget). */
+const inspectForeign = (value: Function, options?: InspectOptions): string =>
+  inspect(value, Object.assign({}, options, { customInspect: false }))
 
 const viewTargetPrototype = Object.create(Function.prototype, {
   [inspect.custom]: { value: inspectView, configurable: true }
@@ -319,7 +341,8 @@ type FaceTarget = () => Face
 
 const faceOfInspected = (value: any): Face | undefined => {
   try {
-    return typeof value === 'function' && !types.isProxy(value) ? value() : value[INTERNAL]
+    if (typeof value === 'function' && !types.isProxy(value)) return isLibraryTarget(value) ? value() : undefined
+    return value[INTERNAL]
   } catch {
     return undefined
   }
@@ -328,6 +351,7 @@ const faceOfInspected = (value: any): Face | undefined => {
 const faceTargetPrototype = Object.create(Function.prototype, {
   [inspect.custom]: {
     value: function (this: unknown, _depth: number, options?: InspectOptions) {
+      if (typeof this === 'function' && !types.isProxy(this) && !isLibraryTarget(this)) return inspectForeign(this, options)
       const face = faceOfInspected(this)
       return face === undefined ? '' : printFace(face, colorsOf(options))
     },
@@ -353,7 +377,8 @@ const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? 
 
 /** Whether the value is a substitute or an auto-substitute of this copy of the library (see above). */
 const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' &&
-  (Object.getPrototypeOf(value) === faceTargetPrototype || (reprototypedCount > 0 && reprototyped.has(value)))
+  ((Object.getPrototypeOf(value) === faceTargetPrototype && types.isProxy(value)) ||
+    (reprototypedCount > 0 && reprototyped.has(value)))
 
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
