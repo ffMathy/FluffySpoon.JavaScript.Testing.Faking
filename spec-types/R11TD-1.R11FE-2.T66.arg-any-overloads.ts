@@ -117,3 +117,17 @@ files.received(1).readFile(Arg.any(), 'utf8')
 files.readFile('/x', { encoding: 'utf8' }).returns('a')
 files.readFile('/x', Arg.any('string') as Enc).returns('a')
 files.readFile('/x', Arg.is((o: Enc) => o !== 'hex')).returns('a')
+
+// R11FE-2 with Node's own fs/promises typings.
+type NodeFiles = Pick<typeof import('fs/promises'), 'readFile'>
+const nodeFiles = Substitute.for<NodeFiles>()
+// @ts-expect-error the encoding is a union of string literals in every overload (R11FE-2)
+nodeFiles.readFile(Arg.any(), Arg.any('string')).resolves('x')
+// @ts-expect-error likewise in a check (R11FE-2)
+nodeFiles.received(1).readFile(Arg.any(), Arg.any('string'))
+nodeFiles.readFile(Arg.any(), 'utf8').resolves('x')
+nodeFiles.readFile(Arg.any(), Arg.any('string') as BufferEncoding).resolves('x')
+nodeFiles.readFile(Arg.any(), Arg.is((encoding: BufferEncoding) => true)).resolves('x')
+nodeFiles.readFile('/x', { encoding: 'utf8' }).resolves('x')
+nodeFiles.received(1).readFile(Arg.any(), Arg.any())
+nodeFiles.received(1).readFile(Arg.any(), 'utf8')
