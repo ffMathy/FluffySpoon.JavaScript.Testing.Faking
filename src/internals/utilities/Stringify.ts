@@ -729,10 +729,39 @@ const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => 
         Object.defineProperty(copy, index, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
       }
     }
+    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows); they are listed only
+    // for an array that is short or copied anyway (listing them lists every index)
+    if (!walk.exhausted) {
+      const extra = arrayExtraKeys(array, changed ? Infinity : ARRAY_KEYS_LIMIT)
+      if (extra !== undefined && extra.length > 0 && copyKeys(array, copy, extra, Infinity, level, walk)) changed = true
+    }
   } finally {
     walk.ancestors.delete(array)
   }
   return changed ? copy : array
+}
+
+/**
+ * Copies the first `count` of the own enumerable keys `keys` of `object` to `copy`, data properties prepared, accessors
+ * as they are, as far as the budget goes. Whether the copy prints differently from the object: a value was prepared,
+ * or the budget ran out.
+ */
+const copyKeys = (object: object, copy: object, keys: readonly PropertyKey[], count: number, level: number, walk: Walk): boolean => {
+  let changed = false
+  const shown = Math.min(keys.length, count)
+  for (let index = 0; index < shown; index++) {
+    const key = keys[index]
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    if (descriptor === undefined) continue
+    const isData = 'value' in descriptor
+    if (!spend(walk, SEPARATOR + keyLength(key) + 2 + (isData ? leastLength(descriptor.value, level + 1, walk) : 8))) return true
+    if (isData) {
+      const item = prepared(descriptor.value, level + 1, walk)
+      if (item !== descriptor.value) changed = true
+      Object.defineProperty(copy, key, { value: item, writable: true, enumerable: true, configurable: true })
+    } else Object.defineProperty(copy, key, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
+  }
+  return changed
 }
 
 /** An object shown by its keys: its first `keys` own enumerable keys, data properties prepared, accessors as they are. */
@@ -745,21 +774,7 @@ const preparedKeyed = (object: object, level: number, walk: Walk): unknown => {
   walk.ancestors.set(object, result)
   let changed = more.hidden > 0
   try {
-    for (let index = 0; index < count; index++) {
-      const key = keys[index]
-      const descriptor = Object.getOwnPropertyDescriptor(object, key)
-      if (descriptor === undefined) continue
-      const isData = 'value' in descriptor
-      if (!spend(walk, SEPARATOR + keyLength(key) + 2 + (isData ? leastLength(descriptor.value, level + 1, walk) : 8))) {
-        changed = true
-        break
-      }
-      if (isData) {
-        const item = prepared(descriptor.value, level + 1, walk)
-        if (item !== descriptor.value) changed = true
-        Object.defineProperty(copy, key, { value: item, writable: true, enumerable: true, configurable: true })
-      } else Object.defineProperty(copy, key, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
-    }
+    if (copyKeys(object, copy, keys, count, level, walk)) changed = true
   } finally {
     walk.ancestors.delete(object)
   }
@@ -803,6 +818,15 @@ const preparedCollection = (collection: Map<unknown, unknown> | Set<unknown>, is
         const member = prepared(step.value, level + 1, walk)
         if (member !== step.value) changed = true
         setAdd.call(copy, member)
+      }
+    }
+    // E69: and its own keys, which util.inspect shows after the entries (in a copy that leaves entries out, before the
+    // `... N more items` that the copy shows at its end)
+    if (!truncated) {
+      const keys = ownEnumerableKeys(collection)
+      if (keys.length > 0 && copyKeys(collection, copy, keys, Infinity, level, walk)) {
+        if (walk.exhausted) truncated = true
+        else changed = true
       }
     }
   } finally {
