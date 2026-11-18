@@ -439,7 +439,8 @@ test('R9-ADV-5 (E58) the views that share their traps and printer still print as
       t.is(plain(inspect(view, { colors: true })), label)
       t.is(String(view), label)
       t.is(plain(inspect({ view })), `{ view: ${label} }`)
-      t.is(inspect([view], { customInspect: false }), '[ [Function: bound substitute] ]')
+      // (Node.js 26 marks a proxy there: `Proxy([Function: bound substitute])`)
+      t.true(inspect([view], { customInspect: false }).includes('[Function: bound substitute]'), label)
     }
     clock.run() // (the check views above were left on their own on purpose)
   } finally {
