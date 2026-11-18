@@ -110,13 +110,20 @@ type AnyFunction = Argument<Function> & ((...args: any[]) => any) & (new (...arg
 // matcher type (`<Argument<unknown>>Arg.any('undefined')`) keeps working.
 type UndefinedArg<TContext> = undefined extends TContext ? TContext : TContext extends Argument<any> ? TContext : undefined
 
+// 'string', 'number', 'boolean', 'symbol' and 'bigint' also fit parameters whose type is a subtype of that primitive
+// (R9FE-3, T64): a union of string literals (`'EUR' | 'USD'`), a string or numeric enum, a branded string (`string & {
+// __brand: 'OrderId' }`). The matcher then takes the part of the parameter's type that is of its primitive type (it
+// matches only such values anyway). Where the parameter has no such part (`Arg.any('string')` for a number), or without
+// a parameter (`const m = Arg.any('string')`), it is the primitive type itself, which a parameter of another type
+// rejects.
+type PrimitiveArg<TContext, TPrimitive> =
+  [Extract<TContext, TPrimitive>] extends [never] ? ReturnArg<TPrimitive> : ReturnArg<Extract<TContext, TPrimitive>>
+
+type PrimitiveTypes = { string: string, number: number, boolean: boolean, symbol: symbol, bigint: bigint }
+
 type MapAnyReturn<T, TContext> = T extends 'any' ?
-ReturnArg<any> : T extends 'string' ?
-ReturnArg<string> : T extends 'number' ?
-ReturnArg<number> : T extends 'boolean' ?
-ReturnArg<boolean> : T extends 'symbol' ?
-ReturnArg<symbol> : T extends 'bigint' ?
-ReturnArg<bigint> : T extends 'undefined' ?
+ReturnArg<any> : T extends keyof PrimitiveTypes ?
+PrimitiveArg<TContext, PrimitiveTypes[T]> : T extends 'undefined' ?
 UndefinedArg<TContext> : T extends 'object' ?
 ReturnArg<any> : T extends 'function' ?
 AnyFunction : T extends 'array' ?
@@ -133,6 +140,14 @@ type Any = {
    * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
    * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
    * substitutes), 'array' or 'any'.
+   */
+  // (A signature of its own, without type parameters, so that the most common matcher costs no inference.)
+  (): ReturnArg<any>
+  /**
+   * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
+   * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
+   * substitutes), 'array' or 'any'. The matcher of a type also fits a parameter whose type is a subtype of it, such as a
+   * union of string literals, an enum or a branded string.
    */
   <T extends AnyType = 'any', TContext = undefined>(type?: T): MapAnyReturn<T, TContext>
   /**
