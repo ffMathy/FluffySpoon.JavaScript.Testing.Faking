@@ -115,6 +115,15 @@ export const answersOnlyItself = (property: PropertyKey): boolean => typeof prop
   : property === 'toString' || property === 'valueOf' || property === 'toJSON' || property === 'then' ||
     (property === 'inspect' && callsInspectMethod)
 
+/**
+ * E57: a symbol that is neither the library's own nor registered (Symbol.for), nor one of the printing and conversion
+ * symbols of answersOnlyItself: a private symbol of the code under test or of the runtime (Node.js's kKeyType), or a
+ * well-known symbol. Read through an object that inherits from a substitute, it reads undefined unless configured (see
+ * the get trap in Engine).
+ */
+export const isForeignSymbol = (property: PropertyKey): boolean => typeof property === 'symbol' &&
+  property !== Symbol.toPrimitive && property !== inspect.custom && property !== INTERNAL && Symbol.keyFor(property) === undefined
+
 /** Node.js 10 still calls an object's own `inspect` method in util.inspect (DEP0079, removed in Node.js 11). */
 const callsInspectMethod = typeof process === 'object' && process !== null && typeof process.version === 'string' &&
   /^v10\./.test(process.version)

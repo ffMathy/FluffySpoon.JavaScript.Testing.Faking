@@ -5,14 +5,14 @@ import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './Subs
 import { pathArguments, relativePath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
-import { RecordedArguments } from './RecordedArguments'
+import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import {
   assertCall, assertPropertyRead, assertSet, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
 } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, StringAssertionKey, SubstitutionMethod,
-  answersOnlyItself, contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
+  answersOnlyItself, contextMethodOf, isForeignSymbol, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
@@ -39,20 +39,38 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 
 /**
  * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
- * target of a proxy (it does not trigger traps), so the target carries the printer as its inspect.custom hook.
- * It is a bound function: it can be constructed (E23), and it has no non-configurable `prototype`, so that the
- * traps can hide its own properties (E25, see viewTraps).
+ * target of a proxy (it does not trigger traps), so the target carries the printer: it is a bound function that
+ * returns its printer, and its inspect.custom hook is inherited from a shared prototype (E58: cheaper than a hook of its
+ * own per view). It can be constructed (E23), and it has no non-configurable `prototype`, so that the traps can hide
+ * its own properties (E25, see viewTraps).
  */
 // E40: a neutral name for util.inspect without custom inspection (see returnThis)
-const viewFunction = function substitute() { }
+const viewFunction = function substitute(this: Printer): Printer { return this }
+
+/**
+ * The inspect.custom hook of the views' targets. util.inspect reads it from the target of a proxy, but calls it with the
+ * proxy itself as `this`: then it asks the view for its hook (its traps answer inspect.custom with the printer, see
+ * special), and never invokes the proxy, which would be a check or a setup. Called on the target, it asks the target.
+ */
+const inspectView = function (this: unknown, depth: number, options?: InspectOptions): string {
+  if (typeof this !== 'function') return ''
+  if (!types.isProxy(this)) return (this() as Printer)(options)
+  const hook = (this as any)[inspect.custom]
+  return typeof hook === 'function' && hook !== inspectView ? hook(depth, options) : ''
+}
+
+const viewTargetPrototype = Object.create(Function.prototype, {
+  [inspect.custom]: { value: inspectView, configurable: true }
+})
+
 const viewTarget = (print: Printer): any => {
-  const target = viewFunction.bind(undefined)
-  Object.defineProperty(target, inspect.custom, {
-    value: (_depth: number, options?: InspectOptions) => print(options),
-    configurable: true
-  })
+  const target = viewFunction.bind(print)
+  Object.setPrototypeOf(target, viewTargetPrototype)
   return target
 }
+
+/** The printer of a view, from its target (see viewTarget). */
+const viewPrinter = (target: () => Printer): Printer => target()
 
 /**
  * E25: the views (assertions, configure views, bound functions, members configured both as a property and as a method)
@@ -66,26 +84,36 @@ const viewChangeError = (operation: string, print: Printer, start: Function) => 
   start
 )
 
-const viewTraps = (print: Printer, onUse?: () => void): ProxyHandler<any> => ({
-  defineProperty: function defineProperty() {
-    onUse?.()
-    throw viewChangeError('Object.defineProperty()', print, defineProperty)
+const definePropertyError = (target: () => Printer, start: Function) =>
+  viewChangeError('Object.defineProperty()', viewPrinter(target), start)
+const preventExtensionsError = (target: () => Printer, start: Function) =>
+  viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', viewPrinter(target), start)
+
+/** The traps that every view shares (E58: one set for all of them, see createView). */
+const viewTraps = {
+  defineProperty: function defineProperty(target: () => Printer): boolean {
+    throw definePropertyError(target, defineProperty)
   },
-  preventExtensions: function preventExtensions() {
-    onUse?.()
-    throw viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', print, preventExtensions)
+  preventExtensions: function preventExtensions(target: () => Printer): boolean {
+    throw preventExtensionsError(target, preventExtensions)
   },
-  deleteProperty: () => true,
-  ownKeys: () => [],
-  getOwnPropertyDescriptor: () => undefined
-})
+  deleteProperty: (): boolean => true,
+  ownKeys: (): Array<string | symbol> => [],
+  getOwnPropertyDescriptor: (): PropertyDescriptor | undefined => undefined
+}
 
 /**
- * A short-lived proxy (see viewTarget and viewTraps). `onUse` (E48): told when the code changes the view (which is a
- * usage error), as the handler's own traps are told when it is used.
+ * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty and preventExtensions traps, if
+ * it has them, take the place of the shared ones (E48: an assertion view is told that the code changes it).
  */
-const createView = (print: Printer, handler: ProxyHandler<any>, onUse?: () => void): any =>
-  new Proxy(viewTarget(print), { ...viewTraps(print, onUse), ...handler })
+const createView = (print: Printer, handler: ProxyHandler<any>): any => {
+  if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
+  if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
+  handler.deleteProperty = viewTraps.deleteProperty
+  handler.ownKeys = viewTraps.ownKeys
+  handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
+  return new Proxy(viewTarget(print), handler)
+}
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -220,7 +248,12 @@ const colorsOf = (options?: InspectOptions) => options?.colors === true
 
 // ---- substitutes and auto-substitutes ---------------------------------------------------------
 
-export const createSubstitute = (): any => createFaceProxy(new SubstituteState())
+export const createSubstitute = (): any => {
+  const state = new SubstituteState()
+  const proxy = createFaceProxy(state)
+  rootProxies.set(state, proxy)
+  return proxy
+}
 
 const entryProxy = (entry: AutoEntry): any => {
   if (entry.proxy === undefined) entry.proxy = createFaceProxy(entry)
@@ -270,7 +303,7 @@ const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHan
  * `expect(map.set('b', 2)).toBe(map)`) must not take the call made in the statement before with it.
  */
 const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteState): T => {
-  if (typeof value === 'function' && Object.getPrototypeOf(value) === faceTargetPrototype) {
+  if (isFaceProxy(value)) {
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined && (face instanceof AutoEntry ? face.materializedState : face) !== owner) face.handOut(record)
   }
@@ -301,6 +334,26 @@ const faceTargetPrototype = Object.create(Function.prototype, {
     configurable: true
   }
 })
+
+/*
+ * E55 (R9-ADV-2): the library tells its own proxies (substitutes and auto-substitutes of this copy) apart from other
+ * values by the prototype of their target, faceTargetPrototype, which costs nothing per auto-substitute. The code under
+ * test can replace that prototype (`Object.setPrototypeOf(sub, Repo.prototype)`, the usual trick to pass an
+ * `instanceof Repo` check); the proxies for which it did that are recognised by identity instead (see the
+ * setPrototypeOf trap), so they keep every symbol API, isSubstituteProxy, printing and JSON. An object that merely
+ * inherits from a substitute (E46) is never one of them.
+ */
+const reprototyped = new WeakSet<object>()
+let reprototypedCount = 0
+
+/** The proxies of the substitutes themselves (an auto-substitute keeps its own, AutoEntry.proxy). */
+const rootProxies = new WeakMap<SubstituteState, object>()
+
+const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? face.proxy : rootProxies.get(face)
+
+/** Whether the value is a substitute or an auto-substitute of this copy of the library (see above). */
+const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' &&
+  (Object.getPrototypeOf(value) === faceTargetPrototype || (reprototypedCount > 0 && reprototyped.has(value)))
 
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
@@ -335,7 +388,7 @@ const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwne
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
-    if ((answersOnlyItself(property) || isPrinting()) && inheritsFromSubstitute(receiver)) {
+    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing()) && inheritsFromSubstitute(receiver)) {
       const inherited = inheritedMember(target(), property, receiver)
       if (inherited !== AS_USUAL) return inherited
     }
@@ -359,6 +412,16 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     takeOver(target)
     return Reflect.preventExtensions(target)
   },
+  // E55: a substitute whose prototype the code under test replaced is recognised by identity from then on
+  setPrototypeOf: (target: FaceTarget, prototype: object | null) => {
+    if (!Reflect.setPrototypeOf(target, prototype)) return false
+    const proxy = proxyOf(target())
+    if (proxy !== undefined && !reprototyped.has(proxy)) {
+      reprototyped.add(proxy)
+      reprototypedCount++
+    }
+    return true
+  },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
   // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
   ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
@@ -379,10 +442,10 @@ const faceHandler: ProxyHandler<FaceTarget> = {
  * E36: whether an assignment reached the substitute through the prototype chain of another object: an instance of a
  * class that extends a substitute (`this.name = name` in its constructor, whose prototype chain leads to `sub.Base` or
  * its `prototype`), or such a class itself (a static field). The receiver is then not a substitute of this copy.
+ * E55: decided by identity, not by the prototype, for a substitute whose prototype was replaced (see isFaceProxy).
  */
 const inheritsFromSubstitute = (receiver: unknown): receiver is object =>
-  (typeof receiver === 'object' && receiver !== null) ||
-  (typeof receiver === 'function' && Object.getPrototypeOf(receiver) !== faceTargetPrototype)
+  (typeof receiver === 'object' && receiver !== null) || (typeof receiver === 'function' && !isFaceProxy(receiver))
 
 const AS_USUAL: unique symbol = Symbol('as usual')
 
@@ -398,11 +461,21 @@ const AS_USUAL: unique symbol = Symbol('as usual')
  * While the library prints (an argument in a message or a path), any read that reaches a substitute through such an
  * object reads undefined and is not recorded either: util.inspect probes the objects it prints (Node.js 22 reads
  * `href`), and printing never records anything.
+ * E57 (R9V-2): the same while the library compares arguments (util.isDeepStrictEqual: Node.js 20 probes the private
+ * kKeyType of KeyObjects, and a truthy answer made it call `equals()` as well; then the `href`, `protocol` and `auth` of
+ * URLs), and, at any time, for a symbol of the code under test or of the runtime that is not registered (Symbol.for):
+ * such a lookup only passes through the substitute. It reads undefined and records nothing, unless the substitute
+ * configures or mimicks that key. Other registered symbols read as usual.
  */
 const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): unknown => {
-  if (property !== 'toString' && property !== 'valueOf') return undefined
+  const conversion = property === 'toString' || property === 'valueOf'
+  if (!conversion) {
+    if (answersOnlyItself(property) || isPrinting() || isComparing()) return undefined
+    if (!isForeignSymbol(property)) return AS_USUAL
+  }
   const state = face instanceof AutoEntry ? face.materializedState : face
   if (state !== undefined && configuresMember(state, property)) return AS_USUAL
+  if (!conversion) return undefined
   return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
 }
 
@@ -608,6 +681,7 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
   const candidate = adjacentHandOut(face)
   if (face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key)) {
+    useStringCheck(face)
     const assertion = resolveStringAssertion(face, continuedChain(candidate, frameAt(stackStart)), stackStart)
     assertSet(assertion.state, property, value, assertion.count, stackStart)
     return
@@ -630,6 +704,7 @@ const faceApply = (face: Face, self: Self, args: any[], stackStart: Function, si
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self, site)
   // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
   if (isStringAssertionKey(face.key)) {
+    useStringCheck(face)
     const assertion = resolveStringAssertion(face, continuedChain(face.adjacentHandOut(), frameAt(stackStart)), stackStart)
     assertDirectCall(assertion.state, args, assertion.count, stackStart)
     return undefined
@@ -937,7 +1012,7 @@ const constructing = (newTarget: unknown): Self => {
   // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its prototype
   // first (a substitute or an auto-substitute), then by its marker (the other values the library hands out). A subclass
   // of a substitute inherits the marker, but it is not a proxy.
-  if (typeof newTarget !== 'function' || Object.getPrototypeOf(newTarget) === faceTargetPrototype ||
+  if (typeof newTarget !== 'function' || isFaceProxy(newTarget) ||
     (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
   return { thisArg: undefined, explicit: false, construct: true, newTarget }
 }
@@ -1021,7 +1096,10 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
  * received or didNotReceive of its own configures it, or checks it with the symbols.
  */
 
-/** E48: the pending reports of the string-form calls that handed out an auto-substitute, until it is used. */
+/**
+ * E48: the pending reports of the string-form calls that handed out an auto-substitute, in the order of the calls, until
+ * it is used. E56: one per call, because calls with the same arguments hand out the same auto-substitute (D2).
+ */
 const danglingStringChecks = new WeakMap<AutoEntry, DeferredAssertion[]>()
 /** E48: the members called received or didNotReceive that a check named, per substitute (see deferStringCheck). */
 const checkedAssertionMembers = new WeakMap<SubstituteState, Set<PropertyKey>>()
@@ -1044,12 +1122,24 @@ const deferStringCheck = (state: SubstituteState, key: StringAssertionKey, args:
 
 const isValidCount = (count: unknown): boolean => count === undefined || (typeof count === 'number' && Number.isSafeInteger(count) && count >= 0)
 
-/** E48: the auto-substitute of a string-form call is used: its pending reports are settled. */
+/**
+ * E48: the auto-substitute of a string-form call is used (the caller is the trap of the use). E56 (R9-ADV-4): that
+ * settles one report, the latest one still pending, so that a dangling `repo.didNotReceive()` followed by a complete
+ * `repo.didNotReceive().delete(Arg.all())` is still reported. The use of a view right after the call that handed it
+ * out is a use of that call's view, whose report is the latest one. A view that was stored and is used later cannot be
+ * told apart from another view of the same call, so its use settles the latest pending report as well: every view
+ * that is used settles a report, so no view that is used is reported, while a view used twice can leave a dangling
+ * one unreported.
+ */
 const useStringCheck = (entry: AutoEntry): void => {
-  const pending = danglingStringChecks.get(entry)
-  if (pending === undefined) return
-  danglingStringChecks.delete(entry)
-  for (const deferred of pending) settle(deferred)
+  const reports = danglingStringChecks.get(entry)
+  if (reports === undefined) return
+  // (reports that were due by now are settled: they were thrown, or did not apply)
+  let pending = 0
+  for (const report of reports) if (!report.settled) reports[pending++] = report
+  reports.length = pending
+  if (pending > 0) settle(reports.pop())
+  if (reports.length === 0) danglingStringChecks.delete(entry)
 }
 
 /** E48: notes that a check named a member called received or didNotReceive (see deferStringCheck). */
@@ -1101,8 +1191,8 @@ const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: 
   }
 }
 
+/** `sub.received(n)` followed by a member access, an assignment or an invocation (the caller has called useStringCheck). */
 const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefined, stackStart: Function): { state: SubstituteState, count: ExpectedCount } => {
-  useStringCheck(entry)
   const args = actualArgumentsOf(entry, chainHead)
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
@@ -1219,8 +1309,17 @@ const createAssertionProxy = (state: SubstituteState, count: ExpectedCount, site
       settle(dangling)
       assertDirectCall(state, args, count, construct)
       return {}
+    },
+    // a usage error on the view itself is reported instead (E48)
+    defineProperty: function defineProperty(target: () => Printer): boolean {
+      settle(dangling)
+      throw definePropertyError(target, defineProperty)
+    },
+    preventExtensions: function preventExtensions(target: () => Printer): boolean {
+      settle(dangling)
+      throw preventExtensionsError(target, preventExtensions)
     }
-  }, () => settle(dangling))
+  })
 }
 
 /**
@@ -1312,7 +1411,7 @@ const createConfigureProxy = (state: SubstituteState): any => {
 
 /** The configure view of a substitute value: of this copy of the library directly, of another copy through its symbol. */
 const configureViewOf = (value: any): any => {
-  if (Object.getPrototypeOf(value) === faceTargetPrototype) {
+  if (isFaceProxy(value)) {
     const face = value[INTERNAL] as Face | undefined
     if (face !== undefined) return createConfigureProxy(faceState(face))
   }
