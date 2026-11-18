@@ -404,7 +404,7 @@ const isArrayIndex = (key: string): boolean => /^(?:0|[1-9]\d*)$/.test(key) && N
  * paginated rows, `index`, `input` and `groups` of a RegExp match), in their order (a listing gives the indices first);
  * undefined for an array longer than `limit`.
  */
-export const arrayExtraKeys = (array: readonly unknown[], limit: number): PropertyKey[] | undefined => {
+const arrayExtraKeys = (array: readonly unknown[], limit: number): PropertyKey[] | undefined => {
   if (array.length > limit) return undefined
   const keys = Object.keys(array)
   let start = keys.length
