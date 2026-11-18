@@ -2021,6 +2021,24 @@ jest and vitest print a function, and so a substitute, with its `name` member, w
 
 Tools that print without the custom inspection that the library provides, such as the messages of `node:assert`, show any substitute as `[Function: bound substitute]` (on Node.js 26 as `Proxy([Function: bound substitute])`; Node.js 10 reads the `name` member and shows `[Function: @Substitute.name]`).
 
+A function that takes over the prototype of a substitute or of a bound method of one, as `mem`, `p-memoize`, `debounce-fn` and `onetime` do (through `mimic-fn`) with the function that they wrap, is an ordinary function, not a substitute: it prints as a function, and printing it does not call it.
+
+```js
+const util = require('util')
+const { Substitute } = require('@fluffy-spoon/substitute')
+
+// what mimic-fn does for the function that a memoizing wrapper wraps
+const mimic = (wrapper, wrapped) => Object.setPrototypeOf(wrapper, Object.getPrototypeOf(wrapped))
+
+const api = Substitute.for()
+api.getUser(1).returns({ id: 1 })
+// the code under test memoizes a method of its client
+const getUser = mimic(function memoized(id) { return api.getUser(id) }, api.getUser)
+console.log(getUser(1)) // prints { id: 1 }
+console.log(util.inspect(getUser)) // prints [Function: memoized]
+api.received(1).getUser(1)
+```
+
 ## Freezing, defined properties and `in`
 `Object.freeze()`, `Object.seal()` and `Object.preventExtensions()` work on a substitute and on an auto-substitute, and it keeps working afterwards: reads, calls, `new`, setups, checks and printing work as before, and `Object.isFrozen()`, `Object.isSealed()` and `Object.isExtensible()` say what was done. So code under test that freezes what it is given, like `this.options = Object.freeze(options)`, works with a substitute.
 
