@@ -74,10 +74,13 @@ type Printed = { readonly text: string, readonly unnumbered: boolean }
 class Printer {
   private readonly values = new Map<PrintBounds, Map<unknown, Printed>>()
   private readonly lists = new Map<PrintBounds, Map<readonly unknown[], Printed>>()
-  /** How many of the texts this printer gave out show a substitute (see listed). */
+  /**
+   * How many of the texts this printer gave out show a substitute: an argument list that takes the text of such a value
+   * from the cache shows one, too.
+   */
   private numbered = 0
 
-  constructor(readonly colors: boolean, private readonly reuse?: Printer) { }
+  constructor(private readonly colors: boolean, private readonly reuse?: Printer) { }
 
   value(value: unknown, bounds: PrintBounds): string {
     // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)

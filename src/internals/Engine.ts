@@ -408,10 +408,11 @@ const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwne
 
 /**
  * E62 (R10V-3): the prototype of a frozen, sealed or non-extensible substitute cannot change, as for any non-extensible
- * object: Object.setPrototypeOf and `__proto__ =` throw a TypeError that names the substitute (a trap that returned
- * false would give V8's text about the proxy trap instead). A trap cannot tell Reflect.setPrototypeOf apart from them,
- * so Reflect.setPrototypeOf throws it too, where it returns false for an ordinary object. Setting the prototype it
- * already has succeeds.
+ * object: Object.setPrototypeOf (and the Object.prototype.__proto__ setter called on it) throws a TypeError that names
+ * the substitute (a trap that returned false would give V8's text about the proxy trap instead). A trap cannot tell
+ * Reflect.setPrototypeOf apart from them, so Reflect.setPrototypeOf throws it too, where it returns false for an
+ * ordinary object. Setting the prototype it already has succeeds. (`sub.__proto__ = value` is an assignment of a member
+ * of that name, like any other.)
  */
 const notExtensibleError = (face: Face, start: Function): TypeError => {
   const error = new TypeError(`${face.path} is not extensible: its prototype cannot be changed after Object.freeze(), Object.seal() or Object.preventExtensions()`)
