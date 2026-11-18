@@ -353,6 +353,20 @@ hooks.onInit().resolves()
 hooks.load().resolves('x')
 hooks.like().resolves(1)
 
+// R9FE-1 / T60: an Arg.is predicate takes the parameter's type on generic methods
+interface SqlClient { query<T = unknown>(sql: string, params?: readonly unknown[]): Promise<T[]> }
+const sql = Substitute.for<SqlClient>()
+sql.query(Arg.is(text => text.startsWith('SELECT'))).resolves([])
+sql.received().query(Arg.is(text => text.length > 0), Arg.is(params => params !== undefined))
+
+// R9TD-1 / T62: a callback with one variant's `this` gets that variant's value and the setup API
+interface Button { kind: 'b'; onClick(cb: (this: Button, n: number) => void, options?: { once: boolean }): 'b' }
+interface Link { kind: 'l'; onClick(cb: (this: Link, n: number) => void, options?: { once: boolean }): 'l' }
+const control = Substitute.for<Button | Link>()
+control.onClick(function (this: Button, n: number) {}).returns('b')
+control.onClick(function (this: Link, n: number) {}, { once: true }).returns('l')
+control[configure]().onClick(function (this: Button, n: number) {}).returns('b')
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {

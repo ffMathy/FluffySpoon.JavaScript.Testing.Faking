@@ -1,4 +1,4 @@
-import { AllArguments } from '../../shared'
+import { AllArguments, Argument } from '../../shared'
 import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
 import { Equals, GenericKind, IsAny, ObjectKind, Primitive, UnionToIntersection } from './Utilities'
 
@@ -341,9 +341,16 @@ type GenericSignatureKind<F, TOverloads extends any[]> = F extends (...args: any
 // The positional signature of a generic method: its parameter list with the type parameters replaced by their
 // constraints, as a constraint of the arguments `P`, so that callbacks are typed from it (R7TD-1, T53). Its result
 // takes what the method returns for the arguments (see `CallReturnTypeOf`).
+// The parameters are `P | TArguments`, not just `P` (R9FE-1, T60): an argument that is itself a generic call
+// (`Arg.is(sql => sql.startsWith('S'))`) takes its type from the parameter's type, which TypeScript computes with `P`
+// replaced by `never` while it infers `P` (it has no inference for `P` yet), so that `P[0]` alone gave the predicate
+// `unknown`. With `P[0] | TArguments[0]` it gets the parameter's type with the type parameters replaced by their
+// constraints (`string`). `P` is still inferred from the arguments (`get('port')` keeps `'port'`), and the arguments
+// are still checked against its constraint.
 type GenericPositionalSignature<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
   [TOverload['arguments']] extends [never] ? unknown :
-  <P extends TOverload['arguments']>(...args: P) => CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
+  <P extends TOverload['arguments']>(...args: P | TOverload['arguments']) =>
+    CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
 // When the signature takes at least one argument, the first one is a parameter of its own, which carries the check of
 // all arguments: a call without arguments would otherwise infer nothing for `P` and check the arguments against its
 // constraint, which accepts none.
@@ -391,9 +398,17 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // signature (`same(1, 'x')` of `same<T extends string | number>(a: T, b: T): T`, `log(1, 'x')` of `log<T>(a: T, b: T):
 // void`) take what that list returns (`TReturnType`), never `any` (R8TD-1, T54): `same(1, 'x').returns({})` and
 // `log(1, 'x').returns(5)` do not compile.
-type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => any ? (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
+// The return type is inferred from the value types of matcher arguments (`keyof Config` for `Arg.is(key => ...)`,
+// whose type is `Argument<keyof Config> & keyof Config`, R9FE-1, T60): TypeScript cannot infer it from the matcher types
+// themselves when the method uses the type parameter as an index (`Config[K]`), which gave `any`. (Function matchers,
+// `Arg.any('function')`, are kept as they are. Unwrapping the arguments for every call costs less than a second
+// inference after a failed one, which comparisons of such signatures with a method's own generic signature reach.)
+type CallReturnTypeOf<F, P extends any[], TReturnType> = CallReturnTypeFor<F, P, Extract<MatcherValues<P>, any[]>, TReturnType>
+type CallReturnTypeFor<F, P extends any[], TValues extends any[], TReturnType> =
+  F extends (...args: P) => any ? (F extends (...args: TValues) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
   TReturnType
+type MatcherValues<P> = { [K in keyof P]: MatcherValue<P[K]> }
+type MatcherValue<T> = T extends (...args: any) => any ? T : T extends Argument<infer V> ? V : T
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
@@ -500,48 +515,46 @@ type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => 
 // A callback whose `this` is annotated with the type of one variant (`function (this: Btn, n: number) {}`) does not fit
 // a callback with all the `this` types of the member (`TThis`, the signatures above), as `this` is compared
 // contravariantly. Such calls resolve to one more signature (R8TD-3, T56), which takes the parameter lists of the
-// member with each callback taking a callback with the `this` type of any variant whose list is the same apart from
-// the `this` types of its callbacks (`OwnThisListsOf`): with `onClick(cb: (this: Btn, n: number) => void)` in one variant
-// and `onClick(cb: (this: Lnk, n: number) => void)` in the other, `onClick` takes `function (this: Btn, n: number)` and
-// `function (this: Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x:
-// number) => void)`, `on(function (this: E2, x: string) {})` does not compile. Its parameter list is the constraint of
-// its type parameter, which TypeScript only computes when a call gets to this signature, and being generic, it is left
-// out when TypeScript compares the signatures of the variants of a union, which made such unions of callbacks very slow
-// to check on TypeScript 3.6 for lib.dom's elements.
-// The lists that differ only in the `this` types of their callbacks are the lists of the signatures above
-// (`DistinctParameterLists`, whose callbacks all take the `this` types `TThis`); the `this` types of each group are
-// computed from the parameter lists of the variants.
-// (The lists of the signatures above are passed in: computing them in the constraint made TypeScript 3.6 and 4.1
-// report "Type instantiation is excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`:
-// TypeScript 4.1 and older decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
+// variants as they declare them: with `onClick(cb: (this: Btn, n: number) => void)` in one variant and `onClick(cb:
+// (this: Lnk, n: number) => void)` in the other, `onClick` takes `function (this: Btn, n: number)` and `function (this:
+// Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x: number) => void)`,
+// `on(function (this: E2, x: string) {})` does not compile. A call is checked against each list as a whole, as
+// TypeScript checks a call of the union itself: with `both(a: (this: C1) => void, b: (this: C1) => void)` and the same
+// with `C2`, `both(function (this: C1) {}, function (this: C2) {})` does not compile (R9TD-2, T62). Its parameter list
+// is the constraint of its type parameter, which TypeScript only computes when a call gets to this signature, and being
+// generic, it is left out when TypeScript compares the signatures of the variants of a union, which made such unions of
+// callbacks very slow to check on TypeScript 3.6 for lib.dom's elements.
+// (The lists are passed in: computing them in the constraint made TypeScript 3.6 and 4.1 report "Type instantiation is
+// excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`: TypeScript 4.1 and older
+// decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
 type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends never ? unknown :
-  <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>, TThis>) =>
-    PrefixCallResult<V, P, P, F>
-// The arguments `P` fit one of the lists with the variants' own `this` types. Only checked for calls that pass a
-// callback with a `this` type of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature
-// first, do not compute these lists.
+  <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>>) =>
+    OwnThisCallResult<V, P, F>
+// The arguments `P` fit one of the lists of the variants. Only checked for calls that pass a callback with a `this` type
+// of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature first, do not compute these
+// lists.
 // (The lists are wrapped in a tuple, so that TypeScript computes them only when it checks the arguments, not when it
 // infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
 // they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
 // `any`, which otherwise made them report "Type instantiation is excessively deep".)
-type OwnThisArguments<P extends any[], TAllLists, TThis> =
+type OwnThisArguments<P extends any[], TAllLists> =
   (CallbackThisTypes<P> & {}) extends never ? never :
-  [P] extends [OwnThisLists<TAllLists, TThis>] ? unknown : never
-type OwnThisLists<TAllLists, TThis> = IsAny<TAllLists> extends true ? any[] :
-  OwnThisListsOf<DistinctParameterLists<TAllLists, TThis>, TAllLists, TThis>
-type OwnThisListsOf<TLists, TAllLists, TThis> =
-  TLists extends any[] ? Extract<WithEachCallbackThis<TLists, GroupThisTypes<TLists, TAllLists, TThis>>, any[]> : never
-// The `this` types of the callbacks of the lists `TAllLists` (of the variants) that are the list `TList` apart from
-// these `this` types.
-type GroupThisTypes<TList, TAllLists, TThis> =
-  TAllLists extends any[] ? (SameList<DistinctParameterLists<TAllLists, TThis>, TList> extends true ? CallbackThisTypes<TAllLists> : never) : never
-type SameList<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
-type WithEachCallbackThis<TList, TThis> = { [P in keyof TList]: WithEachThis<TList[P], TThis> }
-type WithEachThis<TParameter, TThis> =
-  [TParameter] extends [(this: infer TOwnThis, ...args: infer A) => infer R] ?
-  (unknown extends TOwnThis ? TParameter : EachCallbackWithThis<TThis, Extract<A, any[]>, R>) :
-  TParameter
-type EachCallbackWithThis<TThis, A extends any[], R> = TThis extends unknown ? (this: TThis, ...args: A) => R : never
+  [P] extends [OwnThisLists<TAllLists>] ? unknown : never
+type OwnThisLists<TAllLists> = IsAny<TAllLists> extends true ? any[] : TAllLists
+// The result takes what the overloads return whose parameter lists take the arguments `P` (the variant whose `this`
+// type the callback declares: `onClick(function (this: Btn, n: number) {})` returns what `Btn`'s `onClick` returns),
+// or, when every overload returns the same type, that type (see `UnionReturnType`; the per-overload result of a union
+// of all lib.dom elements, whose listener methods all return `void`, was too complex for TypeScript to represent).
+// (Not `PrefixCallResult`, which was `never` on TypeScript 4.1 and older when the call omits optional parameters,
+// R9TD-1, T62.)
+type OwnThisCallResult<V extends SubstituteView, P extends any[], F> =
+  V extends 'assertion' ? void : SetupResult<V, P, OwnThisReturnType<F, P>>
+type OwnThisReturnType<F, P> = {
+  same: { returnType: AllReturnTypes<F> }
+  [differs: number]: { returnType: OwnThisReturnTypes<F, P> }
+}[ReturnsKind<F, AllReturnTypes<F>>]['returnType']
+type OwnThisReturnTypes<F, P> = F extends unknown ? OverloadReturnTypeFor<Overloads<F>[number], P> : never
+type OverloadReturnTypeFor<TOverload, P> = TOverload extends Overload<infer A, infer R> ? ([P] extends [A] ? R : never) : never
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,

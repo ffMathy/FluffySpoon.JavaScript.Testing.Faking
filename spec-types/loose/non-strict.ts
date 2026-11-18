@@ -59,3 +59,12 @@ calculator.add(1, 2).returns('3')
 calculator.add(1, 2).resolves(3)
 
 export { asCalculator }
+
+// R9FE-3 / T64 without strictNullChecks: a type matcher created on its own keeps its primitive type (the missing
+// parameter type is `undefined`, which is part of every type there), and one passed to a parameter takes its subtype.
+const matchesString: boolean = Arg.any('string').matches('foo')
+const notNumber: boolean = Arg.any.not('number').matches(1)
+type Currency = 'EUR' | 'USD'
+interface Payments { charge(currency: Currency, cents: number): string }
+const payments = Substitute.for<Payments>()
+payments.charge(Arg.any('string'), Arg.any('number')).returns('ok')
