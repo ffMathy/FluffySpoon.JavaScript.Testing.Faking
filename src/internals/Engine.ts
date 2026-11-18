@@ -220,7 +220,12 @@ const colorsOf = (options?: InspectOptions) => options?.colors === true
 
 // ---- substitutes and auto-substitutes ---------------------------------------------------------
 
-export const createSubstitute = (): any => createFaceProxy(new SubstituteState())
+export const createSubstitute = (): any => {
+  const state = new SubstituteState()
+  const proxy = createFaceProxy(state)
+  rootProxies.set(state, proxy)
+  return proxy
+}
 
 const entryProxy = (entry: AutoEntry): any => {
   if (entry.proxy === undefined) entry.proxy = createFaceProxy(entry)
@@ -270,7 +275,7 @@ const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHan
  * `expect(map.set('b', 2)).toBe(map)`) must not take the call made in the statement before with it.
  */
 const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteState): T => {
-  if (typeof value === 'function' && Object.getPrototypeOf(value) === faceTargetPrototype) {
+  if (isFaceProxy(value)) {
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined && (face instanceof AutoEntry ? face.materializedState : face) !== owner) face.handOut(record)
   }
@@ -301,6 +306,26 @@ const faceTargetPrototype = Object.create(Function.prototype, {
     configurable: true
   }
 })
+
+/*
+ * E55 (R9-ADV-2): the library tells its own proxies (substitutes and auto-substitutes of this copy) apart from other
+ * values by the prototype of their target, faceTargetPrototype, which costs nothing per auto-substitute. The code under
+ * test can replace that prototype (`Object.setPrototypeOf(sub, Repo.prototype)`, the usual trick to pass an
+ * `instanceof Repo` check); the proxies for which it did that are recognised by identity instead (see the
+ * setPrototypeOf trap), so they keep every symbol API, isSubstituteProxy, printing and JSON. An object that merely
+ * inherits from a substitute (E46) is never one of them.
+ */
+const reprototyped = new WeakSet<object>()
+let reprototypedCount = 0
+
+/** The proxies of the substitutes themselves (an auto-substitute keeps its own, AutoEntry.proxy). */
+const rootProxies = new WeakMap<SubstituteState, object>()
+
+const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? face.proxy : rootProxies.get(face)
+
+/** Whether the value is a substitute or an auto-substitute of this copy of the library (see above). */
+const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' &&
+  (Object.getPrototypeOf(value) === faceTargetPrototype || (reprototypedCount > 0 && reprototyped.has(value)))
 
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
@@ -359,6 +384,16 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     takeOver(target)
     return Reflect.preventExtensions(target)
   },
+  // E55: a substitute whose prototype the code under test replaced is recognised by identity from then on
+  setPrototypeOf: (target: FaceTarget, prototype: object | null) => {
+    if (!Reflect.setPrototypeOf(target, prototype)) return false
+    const proxy = proxyOf(target())
+    if (proxy !== undefined && !reprototyped.has(proxy)) {
+      reprototyped.add(proxy)
+      reprototypedCount++
+    }
+    return true
+  },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
   // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
   ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
@@ -379,10 +414,10 @@ const faceHandler: ProxyHandler<FaceTarget> = {
  * E36: whether an assignment reached the substitute through the prototype chain of another object: an instance of a
  * class that extends a substitute (`this.name = name` in its constructor, whose prototype chain leads to `sub.Base` or
  * its `prototype`), or such a class itself (a static field). The receiver is then not a substitute of this copy.
+ * E55: decided by identity, not by the prototype, for a substitute whose prototype was replaced (see isFaceProxy).
  */
 const inheritsFromSubstitute = (receiver: unknown): receiver is object =>
-  (typeof receiver === 'object' && receiver !== null) ||
-  (typeof receiver === 'function' && Object.getPrototypeOf(receiver) !== faceTargetPrototype)
+  (typeof receiver === 'object' && receiver !== null) || (typeof receiver === 'function' && !isFaceProxy(receiver))
 
 const AS_USUAL: unique symbol = Symbol('as usual')
 
@@ -937,7 +972,7 @@ const constructing = (newTarget: unknown): Self => {
   // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its prototype
   // first (a substitute or an auto-substitute), then by its marker (the other values the library hands out). A subclass
   // of a substitute inherits the marker, but it is not a proxy.
-  if (typeof newTarget !== 'function' || Object.getPrototypeOf(newTarget) === faceTargetPrototype ||
+  if (typeof newTarget !== 'function' || isFaceProxy(newTarget) ||
     (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
   return { thisArg: undefined, explicit: false, construct: true, newTarget }
 }
@@ -1312,7 +1347,7 @@ const createConfigureProxy = (state: SubstituteState): any => {
 
 /** The configure view of a substitute value: of this copy of the library directly, of another copy through its symbol. */
 const configureViewOf = (value: any): any => {
-  if (Object.getPrototypeOf(value) === faceTargetPrototype) {
+  if (isFaceProxy(value)) {
     const face = value[INTERNAL] as Face | undefined
     if (face !== undefined) return createConfigureProxy(faceState(face))
   }
