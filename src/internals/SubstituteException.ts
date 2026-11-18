@@ -263,7 +263,7 @@ const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | unde
       }
     } else if (difference !== undefined && (difference <= base || partial)) {
       // a difference that does not show (see E68 above), or a comparison cut short: the printed lines decide
-      if (difference <= base || difference > floor) shows = printsDifferentlyFrom(args, Math.max(floor, base + 1))
+      if (difference <= base || (difference > floor && difference <= MAX_MESSAGE_DEPTH)) shows = printsDifferentlyFrom(args, Math.max(floor, base + 1))
     } else if (difference !== undefined && difference > floor && difference <= MAX_MESSAGE_DEPTH) {
       shows = printsDifferentlyFrom(args, difference)
     }
