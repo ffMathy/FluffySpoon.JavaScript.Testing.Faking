@@ -867,7 +867,7 @@ const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, 
   const instance = state.mimicked?.instance
   if (instance !== undefined && hasMember(instance, helper)) {
     const member = instance[helper]
-    if (typeof member === 'function' && member !== (Function.prototype as any)[helper]) return Reflect.apply(member, instance, rawArgs)
+    if (typeof member === 'function' && member !== (Function.prototype as any)[helper]) return fromMimicked(Reflect.apply(member, instance, rawArgs), instance, state)
   }
   return NOT_CONFIGURED
 }
@@ -1020,6 +1020,20 @@ const functionHelper = (property: FunctionHelperKey, invokeWith: (args: any[], s
 const hasMember = (instance: any, key: PropertyKey): boolean =>
   ((typeof instance === 'object' && instance !== null) || typeof instance === 'function') && key in instance
 
+/** The proxy of a substitute or of an auto-substitute, from its state. */
+const proxyOfState = (state: SubstituteState): any => state.owner !== undefined ? entryProxy(state.owner) : rootProxies.get(state)
+
+/**
+ * E76 (R12FE-3): what the substitute answers with for a value of the instance it mimicks (D12). The instance itself (a
+ * method that returns `this`, as EventEmitter.on/once, stream.setEncoding/pipe and builders do, or a getter that
+ * returns the instance) is answered with the substitute that received the call or the read instead, so that the code
+ * under test stays on the substitute for the rest of a fluent chain, and the calls of the chain are recorded and
+ * configurable. The method still runs with the instance as `this`. Only the instance itself, by identity: a promise of
+ * it, or another object that holds it, is answered as it is.
+ */
+const fromMimicked = (value: unknown, instance: unknown, state: SubstituteState): any =>
+  value === instance && isObjectLike(value) ? proxyOfState(state) ?? value : value
+
 const execute = (substitution: Substitution, args?: any[], self: Self = NO_SELF): any => {
   const value = substitution.nextValue()
   switch (substitution.method) {
@@ -1064,7 +1078,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const value = delegate ? mimicked.instance[key] : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
-      return handOutConfigured(value, linkChain(state.addRecord('get', key, undefined, site), chainCandidate), state)
+      return handOutConfigured(fromMimicked(value, mimicked.instance, state), linkChain(state.addRecord('get', key, undefined, site), chainCandidate), state)
     }
   }
 
@@ -1189,10 +1203,10 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
   if (mimicked !== undefined) {
     const instance = mimicked.instance
     if (key === SELF) {
-      if (typeof instance === 'function') return callOrConstruct(instance, self.thisArg, args, self)
+      if (typeof instance === 'function') return fromMimicked(callOrConstruct(instance, self.thisArg, args, self), instance, state)
     } else {
       const member = instance[key]
-      if (typeof member === 'function') return callOrConstruct(member, self.explicit ? self.thisArg : instance, args, self)
+      if (typeof member === 'function') return fromMimicked(callOrConstruct(member, self.explicit ? self.thisArg : instance, args, self), instance, state)
     }
   }
   return NOT_CONFIGURED
@@ -1586,7 +1600,9 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       // D31: through a member that answers with a value already
       const substitution = state.propertySubstitution(key)
       const instance = state.mimicked?.instance
-      const mimickedValue = substitution === undefined && instance !== undefined && hasMember(instance, key) ? instance[key] : undefined
+      // (E76: a member that answers with the instance itself reads as the substitute, so nested setups configure it)
+      const mimickedValue = substitution === undefined && instance !== undefined && hasMember(instance, key)
+        ? fromMimicked(instance[key], instance, state) : undefined
       // a real method of a mimicked instance reads as a handle (see realGet), so nested setups configure that handle
       const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || isSubstituteProxy(mimickedValue))
         ? { value: mimickedValue } : undefined

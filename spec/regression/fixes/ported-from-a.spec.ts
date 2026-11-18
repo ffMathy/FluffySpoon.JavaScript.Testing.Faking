@@ -346,7 +346,8 @@ test('D12 [mimick] delegates unconfigured member reads, calls and sets to the in
   counter[mimick](real)
 
   t.is(counter.count, 1)
-  t.is(counter.increment(2), real)
+  // E76 (R12FE-3): a method that returns the instance itself answers the substitute (it still runs on the instance)
+  t.is(counter.increment(2), counter)
   t.is(real.count, 3)
   t.is(counter.double, 6)
   counter.count = 10
@@ -361,7 +362,7 @@ test('D12 [mimick] delegates unconfigured member reads, calls and sets to the in
   counter[configure]().increment(5).returns('configured')
   counter[configure]().double.returns(-1)
   t.is(counter.increment(5), 'configured')
-  t.is(counter.increment(1), real)
+  t.is(counter.increment(1), counter)
   t.is(counter.double, -1)
 
   const fn = substitute()

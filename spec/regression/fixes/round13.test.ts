@@ -1,7 +1,9 @@
 import test from 'ava'
+import { EventEmitter } from 'events'
+import { PassThrough } from 'stream'
 import { inspect } from 'util'
 
-import { Substitute, Arg, configure } from '../../../src'
+import { Substitute, Arg, configure, mimick } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 // Round 13: the engine-core part of the round-12 findings (R12FE-1, R12FE-3, R12FE-2, R12-ADV-3), decided in the fix
@@ -270,4 +272,78 @@ test('R12FE-1 a plain object argument is looked at once for a runner\'s matcher:
   class Entity { id = 1 }
   sub.f(observed(new Entity()))
   t.deepEqual(traps.filter(trap => runnerKeys.test(trap)), ['own $$typeof', 'own test'])
+})
+
+// ---- E76 (R12FE-3): fluent chains of a mimicked instance ---------------------------------------------------------
+
+test('R12FE-3 a mimicked stream\'s fluent chain (setEncoding().on().on().once()) stays on the substitute, and every call is recorded', t => {
+  const wire = (socket: any) => { socket.setEncoding('utf8').on('data', () => { }).on('end', () => { }).once('close', () => { }) }
+  const real = new PassThrough()
+  const socket = Substitute.for<any>()
+  socket[mimick](real)
+  wire(socket)
+
+  t.notThrows(() => socket.received(1).setEncoding('utf8'))
+  t.notThrows(() => socket.received(1).on('data', Arg.any()))
+  t.notThrows(() => socket.received(1).on('end', Arg.any()))
+  t.notThrows(() => socket.received(1).once('close', Arg.any()))
+  t.throws(() => socket.didNotReceive().on('end', Arg.any()), { instanceOf: SubstituteException })
+  // the instance still did the work, with itself as `this`
+  t.is(real.listenerCount('data'), 1)
+  t.is(real.listenerCount('end'), 1)
+  t.is(real.listenerCount('close'), 1)
+  t.true(printout(socket).includes("once('close', [Function (anonymous)])"), printout(socket))
+})
+
+test('R12FE-3 a fluent method or getter of a mimicked instance answers the substitute, runs on the instance, and setups on the substitute apply to the chain', t => {
+  class QueryBuilder {
+    readonly parts: string[] = []
+    where(condition: string) { this.parts.push(`where ${condition}`); return this }
+    limit(count: number) { this.parts.push(`limit ${count}`); return this }
+    get and() { return this }
+    build() { return this.parts.join(' ') }
+    async ready() { return this }
+  }
+  const real = new QueryBuilder()
+  const query = Substitute.for<any>()
+  query[mimick](real)
+  query[configure]().build().returns('configured')
+
+  const chained = query.where('a = 1').and.limit(10)
+  t.is(chained, query)
+  t.is(query.where('b = 2'), query)
+  t.deepEqual(real.parts, ['where a = 1', 'limit 10', 'where b = 2'])
+  t.is(chained.build(), 'configured')
+  t.notThrows(() => query.received(2).where(Arg.any()))
+  t.notThrows(() => query.received(1).limit(10))
+  t.notThrows(() => query.received(1).and)
+  // a promise of the instance is a value like any other: it resolves to the instance
+  return query.ready().then((ready: unknown) => t.is(ready, real))
+})
+
+test('R12FE-3 a mimicked EventEmitter\'s on() and emit() go through the substitute; a method called with another `this` is not mapped', t => {
+  const real = new EventEmitter()
+  const events = Substitute.for<any>()
+  events[mimick](real)
+  const seen: unknown[] = []
+  t.is(events.on('saved', (id: unknown) => seen.push(id)).on('deleted', () => seen.push('deleted')), events)
+  t.true(events.emit('saved', 7))
+  t.deepEqual(seen, [7])
+  t.notThrows(() => events.received(1).on('deleted', Arg.any()))
+  t.notThrows(() => events.received(1).emit('saved', 7))
+  // call() with another receiver runs the method on that receiver: what it returns is not the instance
+  const other = new EventEmitter()
+  t.is(events.on.call(other, 'x', () => { }), other)
+})
+
+test('R12FE-3 a nested setup through a mimicked member that answers the instance itself configures the substitute', t => {
+  class Fluent {
+    get self() { return this }
+    name() { return 'real' }
+  }
+  const fluent = Substitute.for<any>()
+  fluent[mimick](new Fluent())
+  fluent[configure]().self.name().returns('configured')
+  t.is(fluent.name(), 'configured')
+  t.is(fluent.self.name(), 'configured')
 })

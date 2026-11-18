@@ -142,7 +142,9 @@ test('D12 sub[mimick](instance) delegates unconfigured members to the instance',
   ;(substitute as any)[mimick](instance)
 
   t.is<unknown, unknown>(substitute.add(1, 2), 3)
-  t.is<unknown, unknown>(substitute.whoAmI(), instance)
+  // E76 (R12FE-3): a method that returns the instance itself (`return this`) answers the substitute, so that fluent chains
+  // stay on it; it still runs with the instance as `this` (see add and upper)
+  t.is<unknown, unknown>(substitute.whoAmI(), substitute)
   t.is<unknown, unknown>(substitute.name, 'real')
   t.is<unknown, unknown>(substitute.upper, 'REAL')
   ;(substitute as any).name = 'changed'
