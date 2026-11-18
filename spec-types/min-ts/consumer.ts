@@ -367,6 +367,23 @@ control.onClick(function (this: Button, n: number) {}).returns('b')
 control.onClick(function (this: Link, n: number) {}, { once: true }).returns('l')
 control[configure]().onClick(function (this: Button, n: number) {}).returns('b')
 
+// R11TD-1 / T66: a type matcher keeps its primitive type, so it does not pick a literal-typed overload
+interface KeyedStore { get(key: 'count'): number; get(key: string): string | undefined }
+const keyedStore = Substitute.for<KeyedStore>()
+keyedStore.get(Arg.any('string')).returns('x')
+keyedStore[configure]().get(Arg.any('string')).returns(undefined)
+keyedStore.received().get(Arg.any('string'))
+
+// R11TD-2 / T67: the function matcher in a property-set check of a concrete union's callable member
+interface Cat { kind: 'cat'; speak(loud: boolean): 'meow' }
+interface Dog { kind: 'dog'; speak(loud: boolean): 'woof' }
+const pet = Substitute.for<Cat | Dog>()
+pet.received().speak = Arg.any('function')
+
+// R11TD-4 / T70: Arg.all() after a callback with one variant's `this`
+control.onClick(function (this: Button, n: number) {}, Arg.all()).returns('b')
+control.received().onClick(function (this: Link, n: number) {}, Arg.all())
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
