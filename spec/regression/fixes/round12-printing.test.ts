@@ -221,15 +221,26 @@ test('R11DOC-1 (E70) after the comparison budget is spent, later lines are print
   }
   const shapeOf = (withMatcher: boolean): string => {
     const s = Substitute.for<any>()
-    s.f({ id: 'x', a: { b: wide(1, 2) } }) // differs three levels deep
-    for (let index = 0; index < 30; index++) s.f({ id: 'x', a: { b: wide(0, 1) } }) // alike up to four levels deep
-    for (let index = 0; index < 3; index++) s.f({ id: 'x', a: { b: wide(1, 2) } })
+    // R12V-1: the calls are recorded without stack frames, so that no line has a 'called at <path>' line. The listing
+    // stops after MAX_LISTED_CHARACTERS, counting those lines, so how many lines it lists would otherwise depend on
+    // where the repository is checked out.
+    const limit = Error.stackTraceLimit
+    Error.stackTraceLimit = 0
+    try {
+      s.f({ id: 'x', a: { b: wide(1, 2) } }) // differs three levels deep
+      for (let index = 0; index < 30; index++) s.f({ id: 'x', a: { b: wide(0, 1) } }) // alike up to four levels deep
+      for (let index = 0; index < 3; index++) s.f({ id: 'x', a: { b: wide(1, 2) } })
+    } finally {
+      Error.stackTraceLimit = limit
+    }
     const message = messageOf(() => s.received(1).f({ id: withMatcher ? Arg.any() : 'x', a: { b: wide(1, 1) } }))
-    // D: the line shows `y`, three levels down
+    t.false(message.includes('called at'), message.slice(0, 400))
+    // D: the line shows `y`, three levels down; s: it does not; the '… and N more calls' entry, if any, counts as s
     return message.split('\n› ').slice(1).map(line => /y: \d/.test(line) ? 'D' : 's').join('')
   }
   const literal = shapeOf(false)
-  t.true(literal.startsWith('DDDDDDDDDDDDDDDDDDDDDDDDDDD'), literal)
+  // every listed call is printed three levels deep, also those after the budget is spent (at about the 18th line)
+  t.is(literal, 'D'.repeat(34))
   // 98a8973: DDDDDDDDDDDDDDDDDsssssssssssss (the lines after the budget stayed two levels deep)
   t.is(shapeOf(true), literal)
 })
