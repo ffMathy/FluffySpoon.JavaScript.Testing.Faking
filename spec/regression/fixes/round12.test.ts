@@ -206,6 +206,20 @@ test('E64 the brand of the targets is not reproduced by a function named like th
   }
   t.is(calls, 0)
   t.true(inspect(boundNamed).includes('[Function: bound substitute]'))
+
+  // the `name` a substitute reports (E65) never makes a copy look like a target, not even for a member called
+  // `substitute` (`bound substitute` is the name of its bound function, but its `length` is 0)
+  const odd = Substitute.for<any>()
+  const boundMember = odd.substitute.bind(null)
+  t.is(Object.getOwnPropertyDescriptor(boundMember, 'name')!.value, 'bound substitute')
+  const wrapped = mimicFn(function () { calls++ }, boundMember)
+  const promisified = promisify(boundMember)
+  for (const value of [wrapped, wrapped.bind(null), promisified, promisified.bind(null), mem(odd.substitute), mem(odd.substitute).bind(null)]) {
+    t.notThrows(() => inspect(value))
+    t.notThrows(() => inspect(value, { showProxy: true }))
+  }
+  t.is(calls, 0)
+  t.false(printout(odd).includes('substitute()'), printout(odd))
   // an object that inherits the hook directly prints as itself
   const inheriting = Object.create(prototype)
   t.not(inspect(inheriting), '')
@@ -252,7 +266,8 @@ test('E65 substitutes, auto-substitutes and the views report own, non-enumerable
   t.deepEqual(Object.getOwnPropertyDescriptors(sub.getKey), { length: descriptor(0), name: descriptor('getKey') })
   t.deepEqual(Object.getOwnPropertyDescriptors(sub[symbol]), { length: descriptor(0), name: descriptor('[handler]') })
   t.deepEqual(Object.getOwnPropertyDescriptors(sub.make(1)), { length: descriptor(0), name: descriptor('') })
-  t.deepEqual(Object.getOwnPropertyDescriptors(sub.load.bind(null)), { length: descriptor(0), name: descriptor('') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub.load.bind(null)), { length: descriptor(0), name: descriptor('bound load') })
+  t.deepEqual(Object.getOwnPropertyDescriptors(sub.bind(null)), { length: descriptor(0), name: descriptor('bound ') })
   const check = sub[received](0)
   t.deepEqual(Reflect.ownKeys(check), ['length', 'name'])
   check.neverRead

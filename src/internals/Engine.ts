@@ -140,7 +140,8 @@ const preventExtensionsError = (target: () => Printer, start: Function) =>
  * Node.js' util.callbackify reads Object.getOwnPropertyDescriptors(fn).length.value, and util.promisify and mimic-fn
  * copy them. So substitutes, auto-substitutes and the views report them as own data properties, non-enumerable and
  * configurable, as for a function: `length` is 0, and `name` is the member of a member handle (`getKey` for
- * `keys.getKey`, `[description]` for a symbol), '' otherwise. They are only reported: reading `sub.length` or
+ * `keys.getKey`, `[description]` for a symbol), `bound getKey` for `keys.getKey.bind(keys)` (as Function.prototype.bind
+ * names a function), '' otherwise. They are only reported: reading `sub.length` or
  * `sub.name` is a read of a member like any other (recorded, configurable, an auto-substitute when unconfigured), `in`
  * answers as before (E26), and Object.keys, spread, for-in, Object.assign and JSON.stringify see nothing new (the
  * properties are not enumerable). The targets have own `length` and `name` too (bound functions, see isLibraryTarget),
@@ -181,15 +182,16 @@ const viewTraps = {
 }
 
 /**
- * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty and preventExtensions traps, if
- * it has them, take the place of the shared ones (E48: an assertion view is told that the code changes it).
+ * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty, preventExtensions and
+ * getOwnPropertyDescriptor traps, if it has them, take the place of the shared ones (E48: an assertion view is told
+ * that the code changes it; E65: a bound function has a name of its own).
  */
 const createView = (print: Printer, handler: ProxyHandler<any>): any => {
   if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
   if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
   handler.deleteProperty = viewTraps.deleteProperty
   handler.ownKeys = viewTraps.ownKeys
-  handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
+  if (handler.getOwnPropertyDescriptor === undefined) handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
   return new Proxy(viewTarget(print), handler)
 }
 
@@ -979,6 +981,8 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
       faceSet(bindEntry, property, value, set)
       return true
     },
+    // E65: named as Function.prototype.bind names a bound function (`bound getUser`)
+    getOwnPropertyDescriptor: (_target: unknown, property: PropertyKey) => functionDescriptor(property, () => `bound ${functionName(face)}`),
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       const direct = directReadingOf(face)
       return invoke(direct.state, direct.key, [...boundArgs, ...args], apply, direct.readSource, undefined, { thisArg, explicit: true }, captureStack(apply))
