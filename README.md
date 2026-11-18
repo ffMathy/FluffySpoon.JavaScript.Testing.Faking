@@ -449,7 +449,7 @@ Instances of such a class, and any other object whose prototype chain leads to a
 * Through such an object, the substitute answers `then`, `toJSON`, `Symbol.toPrimitive`, `util.inspect.custom`, the library's own symbols and every other symbol that is not registered with `Symbol.for()` (such as `Symbol('id')`, or the private symbols that Node.js' own checks look for) with `undefined`, without recording these reads, and `toString` and `valueOf` with those of `Object.prototype` (with `Function.prototype.toString` for the class itself), unless the substitute configures or mimicks them.
 * A class that extends a substitute is not a substitute itself: `Arg.any('object')` does not match it (`Arg.any('function')` does), and it has no `[received]()`.
 
-Other members that neither the instance nor its class has, symbols registered with `Symbol.for()` among them, are still read from the `prototype` of the substitute, which is an auto-substitute, and these reads are recorded there. The library itself reads nothing from the substitute through such an object, when it compares it with the arguments of setups and checks or prints it. Other code may: `util.inspect()` on Node.js 20.20 and newer reads `href` of every object it prints, so calling it on such an instance, in the test or in the code under test, records a read of `Base.prototype.href` on `sdk`, and on Node.js 20.20, `util.isDeepStrictEqual()` called by your own code on such instances reads their `href`, `protocol` and `auth`, recorded as `Base.prototype.href` and so on (on Node.js 18, 22 and newer, it reads nothing there). On Node.js 20 only, `String(plugin)` is `[object Function]`: V8 there takes every object whose prototype is a proxy of a function for a function, with or without the library.
+Other members that neither the instance nor its class has, symbols registered with `Symbol.for()` among them, are still read from the `prototype` of the substitute, which is an auto-substitute, and these reads are recorded there. The library itself reads nothing from the substitute through such an object, when it compares it with the arguments of setups and checks or prints it, also when the substitute belongs to another copy of the package than the one that compares or prints (see [The symbol API](#the-symbol-api)). Other code may: `util.inspect()` on Node.js 20.20 and newer reads `href` of every object it prints, so calling it on such an instance, in the test or in the code under test, records a read of `Base.prototype.href` on `sdk`, and on Node.js 20.20, `util.isDeepStrictEqual()` called by your own code on such instances reads their `href`, `protocol` and `auth`, recorded as `Base.prototype.href` and so on (on Node.js 18, 22 and newer, it reads nothing there). On Node.js 20 only, `String(plugin)` is `[object Function]`: V8 there takes every object whose prototype is a proxy of a function for a function, with or without the library.
 
 # Argument matchers
 There are several ways of matching arguments. They work the same when you set up calls and when you verify them, and they also work for property assignments (`calculator.received().isEnabled = Arg.any()`).
@@ -1274,6 +1274,8 @@ Each check that nothing follows is reported, also when the same check is made ag
 
 When a matcher in the arguments of a call of the check itself throws its `TypeError` for invalid use, as in `listener.received(1)(Arg.any('String'))`, `listener.didNotReceive()(Arg.is('x'))` or `sub.member.received(1)(Arg.is('bad'))`, that `TypeError` is the only error: no report that the check checked nothing follows. The rule is the one for property-style checks in [Assertions that fail later](#assertions-that-fail-later): the matcher is called on the same line as the check, after it, in the same function.
 
+To report it, a check records where it was made. The string forms (`sub.received(n)`, `sub.didNotReceive()`) always do. Of the checks written with the symbols (`sub[received](n)`, `sub[didNotReceive]()`), only the first 1,000 in one synchronous run (until the microtask that reports them runs) record it, because that is most of what such a check costs, and a loop that makes thousands of them pays for the first ones only. A symbol-form check after those that nothing follows is still reported, with the same message, but its stack has no line of the test, as with `Error.stackTraceLimit = 0`, and a matcher that throws its `TypeError` for invalid use in its own arguments (`sub[received](1)(Arg.any('String'))`) does not cancel its report. The next synchronous run starts again with 1,000.
+
 <!-- docs-check: uses=calculator uncaught=SubstituteException -->
 ```typescript
 calculator.add(1, 2)
@@ -1364,7 +1366,7 @@ All property or method calls to @Substitute#1.use received so far:
 The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.
 ```
 
-Arguments are printed two levels deep (see [Printing a substitute](#printing-a-substitute)), and so is the value of an assignment. When the expected call and a received one that it does not match would still print alike, because they differ further down, as filters of an ORM often do, the message prints the expected line and those received lines deeper: at the least depth, up to four levels, at which they print differently. Received lines that already print differently stay two levels deep, and calls that differ only deeper than four levels print alike, two levels deep. Matchers in the expected call are shown by their own label at any depth, with the objects and arrays that hold them, and when a matcher is deeper than two levels, the received calls that it does not match are printed as deep as the object that holds it (at most four levels), so they show the value that the matcher was given: for an expected `{ a: { b: { c: { d: Arg.is{value => value > 5} } } } }`, a received call shows `{ a: { b: { c: { d: 1, e: [Object] } } } }`. The numbering of substitutes goes by the lines as printed, so two calls that differ only in which substitute sits inside a cut-off object (`use({ a: { b: { c: [Object] } } })`) print alike and are not numbered. `util.inspect()` puts at most 80 characters and three levels of nested objects on one line, so the lines printed deeper span several lines, as below.
+Arguments are printed two levels deep (see [Printing a substitute](#printing-a-substitute)), and so is the value of an assignment. When the expected call and a received one that it does not match would still print alike, because they differ further down, as filters of an ORM often do, the message prints the expected line and those received lines deeper: at the least depth, up to four levels, at which they print differently. A matcher in the expected call does not count as a difference here: it prints by its label, such as `Arg.any{string}`, where the received call shows the value that it was given. So a check with a matcher for a generated id, a timestamp or a callback is printed deeper, too, when the calls differ further down somewhere else (the second example below). Received lines that already print differently stay two levels deep, and so do lines that differ only where the expected call has a matcher that they do not match: for an expected `f(Arg.is{(n) => n > 5}, { a: { b: { c: [Object] } } })`, a received `f(3, { a: { b: { c: [Object] } } })` with the same object. Calls that differ only deeper than four levels print alike, two levels deep. To find the depth, the message compares the values themselves, as printing shows them (keys, array items, the part of a long string that is shown), and it looks at no more than 2,000 objects, keys and items in all, so lines that print alike two levels deep and come after that are printed as deep as the lines before them, or, when the expected call has a matcher, two levels deep. Matchers in the expected call are shown by their own label at any depth, with the objects and arrays that hold them, and when a matcher is deeper than two levels, the received calls that it does not match are printed as deep as the object that holds it (at most four levels), so they show the value that the matcher was given: for an expected `{ a: { b: { c: { d: Arg.is{value => value > 5} } } } }`, a received call shows `{ a: { b: { c: { d: 1, e: [Object] } } } }`. The numbering of substitutes goes by the lines as printed, so two calls that differ only in which substitute sits inside a cut-off object (`use({ a: { b: { c: [Object] } } })`) print alike and are not numbered. `util.inspect()` puts at most 80 characters and three levels of nested objects on one line, so the lines printed deeper span several lines, as below.
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -1391,6 +1393,33 @@ All property or method calls to @Substitute.user.findMany received so far:
   }
 })
     called at Object.<anonymous> (test/users.test.js:5:13)
+```
+
+With a matcher for an id that the code under test generates, the lines differ only further down elsewhere, so they are printed deeper as well:
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const users = Substitute.for()
+// the code under test saves a user with a generated id
+users.save({ id: 'u-81f3', profile: { address: { geo: { lat: 59.9, lng: 10.7 } } } })
+
+users.received(1).save({ id: Arg.any('string'), profile: { address: { geo: { lat: 60.4, lng: 5.3 } } } }) // throws SubstituteException
+```
+
+<!-- docs-check: error-message -->
+```text
+SubstituteException: Call count mismatch in @Substitute.save:
+Expected to receive 1 method call matching save({
+  id: Arg.any{string},
+  profile: { address: { geo: { lat: 60.4, lng: 5.3 } } }
+}), but received none.
+All property or method calls to @Substitute.save received so far:
+› ✘ @Substitute.save({
+  id: 'u-81f3',
+  profile: { address: { geo: { lat: 59.9, lng: 10.7 } } }
+})
+    called at Object.<anonymous> (test/users.test.js:5:7)
 ```
 
 The message contains ANSI colours only when the output is a terminal. `NO_COLOR`, `NODE_DISABLE_COLORS` and `TERM=dumb` turn colours off, and `FORCE_COLOR` turns them on.
@@ -1497,7 +1526,7 @@ Checks throw right away, with two exceptions. One is a check that nothing follow
 * The property check fails, as in `calculator.received(2).add` below.
 * `didNotReceive().member` or `received(0).member` on a member that was only called, never read: it would pass as a property check, but the parentheses were probably forgotten. The report says so: `Expected to receive 0 property reads or method calls matching add, but received 1 method call. add was called 1 time as a method; to assert calls, invoke it: sub.didNotReceive().add(...)`.
 
-Such a failure escapes `try`/`catch` and `t.throws()`: it is an uncaught exception, thrown from a microtask once the current synchronous code has finished. Its stack has one frame, the line of the check, as the report of a check that nothing follows has. The reports of one synchronous run are thrown one per microtask, in the order of the checks.
+Such a failure escapes `try`/`catch` and `t.throws()`: it is an uncaught exception, thrown from a microtask once the current synchronous code has finished. Its stack has one frame, the line of the check. (So does the report of a check that nothing follows, except for a check written with the symbols after the first 1,000 of a synchronous run; see [received and didNotReceive](#received-and-didnotreceive).) The reports of one synchronous run are thrown one per microtask, in the order of the checks.
 
 <!-- docs-check: uses=calculator uncaught=SubstituteException -->
 ```typescript
@@ -1755,7 +1784,9 @@ All of these are exported from the package root.
 | `configure` | `sub[configure]().member...` | Symbol only. See [Re-configuring a call](#re-configuring-a-call-configure). |
 | `returns`, `throws`, `resolves`, `rejects`, `mimicks` | `sub.member(...)[returns](value)`, `sub.property[throws](error)` | The same as the string methods. They configure a member or a call, so using them on the substitute itself (`sub[returns](1)`) is an error. |
 
-The symbols are registered with `Symbol.for()`, so they also work when two copies of the package are installed.
+The symbols are registered with `Symbol.for()`, so they also work when two copies of the package are installed, or loaded twice, as after `jest.resetModules()`.
+
+Substitutes of two such copies work together as well. A substitute of one copy among the arguments of a substitute of the other is shown by its path in failure messages and printouts, `use(@Substitute)` or `use(@Substitute.child)`, as a substitute of the same copy is. And the copies share one marker that says when any of them prints or compares values: an object on the global object, under the registered symbol `Symbol.for('@fluffy-spoon/substitute:guard')` (not enumerable), which the first copy creates and the others find. So the reads that Node.js makes while one copy prints or compares an object that inherits from a substitute of the other, such as an instance of `class Plugin extends sdk.Base` (Node.js looks for `href`, `protocol` and `auth`), are not recorded on that substitute, as with one copy (see [Classes that extend a substitute](#classes-that-extend-a-substitute)). Where the global object cannot take that property, because it is frozen, sealed or not extensible, each copy keeps a marker of its own: then such reads are recorded, and a substitute of the other copy is printed in full, with its calls and setups.
 
 # Special members
 A few members are handled by the substitute itself and cannot be configured or checked:
@@ -1863,7 +1894,7 @@ console.log(typeof options.onDone, Boolean(options.onDone)) // prints function t
 ```
 
 ## Printing a substitute
-`String(sub)`, template strings, `util.inspect(sub)`, `console.log(sub)` and `JSON.stringify(sub)` show the received calls and the setups of a substitute (`String()` and template strings only when `toString()` and `valueOf()` are neither configured nor mimicked, and `JSON.stringify()` only when the substitute does not mimick an object; see [Special members](#special-members)). An auto-substitute shows its path, such as `@Substitute.logger`, `@Substitute.getUser(1)` or `@Substitute.a.b('x').c`, followed by its own received calls and setups, if it has any. A substitute also lists those of its auto-substitutes, under their paths: the calls in the order they were made, the setups in the order they were configured. A read of a member, like `logger` before `logger.info('started')`, is a received call of its own, so it is listed, too. In a failure message, in the printout of another substitute and in a path, an auto-substitute shows only its path, as in `emit('created', @Substitute.child)`. A call made with `new` shows as `new Client('https://api')`.
+`String(sub)`, template strings, `util.inspect(sub)`, `console.log(sub)` and `JSON.stringify(sub)` show the received calls and the setups of a substitute (`String()` and template strings only when `toString()` and `valueOf()` are neither configured nor mimicked, and `JSON.stringify()` only when the substitute does not mimick an object; see [Special members](#special-members)). An auto-substitute shows its path, such as `@Substitute.logger`, `@Substitute.getUser(1)` or `@Substitute.a.b('x').c`, followed by its own received calls and setups, if it has any. A substitute also lists those of its auto-substitutes, under their paths: the calls in the order they were made, the setups in the order they were configured. A read of a member, like `logger` before `logger.info('started')`, is a received call of its own, so it is listed, too. In a failure message, in the printout of another substitute and in a path, an auto-substitute shows only its path, as in `emit('created', @Substitute.child)`, also one of another copy of the package (see [The symbol API](#the-symbol-api)). A call made with `new` shows as `new Client('https://api')`.
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -1999,6 +2030,8 @@ The values that the library hands out for checks and setups (`sub[received]()`, 
 
 `Object.setPrototypeOf(sub, prototype)` works on a substitute, a function substitute and an auto-substitute (`Object.setPrototypeOf(app.events, EventEmitter.prototype)`), for code under test that checks `instanceof`: `sub instanceof EventEmitter` is then `true`. Reads, calls, assignments (which are recorded, as on any substitute), setups, checks, the symbols and their views, `new`, `String()`, template strings and `JSON.stringify()` work as before, and so does passing the substitute as an argument or configuring it as a value. Only `util.inspect()` no longer finds the library's custom inspection, which it looks up through the prototype: `util.inspect(sub)` and `console.log(sub)` show `[Function: bound substitute] EventEmitter` (on Node.js 26 inside `Proxy(...)`), and so do failure messages and printouts in which the substitute is an argument (`use([Function: bound substitute] EventEmitter)`, where other substitutes show as `@Substitute`). Objects that inherit from such a substitute are ordinary objects, as above.
 
+The prototype of a frozen, sealed or non-extensible substitute cannot change, as with any object that is not extensible: `Object.setPrototypeOf()` throws a `TypeError` that names the substitute, `@Substitute.events is not extensible: its prototype cannot be changed after Object.freeze(), Object.seal() or Object.preventExtensions()`, and setting the prototype it already has succeeds. Unlike on an ordinary object, `Reflect.setPrototypeOf()` throws that `TypeError`, too, instead of returning `false`, because a proxy cannot tell the two apart. (`sub.__proto__ = value` does not set the prototype: it is an assignment of a member called `__proto__`, recorded like any other.) `Object.defineProperty()` of a new key throws a `TypeError` on such a substitute as well, as on any object that is not extensible, with the message that V8 gives for proxies: `'defineProperty' on proxy: trap returned falsish for property 'x'`.
+
 `key in sub`, and `Reflect.has(sub, key)`, is `true` when the key has a setup on the substitute: a property setup, a call setup, or a setup further down, like `sub.config.port.returns(80)` for `'config'`. It is also `true` when the substitute mimicks an instance that has the key (`key in instance`, so inherited members count), and for a property defined with `Object.defineProperty()`. Otherwise it is `false`: for members that the code under test used but that are not configured, for the members every function has (`call`, `apply`, `bind`, `name`, `length`, ...), for `then`, `toJSON` and the protocol members above (unless they are configured), and for the library's own methods. Reads, calls and checks through a call with a matcher, like `app.repo(Arg.any()).didNotReceive().save(1)`, do not count as setups here. `in` records nothing, and it takes the same time however many auto-substitutes the substitute has. So code under test that checks whether an optional member exists, like `if ('destroy' in stream)`, takes the branch that the test configured.
 
 ```js
@@ -2051,6 +2084,14 @@ subscribe(app.events)
 app.events[received](1).on('saved', Arg.any())
 console.log(`${app.events}`.split('\n')[0]) // prints @Substitute.events {
 console.log(util.inspect(app.events).includes('[Function: bound substitute] EventEmitter')) // prints true
+
+// a frozen substitute keeps its prototype
+const options = Substitute.for()
+Object.freeze(options)
+Object.setPrototypeOf(options, EventEmitter.prototype) // throws TypeError: @Substitute is not extensible: its prototype cannot be changed after Object.freeze()
+Reflect.setPrototypeOf(options, EventEmitter.prototype) // throws TypeError: @Substitute is not extensible
+console.log(Object.setPrototypeOf(options, Object.getPrototypeOf(options)) === options) // prints true
+Object.defineProperty(options, 'x', { value: 1 }) // throws TypeError: 'defineProperty' on proxy
 ```
 
 # Typing limitations
@@ -2659,6 +2700,10 @@ Arguments with the same hash are told apart by comparing them in full, with `uti
 Arguments that differ only outside the parts that the hash reads get the same hash. They are still told apart correctly, but each new call is compared with every earlier call with that hash, so many such calls get slow: 200 calls with 1 MB strings of the same length that differ only in a few characters in the middle take about 1.6 to 1.8 seconds. The same applies to symbols with the same description (`Symbol('id')`), because a symbol is hashed by its description: 4,000 calls with such symbols take about 0.21 seconds. It applies as well to built-in objects whose state Node.js compares, but which have no keys that the hash could read: `crypto` `KeyObject`s and WebCrypto `CryptoKey`s. Measured on Node.js 22, 24 and 26, 2,000 calls with different secret `KeyObject`s take about 0.5 to 0.9 seconds, and 1,000 calls with different `CryptoKey`s about 1 to 1.1 seconds. The same goes for URLs of another `URL` class than the global one, such as jsdom's `window.URL` used from Node.js (`new JSDOM().window.URL`): Node.js compares them by their address, but the library does not recognise them as URLs. Measured on Node.js 22, 1,000 calls with different such URLs take about 0.5 seconds, 2,000 about 1.7 seconds and 4,000 about 7 seconds, while 4,000 calls with different Node.js URLs take about 0.04 seconds. Under `jest-environment-jsdom`, the global `URL` is jsdom's, so its URLs are hashed by their address: 4,000 calls take about 0.08 seconds. A value that cannot be read, such as an object with a getter that throws, is matched by its identity (see [How arguments are compared](#how-arguments-are-compared)) and read at most once per call: 4,000 calls with different such objects take about 0.1 seconds.
 
 Setups with matchers cannot be looked up by a hash: a call tries the matcher setups of its member one by one. So many matcher setups on the same member slow down each call of it: 4,000 setups with `Arg.is()` plus 4,000 calls take about 0.9 seconds, and with a matcher inside an object (`find({ id: i, name: Arg.any() })`) about 10 seconds. A check goes through the received calls of the member that it checks.
+
+A check written with the symbols, of a member that was never called, takes about 2 microseconds: measured on Node.js 22, 20,000 `sub[didNotReceive]().member(1)` or `sub[received](0).member()` checks take about 40 milliseconds in a fresh process (only the first 1,000 checks of a synchronous run record where they were made; see [received and didNotReceive](#received-and-didnotreceive)). With the string form, 20,000 `sub.didNotReceive().member(1)` checks take about 0.25 seconds.
+
+A failed check builds a message from the calls that it lists (at most 50). Measured on Node.js 22, that takes about half a millisecond for small arguments, about 1.5 to 2 milliseconds when the listed calls print like the expected call two levels deep and differ further down (an object argument that differs only six levels down, or a string of 300 characters that differs after the 200 that are shown), about 2.5 milliseconds when such calls are printed deeper next to a matcher in the expected call, and about 5 milliseconds with 20 such arguments in each call. The first message in a process takes about 4 to 9 milliseconds longer. To decide how deep to print the lines, the message compares the values as printing shows them, and looks at no more than 2,000 objects, keys and items for that (see [received and didNotReceive](#received-and-didnotreceive)).
 
 Each received call is kept until [`[clearReceivedCalls]()`](#clearing-received-calls), at about 300 bytes per call (measured on Node.js 22, 64-bit). A distinct unconfigured call also keeps its auto-substitute, about 200 bytes more, for as long as the substitute lives, so that the same call always returns the same auto-substitute; `[clearReceivedCalls]()` keeps those. A call through a chain of property reads keeps a record of each read as well: `app.a.b.c.d(i)` with a different `i` each time keeps about 1,350 bytes per call. Symbols passed as arguments are not kept alive by the library once the substitute is gone.
 
