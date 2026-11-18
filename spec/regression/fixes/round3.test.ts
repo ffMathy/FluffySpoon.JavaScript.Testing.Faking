@@ -626,8 +626,9 @@ test('V2-3 (D36) received(n).m(...) on a method that was only read gives a kind-
   t.true(nested.includes('Expected to receive 3 property reads or method calls matching render, but received 2 property reads and no method calls.'))
   t.true(nested.includes('@Substitute.view.render was read 2 times without being called'))
 
-  // unchanged: fewer expected reads than received is a property failure without the hint
+  // E77 (R12FE-2): fewer expected reads than received gets the same kind-neutral failure with the hint (it was a property
+  // failure without the hint before)
   const fewer = messageOf(() => app.view.received(1).render)
-  t.true(fewer.includes('Expected to receive 1 property read matching render, but received 2.'))
-  t.false(fewer.includes('without being called'))
+  t.true(fewer.includes('Expected to receive 1 property read or method call matching render, but received 2 property reads and no method calls.'))
+  t.true(fewer.includes('@Substitute.view.render was read 2 times without being called'))
 })

@@ -221,14 +221,15 @@ test('hint: a failed method assertion says when the method was read without bein
   t.false(messageOf(() => calculator.received(2).add(1)).includes('without being called'))
   t.false(messageOf(() => app.logger.didNotReceive().flush()).includes('without being called'))
   // D36 (round 3): a member that was only read, with a count above the reads, may be a method (the failure is
-  // decided at the read), so it gets the hint too; with fewer expected reads it is a property failure without it
+  // decided at the read), so it gets the hint too; E77 (R12FE-2): so does one with fewer expected reads (it was a
+  // property failure without the hint before)
   const settings = Substitute.for<any>()
   void settings.flag
   const property = messageOf(() => settings.received(2).flag)
   t.true(property.includes(hint('@Substitute.flag', '1 time')))
   t.false(property.includes('never called'))
   void settings.flag
-  t.false(messageOf(() => settings.received(1).flag).includes('without being called'))
+  t.true(messageOf(() => settings.received(1).flag).includes(hint('@Substitute.flag', '2 times')))
 })
 
 test('hint: didNotReceive() on a member that was only read points to clearReceivedCalls (A:RT-3 residual)', t => {
@@ -238,7 +239,8 @@ test('hint: didNotReceive() on a member that was only read points to clearReceiv
 
   // forced by D9: the assertion is decided when onClick is read, and it was read once
   const message = messageOf(() => handler.didNotReceive().onClick(42))
-  t.true(message.includes('Expected to receive 0 property reads matching onClick, but received 1.'))
+  // E77 (R12FE-2): the kind-neutral wording, as for any member that was read and never called
+  t.true(message.includes('Expected to receive 0 property reads or method calls matching onClick, but received 1 property read and no method calls.'))
   const hint = '@Substitute.onClick was read 1 time but never called. ' +
     'If it is a method that was only read, for example passed as a callback, these reads still fail didNotReceive().onClick(...): ' +
     'the assertion is decided when onClick is read, before it is known whether it is called. ' +

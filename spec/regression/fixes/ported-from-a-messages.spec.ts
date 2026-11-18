@@ -128,7 +128,8 @@ test('D9 a property-style assertion is decided when the member is read; reading 
   const handler = substitute()
   const callback = handler.onClick
   const { message } = t.throws(() => handler.didNotReceive().onClick(42), { instanceOf: SubstituteException })
-  t.true(plain(message).includes('Expected to receive 0 property reads matching onClick, but received 1.'))
+  // E77 (R12FE-2): the kind-neutral wording, as for any member that was read and never called
+  t.true(plain(message).includes('Expected to receive 0 property reads or method calls matching onClick, but received 1 property read and no method calls.'))
   t.true(plain(message).includes('Call sub[clearReceivedCalls]() after the arrange step to reset the reads.'))
 
   handler[clearReceivedCalls]()

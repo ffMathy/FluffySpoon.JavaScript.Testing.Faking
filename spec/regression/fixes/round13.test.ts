@@ -347,3 +347,55 @@ test('R12FE-3 a nested setup through a mimicked member that answers the instance
   t.is(fluent.name(), 'configured')
   t.is(fluent.self.name(), 'configured')
 })
+
+// ---- E77 (R12FE-2): a member that was read but never called --------------------------------------------------------
+
+test('R12FE-2 a method check on a member read more often than the count, never called, fails kind-neutrally with the read-without-call hint', t => {
+  // the code under test reads the callback twice (a feature check, then it stores it), but never calls it
+  const finish = (options: any) => { if (typeof options.onDone === 'function') { const done = options.onDone; void done } }
+  const options = Substitute.for<any>()
+  finish(options)
+
+  const message = failureOf(t, () => options.received(1).onDone('ok'))
+  t.true(message.includes('Expected to receive 1 property read or method call matching onDone, but received 2 property reads and no method calls.'), message)
+  t.false(message.includes('› ✔'), message)
+  t.true(message.includes('@Substitute.onDone was read 2 times without being called; reading a method does not count as calling it.'), message)
+})
+
+test('R12FE-2 the same for a property configured with a real function that the code under test calls itself', t => {
+  const options = Substitute.for<any>()
+  options.onProgress.returns((): void => undefined)
+  const report = (o: any) => { if (typeof o.onProgress === 'function') { o.onProgress(50); o.onProgress(100) } }
+  report(options)
+
+  const message = failureOf(t, () => options.received(2).onProgress(Arg.any()))
+  t.true(message.includes('Expected to receive 2 property reads or method calls matching onProgress, but received 3 property reads and no method calls.'), message)
+  t.true(message.includes('@Substitute.onProgress was read 3 times without being called'), message)
+})
+
+test('R12FE-2 didNotReceive() on a member that was only read fails kind-neutrally, marks the reads and points at clearReceivedCalls', t => {
+  const handle = (ws: any, ok: boolean) => { const reply = ws.send.bind(ws); if (!ok) reply('error') }
+  const ws = Substitute.for<any>()
+  handle(ws, true)
+
+  const message = failureOf(t, () => ws.didNotReceive().send(Arg.all()))
+  t.true(message.includes('Expected to receive 0 property reads or method calls matching send, but received 1 property read and no method calls.'), message)
+  t.true(message.includes('› ✔ @Substitute.send'), message)
+  t.true(message.includes('Call sub[clearReceivedCalls]() after the arrange step to reset the reads.'), message)
+  t.true(failureOf(t, () => ws.received(0).send()).includes('but received 1 property read and no method calls.'))
+})
+
+test('R12FE-2 unchanged: a member that was also called keeps its wording, and exactly n reads leave the decision to the method check', t => {
+  const component = Substitute.for<any>()
+  void component.onChange
+  component.onChange()
+  void component.onChange
+  // the property-style half is deferred (the member was invoked, too): the method check right after decides
+  t.notThrows(() => component.received(1).onChange())
+
+  const options = Substitute.for<any>()
+  void options.onDone
+  const message = failureOf(t, () => options.received(1).onDone('ok'))
+  t.true(message.includes("Expected to receive 1 method call matching onDone('ok'), but received none."), message)
+  t.true(message.includes('@Substitute.onDone was read 1 time without being called'), message)
+})
