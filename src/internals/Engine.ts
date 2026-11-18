@@ -5,14 +5,14 @@ import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './Subs
 import { pathArguments, relativePath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
-import { RecordedArguments } from './RecordedArguments'
+import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import {
   assertCall, assertPropertyRead, assertSet, deferDanglingCheck, settle, validateExpectedCount, DeferredAssertion, ExpectedCount
 } from './Assertions'
 import {
   ContextMethod, FunctionHelperKey, INTERNAL, SELF, SpecialProperty, StringAssertionKey, SubstitutionMethod,
-  answersOnlyItself, contextMethodOf, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
+  answersOnlyItself, contextMethodOf, isForeignSymbol, isFunctionHelperKey, isProtocolKey, isSpecialProperty, isStringAssertionKey, keyToString, substitutionMethodOf
 } from './Constants'
 import { describeOtherReading, formatArguments, formatValue, isPrinting, withPrintGuard } from './utilities'
 
@@ -360,7 +360,7 @@ const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwne
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
-    if ((answersOnlyItself(property) || isPrinting()) && inheritsFromSubstitute(receiver)) {
+    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing()) && inheritsFromSubstitute(receiver)) {
       const inherited = inheritedMember(target(), property, receiver)
       if (inherited !== AS_USUAL) return inherited
     }
@@ -433,11 +433,21 @@ const AS_USUAL: unique symbol = Symbol('as usual')
  * While the library prints (an argument in a message or a path), any read that reaches a substitute through such an
  * object reads undefined and is not recorded either: util.inspect probes the objects it prints (Node.js 22 reads
  * `href`), and printing never records anything.
+ * E57 (R9V-2): the same while the library compares arguments (util.isDeepStrictEqual: Node.js 20 probes the private
+ * kKeyType of KeyObjects, and a truthy answer made it call `equals()` as well; then the `href`, `protocol` and `auth` of
+ * URLs), and, at any time, for a symbol of the code under test or of the runtime that is not registered (Symbol.for):
+ * such a lookup only passes through the substitute. It reads undefined and records nothing, unless the substitute
+ * configures or mimicks that key. Other registered symbols read as usual.
  */
 const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): unknown => {
-  if (property !== 'toString' && property !== 'valueOf') return undefined
+  const conversion = property === 'toString' || property === 'valueOf'
+  if (!conversion) {
+    if (answersOnlyItself(property) || isPrinting() || isComparing()) return undefined
+    if (!isForeignSymbol(property)) return AS_USUAL
+  }
   const state = face instanceof AutoEntry ? face.materializedState : face
   if (state !== undefined && configuresMember(state, property)) return AS_USUAL
+  if (!conversion) return undefined
   return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
 }
 

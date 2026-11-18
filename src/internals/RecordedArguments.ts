@@ -21,12 +21,24 @@ export type ArgumentsMatch = {
 const MATCH: ArgumentsMatch = { matches: true, predicateThrew: false }
 const NO_MATCH: ArgumentsMatch = { matches: false, predicateThrew: false }
 
+let comparing = 0
+
+/**
+ * E57: whether the library is comparing arguments with util.isDeepStrictEqual. Reads that reach a substitute through an
+ * object that inherits from it are then the runtime's probes (Node.js 20 looks for KeyObjects and URLs), which record
+ * nothing (see the get trap in Engine).
+ */
+export const isComparing = (): boolean => comparing > 0
+
 const literalEquals = (expected: unknown, actual: unknown): boolean => {
   if (expected === actual) return expected !== 0 || Object.is(expected, actual)
+  comparing++
   try {
     return isDeepStrictEqual(expected, actual)
   } catch {
     return false
+  } finally {
+    comparing--
   }
 }
 

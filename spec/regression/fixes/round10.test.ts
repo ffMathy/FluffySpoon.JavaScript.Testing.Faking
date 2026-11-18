@@ -147,6 +147,9 @@ test('R9-ADV-2 (E55, E46) objects that inherit from a substitute are still no su
   class FromReprototyped extends (reprototyped as new () => object) {
     public readonly id = 3
   }
+  // what Object.prototype.toString gives for an object with any function proxy in its prototype chain (Node.js 20 says
+  // Function)
+  const tag = Object.prototype.toString.call(Object.create(new Proxy(function () { }, {})))
   const inheriting: Array<[string, any, string]> = [
     ['Object.create(sub)', Object.assign(Object.create(Substitute.for<any>()), { id: 0 }), '{"id":0}'],
     ['Object.create(sub.member)', Object.assign(Object.create(sdk.config), { id: 0 }), '{"id":0}'],
@@ -159,8 +162,8 @@ test('R9-ADV-2 (E55, E46) objects that inherit from a substitute are still no su
     t.false(isSubstituteProxy(value), name)
     for (const symbol of symbols) t.is(value[symbol], undefined, `${name}: ${String(symbol)}`)
     t.is(JSON.stringify(value), json, name)
-    t.is(String(value), '[object Object]', name)
-    t.is(`${value}`, '[object Object]', name)
+    t.is(String(value), tag, name)
+    t.is(`${value}`, tag, name)
     t.false(inspect(value).includes('@Substitute'), name)
     // an ordinary argument: recorded and checked (not a matcher)
     const sink = Substitute.for<any>()
@@ -178,4 +181,57 @@ test('R9-ADV-2 (E55, E46) objects that inherit from a substitute are still no su
     t.false(/Symbol\(|toJSON|toString|valueOf/.test(printout(s)), printout(s))
     t.false(/Symbol\(|toJSON|toString|valueOf/.test(String(s)), String(s))
   }
+})
+
+// ---- E57: lookups that only pass through a substitute for unknown symbols ---------------------------------------
+
+test('R9V-2 (E57) a private symbol read through an object that inherits from a substitute reads undefined and records nothing', t => {
+  const kKeyType = Symbol('kKeyType') // like Node.js 20's KeyObject probe in isDeepStrictEqual
+  const sdk = Substitute.for<any>()
+  class Plugin extends (sdk.Base as new () => object) {
+    constructor(public readonly id: number) { super() }
+  }
+  const plugin = new Plugin(1) as any
+  t.is(plugin[kKeyType], undefined)
+  t.is((Plugin as any)[kKeyType], undefined)
+  t.is(Object.create(sdk)[kKeyType], undefined)
+  t.is(plugin[Symbol.iterator], undefined)
+  t.false(printout(sdk).includes('kKeyType'), printout(sdk))
+  t.false(printout(sdk).includes('Symbol('), printout(sdk))
+
+  // the substitute itself still records such a read, and a configured key answers through an inheriting object too
+  void sdk[kKeyType]
+  t.true(printout(sdk).includes('Symbol(kKeyType)'))
+  const base = Substitute.for<any>()
+  base[configure]()[kKeyType].returns('configured')
+  t.is(Object.create(base)[kKeyType], 'configured')
+  const mimicking = Substitute.for<any>()
+  mimicking[mimick]({ [kKeyType]: 'mimicked' })
+  t.is(Object.create(mimicking)[kKeyType], 'mimicked')
+
+  // registered symbols of other code read as usual (recorded)
+  const registered = Symbol.for('some.library:probe')
+  const other = Substitute.for<any>()
+  void Object.create(other)[registered]
+  t.true(printout(other).includes('Symbol(some.library:probe)'), printout(other))
+})
+
+test('R9V-2 (E57) comparing arguments that inherit from a substitute records nothing on it, and matches as for ordinary objects', t => {
+  const sdk = Substitute.for<any>()
+  class Plugin extends (sdk.Base as new () => object) {
+    constructor(public readonly id: number) { super() }
+  }
+  const host = Substitute.for<any>()
+  host.register(new Plugin(1))
+  t.throws(() => host.received(1).register(new Plugin(999)), { instanceOf: SubstituteException })
+  t.notThrows(() => host.received(1).register(new Plugin(1)))
+  t.notThrows(() => host.didNotReceive().register(new Plugin(2)))
+  const svc = Substitute.for<any>()
+  svc.save(new Plugin(1)).returns('saved-1')
+  t.is(svc.save(new Plugin(1)), 'saved-1')
+  t.not(svc.save(new Plugin(5)), 'saved-1')
+
+  // only the class definition (Base.prototype) and the constructions are recorded on the base substitute
+  const lines = printout(sdk).split('\n').map(line => line.trim()).filter(line => line !== '' && !/^[@}]|received:|configured:/.test(line))
+  t.deepEqual([...new Set(lines)], ['Base.prototype', 'new Base()'], printout(sdk))
 })
