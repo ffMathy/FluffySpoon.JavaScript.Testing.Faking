@@ -492,7 +492,8 @@ const notExtensibleError = (face: Face, start: Function): TypeError => {
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
-    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing()) && inheritsFromSubstitute(receiver)) {
+    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing() || isFunctionHelperKey(property)) &&
+      inheritsFromSubstitute(receiver)) {
       const inherited = inheritedMember(target(), property, receiver)
       if (inherited !== AS_USUAL) return inherited
     }
@@ -578,17 +579,30 @@ const AS_USUAL: unique symbol = Symbol('as usual')
  * URLs), and, at any time, for a symbol of the code under test or of the runtime that is not registered (Symbol.for):
  * such a lookup only passes through the substitute. It reads undefined and records nothing, unless the substitute
  * configures or mimicks that key. Other registered symbols read as usual.
+ * E80 (R12-ADV-3): a function that inherits from a substitute (`class Plugin extends sdk.Base`) has the call, apply and
+ * bind of Function.prototype, as in JavaScript, so that `new (Plugin.bind(null, x))()` constructs a Plugin and
+ * `Plugin.call(...)` calls Plugin (the substitute's own helpers, D26, would call or construct the substitute). A setup of
+ * the substitute's member of that name, or a mimicked instance's own one (not Function.prototype's), is used instead.
  */
 const inheritedMember = (face: Face, property: PropertyKey, receiver: unknown): unknown => {
   const conversion = property === 'toString' || property === 'valueOf'
+  const helper = typeof receiver === 'function' && isFunctionHelperKey(property)
   if (!conversion) {
     if (answersOnlyItself(property) || isPrinting() || isComparing()) return undefined
-    if (!isForeignSymbol(property)) return AS_USUAL
+    if (!helper && !isForeignSymbol(property)) return AS_USUAL
   }
   const state = face instanceof AutoEntry ? face.materializedState : face
+  if (helper) return state !== undefined && configuresOwnHelper(state, property as FunctionHelperKey) ? AS_USUAL : (Function.prototype as any)[property]
   if (state !== undefined && configuresMember(state, property)) return AS_USUAL
   if (!conversion) return undefined
   return property === 'toString' && typeof receiver === 'function' ? Function.prototype.toString : (Object.prototype as any)[property]
+}
+
+/** E80: whether a substitute configures call, apply or bind itself, or mimicks an instance with its own (see inheritedMember). */
+const configuresOwnHelper = (state: SubstituteState, key: FunctionHelperKey): boolean => {
+  if (state.propertySubstitution(key) !== undefined || state.hasCallSubstitutions(key)) return true
+  const instance = state.mimicked?.instance
+  return instance !== undefined && hasMember(instance, key) && instance[key] !== (Function.prototype as any)[key]
 }
 
 /*

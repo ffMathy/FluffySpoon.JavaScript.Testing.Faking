@@ -399,3 +399,52 @@ test('R12FE-2 unchanged: a member that was also called keeps its wording, and ex
   t.true(message.includes("Expected to receive 1 method call matching onDone('ok'), but received none."), message)
   t.true(message.includes('@Substitute.onDone was read 1 time without being called'), message)
 })
+
+// ---- E80 (R12-ADV-3): call, apply and bind of a function that inherits from a substitute ------------------------
+
+test('R12-ADV-3 call, apply and bind of a class that extends a substitute member are Function.prototype\'s, so a bound class constructs itself', t => {
+  const ns = Substitute.for<any>()
+  class Repo extends ns.Base {
+    public readonly url: string
+    constructor(url: string) {
+      super(url)
+      this.url = url
+    }
+    find() { return 'real' }
+  }
+  t.is(Repo.bind, Function.prototype.bind)
+  t.is(Repo.call, Function.prototype.call)
+  t.is(Repo.apply, Function.prototype.apply)
+
+  // a factory or a DI container that binds constructor arguments
+  const Bound = Repo.bind(null, 'db://b')
+  const repo = new Bound()
+  t.true(repo instanceof Repo)
+  t.is(repo.url, 'db://b')
+  t.is(repo.find(), 'real')
+  // as in JavaScript, a class constructor cannot be called
+  t.throws(() => Repo.call(null, 'db://c'), { instanceOf: TypeError })
+  t.throws(() => Repo.apply(null, ['db://c']), { instanceOf: TypeError })
+
+  // the base constructor ran through the substitute (super), and nothing was read for bind
+  t.notThrows(() => ns.received(1).Base('db://b'))
+  t.false(printout(ns).includes('bind'), printout(ns))
+})
+
+test('R12-ADV-3 the substitute\'s own call, apply and bind are unchanged, and a setup of its bind still answers through a subclass', t => {
+  const ns = Substitute.for<any>()
+  // on the substitute member itself: the library's helpers (D26), recorded
+  const bound = ns.Base.bind(null, 1)
+  t.not(bound, undefined)
+  t.notThrows(() => ns.Base.received(1).bind(null, 1))
+
+  const sdk = Substitute.for<any>()
+  sdk.Plugin[configure]().bind(Arg.all()).returns('configured bind')
+  class Plugin extends sdk.Plugin { }
+  t.is((Plugin as any).bind(null, 'x'), 'configured bind')
+  // a plain function whose prototype is a substitute
+  const handler = Object.setPrototypeOf(function handler(this: unknown, value: number) { return value * 2 }, Substitute.for<any>())
+  t.is(handler.call(null, 21), 42)
+  t.is(handler.apply(null, [4]), 8)
+  t.is(handler.bind(null, 5)(), 10)
+})
