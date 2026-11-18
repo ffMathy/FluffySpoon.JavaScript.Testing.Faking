@@ -44,41 +44,65 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
  * own per view). It can be constructed (E23), and it has no non-configurable `prototype`, so that the traps can hide
  * its own properties (E25, see viewTraps).
  */
-// E40: a neutral name for util.inspect without custom inspection (see returnThis)
-const viewFunction = function substitute(this: Printer): Printer { return this }
+/*
+ * E40: a neutral name for util.inspect without custom inspection (see returnThis). E64: the declared parameters are never
+ * used; they give the targets bound from this function (and from returnThis) the arity that brands them (see
+ * isLibraryTarget).
+ */
+const viewFunction = function substitute(this: Printer, _1?: unknown, _2?: unknown, _3?: unknown, _4?: unknown, _5?: unknown, _6?: unknown, _7?: unknown): Printer { return this }
 
 /**
  * The inspect.custom hook of the views' targets. util.inspect reads it from the target of a proxy, but calls it with the
  * proxy itself as `this`: then it asks the view for its hook (its traps answer inspect.custom with the printer, see
- * special), and never invokes the proxy, which would be a check or a setup. Called on the target, it asks the target.
+ * special), and never invokes the proxy, which would be a check or a setup. Called on the target itself (util.inspect
+ * with showProxy, `util.format('%o', view)`), it asks the target. Any other value that inherits it prints as itself.
  */
 const inspectView = function (this: unknown, depth: number, options?: InspectOptions): string {
-  if (typeof this !== 'function') return ''
-  if (!types.isProxy(this)) return isLibraryTarget(this) ? (this() as Printer)(options) : inspectForeign(this, options)
-  const hook = (this as any)[inspect.custom]
-  return typeof hook === 'function' && hook !== inspectView ? hook(depth, options) : ''
+  if (types.isProxy(this)) {
+    const hook = (this as any)[inspect.custom]
+    return typeof hook === 'function' && hook !== inspectView ? hook(depth, options) : inspectForeign(this as object, options)
+  }
+  if (typeof this === 'function' && isLibraryTarget(this)) return (this() as Printer)(options)
+  return isObjectLike(this) ? inspectForeign(this, options) : ''
 }
 
 /*
- * R10-ADV-3, R10-ADV-4: a function of the code under test can inherit the shared prototypes of the targets (mimic-fn,
- * used by mem, p-memoize, debounce-fn and onetime, copies the prototype of the function it wraps, here a substitute or
- * a bound substitute method). Such a function is not the library's: the inherited inspect.custom hooks print it as an
- * ordinary function and never call it, and it is not taken for a substitute (isFaceProxy requires a proxy). The targets
- * themselves are bound functions, whose source text is native; a wrapper of the code under test has its own source.
- * (No per-target bookkeeping: D30 keeps an auto-substitute small.)
+ * R10-ADV-3, R10-ADV-4, E64 (R11-ADV-2, R11-ADV-3): a function of the code under test can inherit the shared prototypes of
+ * the targets: mimic-fn (used by mem, p-memoize, debounce-fn and onetime) and util.promisify copy the prototype of the
+ * function they wrap, and so does Function.prototype.bind, natively (`mem(api.m.bind(api)).bind(null, 1)`,
+ * `Function.prototype.bind.call(sub, ctx)`, `util.promisify(fs.readFile).bind(null, path)`). Such a function is not the
+ * library's: the inherited inspect.custom hooks print it as an ordinary function and never call it, and it is not taken
+ * for a substitute (isFaceProxy requires a proxy).
+ *
+ * The hooks call `this` only when it is one of the library's own targets, recognised by a brand that binding, wrapping
+ * and copying prototypes do not reproduce: a target is a bound function (native source text) bound, with no arguments,
+ * from returnThis or viewFunction, so its own `name` is exactly 'bound substitute' and its own `length` is exactly
+ * TARGET_LENGTH, their unusual arity. A natively bound function is named after the function it binds ('bound memoized',
+ * and 'bound ' for a substitute, whose `name` reads as an auto-substitute, not a string), and gets that function's
+ * arity less its bound arguments; a mimic-fn wrapper keeps its own arity, and the `length` that a substitute reports
+ * (E65, which util.promisify copies) is 0. The proxies never let the code under test reach a target. A target that the
+ * code under test froze or gave properties (E25) has lost its `name` and `length`: it is recognised by identity
+ * (ownedTargets). The descriptors are read only from values that are not proxies, so reading them runs no code of the
+ * code under test. (No per-target bookkeeping otherwise: D30 keeps an auto-substitute small.)
  */
+const TARGET_NAME = 'bound substitute'
+const TARGET_LENGTH = 7
 const functionToString = Function.prototype.toString
 const boundSourceText = functionToString.call(function () { /* empty */ }.bind(null))
 const isLibraryTarget = (value: Function): boolean => {
   try {
-    return functionToString.call(value) === boundSourceText
+    if (ownedTargetCount > 0 && ownedTargets.has(value)) return true
+    const name = Reflect.getOwnPropertyDescriptor(value, 'name')
+    if (name === undefined || name.value !== TARGET_NAME) return false
+    const length = Reflect.getOwnPropertyDescriptor(value, 'length')
+    return length !== undefined && length.value === TARGET_LENGTH && functionToString.call(value) === boundSourceText
   } catch {
     return false
   }
 }
 
-/** An ordinary printout of a function that merely inherits one of the hooks (see isLibraryTarget). */
-const inspectForeign = (value: Function, options?: InspectOptions): string =>
+/** An ordinary printout of a value that merely inherits one of the hooks (see isLibraryTarget): never calls it. */
+const inspectForeign = (value: object, options?: InspectOptions): string =>
   inspect(value, Object.assign({}, options, { customInspect: false }))
 
 const viewTargetPrototype = Object.create(Function.prototype, {
@@ -111,6 +135,38 @@ const definePropertyError = (target: () => Printer, start: Function) =>
 const preventExtensionsError = (target: () => Printer, start: Function) =>
   viewChangeError('Object.preventExtensions() (or Object.freeze(), Object.seal())', viewPrinter(target), start)
 
+/*
+ * E65 (R11FE-5): every function has own `length` and `name` properties, and code that adapts functions relies on them:
+ * Node.js' util.callbackify reads Object.getOwnPropertyDescriptors(fn).length.value, and util.promisify and mimic-fn
+ * copy them. So substitutes, auto-substitutes and the views report them as own data properties, non-enumerable and
+ * configurable, as for a function: `length` is 0, and `name` is the member of a member handle (`getKey` for
+ * `keys.getKey`, `[description]` for a symbol), `bound getKey` for `keys.getKey.bind(keys)` (as Function.prototype.bind
+ * names a function), '' otherwise. They are only reported: reading `sub.length` or
+ * `sub.name` is a read of a member like any other (recorded, configurable, an auto-substitute when unconfigured), `in`
+ * answers as before (E26), and Object.keys, spread, for-in, Object.assign and JSON.stringify see nothing new (the
+ * properties are not enumerable). The targets have own `length` and `name` too (bound functions, see isLibraryTarget),
+ * but configurable ones, so what the traps report cannot conflict with them. A substitute that is frozen, sealed or
+ * made non-extensible (E25) reports the properties of its target from then on, exactly: a proxy whose target is not
+ * extensible cannot report a property its target does not have, and its target has only those that the code under
+ * test defined (see takeOver).
+ */
+const FUNCTION_KEYS: readonly string[] = ['length', 'name']
+
+/** The keys with `length` and `name` added (the list is a fresh one, which this changes). */
+const withFunctionKeys = (keys: Array<string | symbol>): Array<string | symbol> => {
+  for (const key of FUNCTION_KEYS) if (!keys.includes(key)) keys.push(key)
+  return keys
+}
+
+/** The descriptor of a function's own `length` or `name` (undefined for any other key). */
+const functionDescriptor = (property: PropertyKey, name: () => string): PropertyDescriptor | undefined => {
+  if (property === 'length') return { value: 0, writable: false, enumerable: false, configurable: true }
+  if (property === 'name') return { value: name(), writable: false, enumerable: false, configurable: true }
+  return undefined
+}
+
+const anonymous = () => ''
+
 /** The traps that every view shares (E58: one set for all of them, see createView). */
 const viewTraps = {
   defineProperty: function defineProperty(target: () => Printer): boolean {
@@ -120,20 +176,22 @@ const viewTraps = {
     throw preventExtensionsError(target, preventExtensions)
   },
   deleteProperty: (): boolean => true,
-  ownKeys: (): Array<string | symbol> => [],
-  getOwnPropertyDescriptor: (): PropertyDescriptor | undefined => undefined
+  // E65: only the `length` and `name` that every function has
+  ownKeys: (): Array<string | symbol> => FUNCTION_KEYS.slice(),
+  getOwnPropertyDescriptor: (_target: unknown, property: PropertyKey): PropertyDescriptor | undefined => functionDescriptor(property, anonymous)
 }
 
 /**
- * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty and preventExtensions traps, if
- * it has them, take the place of the shared ones (E48: an assertion view is told that the code changes it).
+ * A short-lived proxy (see viewTarget and viewTraps). The handler's own defineProperty, preventExtensions and
+ * getOwnPropertyDescriptor traps, if it has them, take the place of the shared ones (E48: an assertion view is told
+ * that the code changes it; E65: a bound function has a name of its own).
  */
 const createView = (print: Printer, handler: ProxyHandler<any>): any => {
   if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
   if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
   handler.deleteProperty = viewTraps.deleteProperty
   handler.ownKeys = viewTraps.ownKeys
-  handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
+  if (handler.getOwnPropertyDescriptor === undefined) handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
   return new Proxy(viewTarget(print), handler)
 }
 
@@ -339,10 +397,16 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
  */
 type FaceTarget = () => Face
 
-const faceOfInspected = (value: any): Face | undefined => {
+/**
+ * The face of the value that util.inspect calls the hook below with: a substitute or an auto-substitute (the proxy), or
+ * the target of one (util.inspect with showProxy, `util.format('%o', sub)`). E64: anything else that inherits the hook is
+ * never called (see isLibraryTarget).
+ */
+const faceOfInspected = (value: unknown): Face | undefined => {
+  if (typeof value !== 'function') return undefined
   try {
-    if (typeof value === 'function' && !types.isProxy(value)) return isLibraryTarget(value) ? value() : undefined
-    return value[INTERNAL]
+    if (!types.isProxy(value)) return isLibraryTarget(value) ? (value as FaceTarget)() : undefined
+    return (value as any)[INTERNAL]
   } catch {
     return undefined
   }
@@ -351,9 +415,9 @@ const faceOfInspected = (value: any): Face | undefined => {
 const faceTargetPrototype = Object.create(Function.prototype, {
   [inspect.custom]: {
     value: function (this: unknown, _depth: number, options?: InspectOptions) {
-      if (typeof this === 'function' && !types.isProxy(this) && !isLibraryTarget(this)) return inspectForeign(this, options)
       const face = faceOfInspected(this)
-      return face === undefined ? '' : printFace(face, colorsOf(options))
+      if (face !== undefined) return printFace(face, colorsOf(options))
+      return isObjectLike(this) ? inspectForeign(this, options) : ''
     },
     configurable: true
   }
@@ -383,10 +447,11 @@ const isFaceProxy = (value: unknown): value is Function => typeof value === 'fun
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
  * is a bound function whose only own properties, `length` and `name`, the proxy hides (ownKeys and
- * getOwnPropertyDescriptor report none). The first such change removes them from the target ("takes it over"), so that
- * from then on the target's own properties are exactly the ones the code under test defined, and the proxy's answers
- * cannot conflict with them (a frozen target without own properties constrains nothing). A defined property is a real
- * property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
+ * getOwnPropertyDescriptor report a function's `length` and `name` of their own instead, E65). The first such change
+ * removes them from the target ("takes it over"), so that from then on the target's own properties are exactly the ones
+ * the code under test defined, and the proxy's answers cannot conflict with them (a frozen target without own
+ * properties constrains nothing; frozen `length` and `name` would bind what reading them answers). A defined property is
+ * a real property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
  * Taking over is rare, so the hot path only checks a counter.
  */
 const ownedTargets = new WeakSet<object>()
@@ -462,10 +527,18 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return true
   },
   deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
-  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys)
-  ownKeys: (target: FaceTarget) => isOwned(target) ? Reflect.ownKeys(target) : mimickedKeys(target()),
-  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) =>
-    isOwned(target) ? Reflect.getOwnPropertyDescriptor(target, property) : mimickedDescriptor(target(), property),
+  // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys);
+  // E65: and every substitute has the `length` and `name` of a function, while it is extensible (see FUNCTION_KEYS)
+  ownKeys: (target: FaceTarget) => {
+    if (!isOwned(target)) return withFunctionKeys(mimickedKeys(target()))
+    const keys = Reflect.ownKeys(target)
+    return Reflect.isExtensible(target) ? withFunctionKeys(keys) : keys
+  },
+  getOwnPropertyDescriptor: (target: FaceTarget, property: PropertyKey) => {
+    if (!isOwned(target)) return mimickedDescriptor(target(), property) ?? functionDescriptor(property, () => functionName(target()))
+    const descriptor = Reflect.getOwnPropertyDescriptor(target, property)
+    return descriptor !== undefined || !Reflect.isExtensible(target) ? descriptor : functionDescriptor(property, () => functionName(target()))
+  },
   apply: function apply(target: FaceTarget, thisArg: unknown, args: any[]) {
     const face = target()
     return faceApply(face, { thisArg, explicit: false }, args, apply, recordsInvocation(face) ? captureStack(apply) : undefined)
@@ -601,6 +674,20 @@ const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | 
   return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
 }
 
+/**
+ * E65: the `name` a substitute reports as its own: a member handle is named after its member, as a method is (`getKey`,
+ * `[description]` for a symbol), so that what util.promisify, util.callbackify and mimic-fn make of it is named as for a
+ * real method; a substitute itself and the result of a call are anonymous. (The `length` reported with it, 0, keeps
+ * what binding or wrapping it gives apart from the library's targets, even for a member called `substitute`: see
+ * isLibraryTarget.)
+ */
+const functionName = (face: Face): string => {
+  if (!(face instanceof AutoEntry) || face.kind !== 'get') return ''
+  const key = face.key
+  // (String(symbol) is `Symbol(description)`; Node.js 10 has no Symbol.prototype.description)
+  return typeof key === 'symbol' ? `[${String(key).slice(7, -1)}]` : String(key)
+}
+
 /** E51: toJSON of a substitute: the mimicked object's (its own toJSON, or the object itself), otherwise the printout. */
 const toJSONOf = (face: Face): Function => {
   const instance = mimickedInstanceOf(face)
@@ -634,7 +721,7 @@ const defineOnReceiver = (receiver: object, property: PropertyKey, value: unknow
  * after its path, or renaming the function with defineProperty, costs memory for every auto-substitute: 160 to 240
  * bytes per unconfigured call, measured on Node.js 22 and 24.)
  */
-const returnThis = function substitute(this: Face): Face { return this }
+const returnThis = function substitute(this: Face, _1?: unknown, _2?: unknown, _3?: unknown, _4?: unknown, _5?: unknown, _6?: unknown, _7?: unknown): Face { return this }
 
 /**
  * E26: `key in sub` (and Reflect.has) is true for a key with a setup (as a property or a method, or a nested setup
@@ -894,6 +981,8 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
       faceSet(bindEntry, property, value, set)
       return true
     },
+    // E65: named as Function.prototype.bind names a bound function (`bound getUser`)
+    getOwnPropertyDescriptor: (_target: unknown, property: PropertyKey) => functionDescriptor(property, () => `bound ${functionName(face)}`),
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
       const direct = directReadingOf(face)
       return invoke(direct.state, direct.key, [...boundArgs, ...args], apply, direct.readSource, undefined, { thisArg, explicit: true }, captureStack(apply))

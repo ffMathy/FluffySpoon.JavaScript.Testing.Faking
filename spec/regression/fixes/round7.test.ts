@@ -494,7 +494,8 @@ test('R6FE-4 (E25) a property defined with Object.defineProperty is a real prope
   sub.tag = 2
   t.is(sub.tag, 2)
   t.deepEqual(Object.keys(sub), ['tag'])
-  t.deepEqual(Reflect.ownKeys(sub), ['tag', 'computed', 'fixed'])
+  // E65: and the `length` and `name` that every function has, while it is extensible
+  t.deepEqual(Reflect.ownKeys(sub), ['tag', 'computed', 'fixed', 'length', 'name'])
   t.deepEqual(Object.getOwnPropertyDescriptor(sub, 'tag'), { value: 2, writable: true, enumerable: true, configurable: true })
   t.deepEqual({ ...sub }, { tag: 2 })
   t.true('tag' in sub)
@@ -515,11 +516,12 @@ test('R6FE-4 (E25) a property defined with Object.defineProperty is a real prope
 
 test('R6FE-4 (E25) a substitute has no own properties of its own, so nothing internal shows', t => {
   const sub = Substitute.for<any>()
-  t.deepEqual(Reflect.ownKeys(sub), [])
-  t.deepEqual(Object.getOwnPropertyNames(sub), [])
-  t.is(Object.getOwnPropertyDescriptor(sub, 'name'), undefined)
-  t.is(Object.getOwnPropertyDescriptor(sub, 'length'), undefined)
-  t.false(Object.prototype.hasOwnProperty.call(sub, 'name'))
+  // E65: only the `length` and `name` that every function has, with neutral values (not those of the internal target)
+  t.deepEqual(Reflect.ownKeys(sub), ['length', 'name'])
+  t.deepEqual(Object.getOwnPropertyNames(sub), ['length', 'name'])
+  t.deepEqual(Object.getOwnPropertyDescriptor(sub, 'name'), { value: '', writable: false, enumerable: false, configurable: true })
+  t.deepEqual(Object.getOwnPropertyDescriptor(sub, 'length'), { value: 0, writable: false, enumerable: false, configurable: true })
+  t.true(Object.prototype.hasOwnProperty.call(sub, 'name'))
   t.true(delete sub.name)
   t.is(String(sub.name), '@Substitute.name')
 
@@ -529,7 +531,7 @@ test('R6FE-4 (E25) a substitute has no own properties of its own, so nothing int
   t.regex(freezeError.message, /^Object\.preventExtensions\(\) \(or Object\.freeze\(\), Object\.seal\(\)\) cannot be used on @Substitute\.method\.bind\(null\)/)
   t.throws(() => Object.defineProperty(sub[configure](), 'x', { value: 1 }), { instanceOf: SubstituteException, message: /^Object\.defineProperty\(\) cannot be used on @Substitute\[configure\]\(\)/ })
   t.throws(() => Object.seal(sub[received]()), { instanceOf: SubstituteException })
-  t.deepEqual(Reflect.ownKeys(bound), [])
+  t.deepEqual(Reflect.ownKeys(bound), ['length', 'name'])
   t.is(bound(1), sub.method(1), 'the bound function still works')
 })
 
