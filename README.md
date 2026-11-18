@@ -455,7 +455,7 @@ Other members that neither the instance nor its class has, symbols registered wi
 There are several ways of matching arguments. They work the same when you set up calls and when you verify them, and they also work for property assignments (`calculator.received().isEnabled = Arg.any()`).
 
 ## Matching specific arguments
-`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns a truthy value (`Arg.is(user => user.name)` matches `{ name: 'ann' }`). When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument. That holds for generic methods, too, with the method's type parameters replaced by their constraints, also when they appear only in the return type, as in a database client's `query<T>(sql: string): Promise<T[]>` (see the second example).
+`Arg.any()` matches any value. `Arg.is(predicate)` matches the values for which the predicate returns a truthy value (`Arg.is(user => user.name)` matches `{ name: 'ann' }`). When `Arg.is` replaces an argument, the type of the predicate's parameter is inferred from that argument. That holds for generic methods, too, with the method's type parameters replaced by their constraints, also when they appear only in the return type, as in a database client's `query<T>(sql: string): Promise<T[]>` (see the second example). It does not hold for a rest parameter whose type depends on a type parameter, such as the event arguments of a typed event emitter's `emit<E extends keyof Events>(event: E, ...args: Parameters<Events[E]>)` or of Node.js' `EventEmitter<Events>`: there, a predicate without a parameter type gets the parameter types of all events together, or `unknown`, and the call does not compile. Annotate the parameter there: `emitter.emit('saved', Arg.is((id: string) => id.startsWith('o')))` (see [Typing limitations](#typing-limitations)).
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -570,7 +570,7 @@ console.log(printer.print(10n)) // prints a bigint
 Arg.any.not('strnig') // throws TypeError: Arg.any.not expects one of
 ```
 
-In TypeScript, a type matcher must fit the parameter. `Arg.any('string')` fits a parameter that accepts strings, including a union of string literals (`'EUR' | 'USD'`), a string enum and a branded string (`string & { __brand: 'OrderId' }`). Likewise, `'number'` fits unions of number literals, numeric enums and branded numbers, and `'boolean'`, `'symbol'` and `'bigint'` fit the subtypes of their types. A type matcher does not fit a parameter that takes no value of its type, such as `Arg.any('string')` for a number. A matcher created on its own (`const anyString = Arg.any('string')`) has the type `string`, so it only fits parameters that accept every string. `Arg.any('undefined')` only fits a parameter that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)). `Arg.any('undefined')` also matches an argument that the call leaves out (see [How arguments are compared](#how-arguments-are-compared)).
+In TypeScript, a type matcher must fit the parameter. `Arg.any('string')` is typed `string`, `Arg.any('number')` `number`, and so on for `'boolean'`, `'symbol'` and `'bigint'`, wherever the matcher is written. So it fits a parameter that accepts every value of its type, and an overloaded method takes the overload that a `string` (or `number`, ...) would take: `stream.on(Arg.any('string'), Arg.any())`, `document.querySelector(Arg.any('string'))`, and `get(Arg.any('string'))` for a getter that declares `get(key: 'retries'): number` before `get(key: string): string | undefined` have the setup API of the overload for any string. A type matcher does not fit a parameter that takes only some values of its type: a union of string literals (`'EUR' | 'USD'`), a string enum, a branded string (`string & { __brand: 'OrderId' }`), a union of number literals (`80 | 443`), a branded number, or `true`. TypeScript reports, for example, `Argument of type 'ReturnArg<string>' is not assignable to parameter of type 'Currency'`. (A numeric enum accepts `Arg.any('number')`, as it accepts any number.) There, give an `Arg.is()` predicate the parameter's type, `Arg.is((currency: Currency) => true)`, which matches every value, or cast the type matcher, `Arg.any('string') as Currency`, which still matches every string; a branded type needs the cast through `unknown` (`Arg.any('string') as unknown as OrderId`), as TypeScript rejects `Arg.any('string') as OrderId`. Nor does a type matcher fit a parameter that takes no value of its type, such as `Arg.any('string')` for a number. `Arg.any('undefined')` only fits a parameter that accepts `undefined`, such as `string | undefined`, an optional parameter or `unknown`. `Arg.any()` and `Arg.any('object')` fit any parameter (see [Typing limitations](#typing-limitations)). `Arg.any('undefined')` also matches an argument that the call leaves out (see [How arguments are compared](#how-arguments-are-compared)).
 
 ```typescript
 import { Substitute, Arg } from '@fluffy-spoon/substitute'
@@ -604,16 +604,49 @@ interface Payments {
 }
 
 const payments = Substitute.for<Payments>()
-payments.charge(Arg.any('string'), Arg.any('number')).returns('charged')
-payments.setStatus(Arg.any('string'), Arg.any('string')).returns()
-payments.setPriority(Arg.any('string'), Arg.any('number')).returns()
+payments.charge(Arg.is((currency: Currency) => true), Arg.any('number')).returns('charged')
+payments.setStatus(Arg.is((id: OrderId) => true), Arg.any('string') as Status).returns()
+// a numeric enum accepts Arg.any('number')
+payments.setPriority(Arg.any('string') as unknown as OrderId, Arg.any('number')).returns()
 console.log(payments.charge('EUR', 100)) // prints charged
+payments.received(1).charge(Arg.any('string') as Currency, 100)
 
+// @ts-expect-error Arg.any('string') is typed string, which is not a Currency
+payments.charge(Arg.any('string'), 100)
 // @ts-expect-error a string matcher does not fit a number parameter
 payments.charge('EUR', Arg.any('string'))
-const anyString = Arg.any('string')
-// @ts-expect-error a matcher created on its own is typed string, which is not a Currency
-payments.charge(anyString, 100)
+// @ts-expect-error a branded type needs the cast through unknown
+payments.setPriority(Arg.any('string') as OrderId, Priority.High)
+
+// overloads: Arg.any('string') takes the overload for any string
+interface Settings {
+  get(key: 'retries'): number
+  get(key: string): string | undefined
+}
+const settings = Substitute.for<Settings>()
+settings.get(Arg.any('string')).returns('dark')
+console.log(settings.get('theme')) // prints dark
+```
+
+The encoding of Node.js' `fs.readFile(path, options)` is such a parameter: every overload types it as a union of string literals (`BufferEncoding`) or an options object, so `fs.readFile(Arg.any(), Arg.any('string'))` does not compile, in a setup or in a check. Pass the encoding itself, cast the matcher to `BufferEncoding`, or give an `Arg.is()` predicate that type. A check can also take `Arg.any()` for it. In a setup, `fs.readFile(Arg.any(), Arg.any())` and `fs.readFile(Arg.all())` take the first overload, which gives a `Buffer`, so `.resolves()` does not take a string there: use the encoding or the cast for a string result.
+
+```typescript
+import { Substitute, Arg } from '@fluffy-spoon/substitute'
+
+const fs = Substitute.for<Pick<typeof import('fs/promises'), 'readFile'>>()
+fs.readFile('config.json', 'utf8').resolves('{}')
+fs.readFile(Arg.any(), Arg.any('string') as BufferEncoding).resolves('')
+fs.readFile(Arg.any(), Arg.any()).resolves(Buffer.from('binary'))
+
+// @ts-expect-error every overload types the encoding as a union of string literals
+fs.readFile(Arg.any(), Arg.any('string')).resolves('')
+// @ts-expect-error Arg.any() for the options takes the first overload, which gives a Buffer
+fs.readFile(Arg.any(), Arg.any()).resolves('')
+
+// the code under test
+fs.readFile('config.json', 'utf8').then(text => console.log(text)) // prints {}
+fs.received(1).readFile('config.json', Arg.is((encoding: BufferEncoding) => encoding === 'utf8'))
+fs.received(1).readFile(Arg.any(), Arg.any())
 ```
 
 ## Inverse matchers
@@ -707,6 +740,7 @@ repository.didNotReceive().save({ id: Arg.any(), name: 'bob', roles: [] })
 
 * `Arg.all()` as the last item of an array matches the remaining items, also none: `['level', Arg.all()]` matches `['level']` and `['level', 1, 2]`. Anywhere else in an array it is a `SubstituteException`. As the value of a key, `Arg.all()` matches any value, but the key must be there. (In TypeScript, `Arg.all()` inside an object or array does not type-check; use `Arg.any()` for a single value.)
 * Only plain objects (created with `{ }` or `Object.create(null)`) and arrays are searched for matchers, and an object with matchers only matches an argument with the same prototype: `{ id: Arg.any() }` does not match a class instance. A matcher inside a class instance, a `Map` or a `Set` is not looked for: it is compared as a value, so such a setup never matches, and the call is an ordinary call. Matchers behind getters are not looked for either. Use `Arg.is()` for the whole argument in these cases.
+* An array that holds a matcher is compared by its items only. Its other keys, such as the `total` of an array of rows, are not compared then: `Object.assign([Arg.any(), 2], { total: 5 })` matches `[1, 2]` and `Object.assign([1, 2], { total: 9 })`, too. An array without a matcher is compared in full, other keys included. Use `Arg.is()` for the whole array to check its other keys along with a matcher.
 * The search for matchers is bounded, so that large arguments stay fast. An array with more than 1,024 items and an object with more than 1,024 keys are not searched, and neither are arrays and objects more than 32 levels below the argument. Each argument also has a budget of 1,024 arrays and objects, which each of them shares evenly among its items: in an array of 1,000 objects, each object is searched, but the objects inside them are not. An item of a searched array or object that is itself a matcher is always found. An array or object that several values of one argument refer to is searched once, and an argument looks at 32,768 items and keys in all at most: a matcher in an array or object beyond that is not found. An array or object with more than 256 items or keys that holds no matcher within these limits is remembered (weakly, so this keeps nothing alive), and so is an object with more than 1,024 keys, whose keys are not listed again. If the search looked at everything inside it, it is not searched again. If the limits left arrays or objects inside it out, the second time it is passed it is searched within the limits again, and then once more without the budget (but still at most 32 levels deep and 32,768 items and keys): if that finds no matcher either, it is not searched again, and otherwise it is searched within the limits every time. So a lookup table passed to every call costs nothing after the first two calls, and a new batch of records passed to each call is searched once, within the limits. A matcher put into such an array or object after it is no longer searched is not found, even if items or keys were deleted (see [How arguments are compared](#how-arguments-are-compared)). A matcher that is not found is compared as a value, as above. Setups like `save({ user: { id: Arg.any(), roles: [Arg.any('string'), 'admin'] } })`, or an object with a few hundred keys and a matcher, are far from these limits.
 * `String(sub)` shows nested matchers, for example `save({ id: Arg.any{any}, name: 'bob' }) => returns('saved')`.
 
@@ -1341,7 +1375,7 @@ All property or method calls to @Substitute.subtract received so far:
 @Substitute.subtract was read 1 time without being called; reading a method does not count as calling it.
 ```
 
-Every substitute prints as `@Substitute`, so when the code under test passes another substitute than the one a check expects, the expected call and the received one can print alike. Then the message numbers the substitutes in the order in which they appear in it, an auto-substitute with the number of the substitute it belongs to (`@Substitute#3.handler`), and its last line says so. The numbers hold only within that message, and only messages whose expected call (or assignment) prints like a listed call that it does not match, and that show more than one substitute, have them. Other messages, printouts and snapshots show `@Substitute`.
+Every substitute prints as `@Substitute`, so when the code under test passes another substitute than the one a check expects, the expected call and the received one can print alike. Then the message numbers the substitutes in the order in which they appear in it, an auto-substitute with the number of the substitute it belongs to (`@Substitute#3.handler`), and its last line says so. The numbers hold only within that message, and only messages whose expected call (or assignment) prints like a listed call that it does not match, and that show more than one substitute, have them. Other messages, printouts and snapshots show `@Substitute`. The substitutes of another copy of the package are numbered along with the others, when both copies are this version or newer (see [The symbol API](#the-symbol-api)).
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -1366,7 +1400,7 @@ All property or method calls to @Substitute#1.use received so far:
 The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.
 ```
 
-Arguments are printed two levels deep (see [Printing a substitute](#printing-a-substitute)), and so is the value of an assignment. When the expected call and a received one that it does not match would still print alike, because they differ further down, as filters of an ORM often do, the message prints the expected line and those received lines deeper: at the least depth, up to four levels, at which they print differently. A matcher in the expected call does not count as a difference here: it prints by its label, such as `Arg.any{string}`, where the received call shows the value that it was given. So a check with a matcher for a generated id, a timestamp or a callback is printed deeper, too, when the calls differ further down somewhere else (the second example below). Received lines that already print differently stay two levels deep, and so do lines that differ only where the expected call has a matcher that they do not match: for an expected `f(Arg.is{n => n > 5}, { a: { b: { c: [Object] } } })`, a received `f(3, { a: { b: { c: [Object] } } })` with the same object. Calls that differ only deeper than four levels print alike, two levels deep. To find the depth, the message compares the values themselves, as printing shows them (keys, array items, the part of a long string that is shown), and it looks at no more than 2,000 objects, keys and items for all the lines of the message, so lines that print alike two levels deep and come after that are printed as deep as the lines before them, or, when the expected call has a matcher, two levels deep. Matchers in the expected call are shown by their own label at any depth, with the objects and arrays that hold them, and when a matcher is deeper than two levels, the received calls that it does not match are printed as deep as the object that holds it (at most four levels), so they show the value that the matcher was given: for an expected `{ a: { b: { c: { d: Arg.is{value => value > 5} } } } }`, a received call shows `{ a: { b: { c: { d: 1, e: [Object] } } } }`. The numbering of substitutes goes by the lines as printed, so two calls that differ only in which substitute sits inside a cut-off object (`use({ a: { b: { c: [Object] } } })`) print alike and are not numbered. `util.inspect()` puts at most 80 characters and three levels of nested objects on one line, so the lines printed deeper span several lines, as below.
+Arguments are printed two levels deep (see [Printing a substitute](#printing-a-substitute)), and so is the value of an assignment. When the expected call and a received one that it does not match would still print alike, because they differ further down, as filters of an ORM often do, the message prints the expected line and those received lines deeper: at the least depth, up to four levels, at which they print differently. A matcher in the expected call does not count as a difference here: it prints by its label, such as `Arg.any{string}`, where the received call shows the value that it was given. So a check with a matcher for a generated id, a timestamp or a callback is printed deeper, too, when the calls differ further down somewhere else (the second example below), also inside a `Map` or a `Set`: `save(Arg.any{string}, { order: { meta: { tags: Set(1) { 'express' } } } })` against `@Substitute.save('ord-1', { order: { meta: { tags: Set(1) { 'gift' } } } })`. Neither does an order of keys that differs, which matching ignores: an object that the code under test builds as `{ ...input, id }` is printed as deep as a difference further down needs, each line with its keys in its own order (the third example below). Received lines that print differently two levels deep in another way stay two levels deep, and so do lines that differ only where the expected call has a matcher that they do not match: for an expected `f(Arg.is{n => n > 5}, { a: { b: { c: [Object] } } })`, a received `f(3, { a: { b: { c: [Object] } } })` with the same object. A matcher inside a `Map`, a `Set` or a class instance is a value, as when matching (see [Matchers inside objects and arrays](#matchers-inside-objects-and-arrays)), so it is a difference there: `f(Arg.any{any}, Map(1) { 'k' => Arg.any{any} })` against `@Substitute.f('x', Map(1) { 'k' => 1 })` stays two levels deep. Calls that differ only deeper than four levels print alike, two levels deep. To find the depth, the message compares the values themselves, as printing shows them: the keys of objects, in any order; the items of arrays, and their other keys, such as the `total` of an array of rows or the `index` and `input` of a `RegExp` match; the size, the first 20 entries (in their order) and the other keys of `Map`s and `Set`s; the part of a long string that is shown; and other values, such as typed arrays, functions with properties, `Date`s, errors and objects that print themselves, by their printed text, depth by depth. It looks at no more than 2,000 objects, keys, items and entries for all the lines of the message (lines that differ only in the order of their keys are compared last, with what is left), and the lines that come after that are printed as deep as the lines before them, with or without a matcher in the expected call: without a matcher, those that print like the expected call two levels deep; with a matcher, the message cannot tell which of them already print differently, so all of them. Matchers in the expected call are shown by their own label at any depth, with the objects and arrays that hold them, and when a matcher is deeper than two levels, the received calls that it does not match are printed as deep as the object that holds it (at most four levels), so they show the value that the matcher was given: for an expected `{ a: { b: { c: { d: Arg.is{value => value > 5} } } } }`, a received call shows `{ a: { b: { c: { d: 1, e: [Object] } } } }`. The numbering of substitutes goes by the lines as printed, so two calls that differ only in which substitute sits inside a cut-off object (`use({ a: { b: { c: [Object] } } })`) print alike and are not numbered. `util.inspect()` puts at most 80 characters and three levels of nested objects on one line, so the lines printed deeper span several lines, as below.
 
 ```js
 const { Substitute } = require('@fluffy-spoon/substitute')
@@ -1420,6 +1454,36 @@ All property or method calls to @Substitute.save received so far:
   profile: { address: { geo: { lat: 59.9, lng: 10.7 } } }
 })
     called at Object.<anonymous> (test/users.test.js:5:7)
+```
+
+With an object that the code under test builds from its input, whose keys come in another order:
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const users = Substitute.for()
+// the code under test adds a generated id to its input
+const input = { name: 'Ann', address: { geo: { point: { lat: 59.9, lng: 10.7 } } } }
+users.save({ ...input, id: 'u-81f3' })
+
+users.received(1).save({ id: Arg.any('string'), name: 'Ann', address: { geo: { point: { lat: 60.4, lng: 5.3 } } } }) // throws SubstituteException
+```
+
+<!-- docs-check: error-message -->
+```text
+SubstituteException: Call count mismatch in @Substitute.save:
+Expected to receive 1 method call matching save({
+  id: Arg.any{string},
+  name: 'Ann',
+  address: { geo: { point: { lat: 60.4, lng: 5.3 } } }
+}), but received none.
+All property or method calls to @Substitute.save received so far:
+› ✘ @Substitute.save({
+  name: 'Ann',
+  address: { geo: { point: { lat: 59.9, lng: 10.7 } } },
+  id: 'u-81f3'
+})
+    called at Object.<anonymous> (test/users.test.js:6:7)
 ```
 
 The message contains ANSI colours only when the output is a terminal. `NO_COLOR`, `NODE_DISABLE_COLORS` and `TERM=dumb` turn colours off, and `FORCE_COLOR` turns them on.
