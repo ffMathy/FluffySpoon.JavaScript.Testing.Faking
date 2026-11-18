@@ -80,7 +80,15 @@ class Printer {
    */
   private numbered = 0
 
-  constructor(private readonly colors: boolean, private readonly reuse?: Printer) { }
+  /**
+   * E73 (R11-ADV-6): the own enumerable keys of the objects printed and compared for the message (see
+   * DifferenceSearch.keys), shared by its printers, so that each object is listed once per message.
+   */
+  readonly keys: Map<object, PropertyKey[]>
+
+  constructor(private readonly colors: boolean, private readonly reuse?: Printer, keys?: Map<object, PropertyKey[]>) {
+    this.keys = keys ?? reuse?.keys ?? new Map()
+  }
 
   value(value: unknown, bounds: PrintBounds): string {
     // -0 and 0 are one key of a Map: primitives are printed every time (cheaply)
@@ -91,7 +99,7 @@ class Printer {
       printed = this.reused(this.reuse?.values, bounds, value)
       if (printed === undefined) {
         const before = rootLabelCount() + this.numbered
-        const text = formatValue(value, this.colors, bounds)
+        const text = formatValue(value, this.colors, bounds, this.keys)
         printed = { text, unnumbered: rootLabelCount() + this.numbered === before }
       }
       known.set(value, printed)
@@ -199,15 +207,26 @@ const MATCHER_SEARCH_DEPTH = 32
  * value's text is printed once per depth, see Printer). Lines that print alike up to MAX_MESSAGE_DEPTH are not printed
  * deeper at all. All the lines that print alike are printed as deep as the deepest of them needs, so a line is only
  * looked at further when it could need more than that, and the comparisons of one message look at no more than
- * DIFFERENCE_ENTRIES entries in all: the lines after that are printed as deep as the ones before. Without matchers in
- * the expected call, the printed lines decide (the comparison only skips the depths at which they cannot differ); with
- * matchers, the comparison does.
+ * DIFFERENCE_ENTRIES entries in all: the lines after that are printed as deep as the ones before (E70: with or without
+ * matchers in the expected call). Without matchers in the expected call, the printed lines decide too: a line that
+ * prints differently at `base` stays as it is (unless it does so only in the order of its keys, E72, which is looked at
+ * last), and the depth at which a line prints differently is checked on the printed lines (which the message prints
+ * anyway).
+ * E68 (R11V-3): where the comparison sees a difference that the printed lines do not show (beyond the characters a value
+ * is cut after), the depths are tried from the one the message is printed at so far on, so that the message is
+ * printed at the least depth that tells its lines apart.
  */
 const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | undefined => {
   const records = unmatchedOfExpectedKind(mismatch, print)
   if (records.length === 0) return undefined
   const expectedArguments = mismatch.expected.specification?.value ?? NO_ARGUMENTS
   const textAt = (args: readonly unknown[], depth: number) => printArguments(args, print, messageBounds(depth))
+  /** The least depth from `from` on, up to MAX_MESSAGE_DEPTH, at which a line prints differently from the expected call. */
+  const printsDifferentlyFrom = (args: readonly unknown[], from: number): number | undefined => {
+    for (let candidate = from; candidate <= MAX_MESSAGE_DEPTH; candidate++)
+      if (textAt(args, candidate) !== textAt(expectedArguments, candidate)) return candidate
+    return undefined
+  }
   const matcherLevel = deepestMatcher(expectedArguments, MATCHER_SEARCH_DEPTH)
   const base = Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, matcherLevel - 1))
   const expectedText = matcherLevel < 0 ? textAt(expectedArguments, base) : undefined
@@ -215,34 +234,56 @@ const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | unde
     bounds: MESSAGE_BOUNDS,
     maxDepth: MAX_MESSAGE_DEPTH,
     textOf: (value, depth) => print.value(value, messageBounds(depth)),
-    keys: new Map(),
+    keys: print.keys,
     entries: DIFFERENCE_ENTRIES
   }
   let depth = base > MESSAGE_BOUNDS.depth ? base : undefined
   const alike: CallRecord[] = []
+  /** E72: the lines that print differently at `base` without matchers in the expected call (looked at last, see below). */
+  const differing: CallRecord[] = []
   for (const record of records) {
     const args = record.args ?? NO_ARGUMENTS
-    if (expectedText !== undefined && textAt(args, base) !== expectedText) continue
-    // only a difference deeper than `floor` can make the message print the lines deeper
+    if (expectedText !== undefined && textAt(args, base) !== expectedText) {
+      differing.push(record)
+      continue
+    }
+    // whether the line prints differently at `floor` (with matchers in the expected call: first whether at `base`):
+    // only a difference deeper than `floor` makes the message print the lines deeper
     const floor = depth ?? base
-    const difference = search.entries > 0 ? firstVisibleDifference(search, expectedArguments, args, floor) : undefined
+    const difference = search.entries > 0 ? firstVisibleDifference(search, expectedArguments, args, floor, expectedText === undefined ? base : floor) : undefined
+    // the budget ran out during this line: the line can print differently at a lesser depth than the one found
+    const partial = difference !== undefined && search.complete === false
     // the depth at which the line prints differently from the expected call, if that makes the message print deeper
     let shows: number | undefined
     if (expectedText === undefined) {
-      if (difference === undefined || difference <= base) continue
-      if (difference > floor && difference <= MAX_MESSAGE_DEPTH) shows = difference
-    } else if (difference !== undefined) {
-      // a difference that the printed lines do not show (one of a value compared by its text): every depth is tried
-      const from = difference <= base ? floor + 1 : difference > floor ? difference : Infinity
-      for (let candidate = from; candidate <= MAX_MESSAGE_DEPTH; candidate++) {
-        if (textAt(args, candidate) !== textAt(expectedArguments, candidate)) {
-          shows = candidate
-          break
-        }
+      // matchers in the expected call: the comparison decides (E59)
+      if (difference !== undefined) {
+        if (difference <= base) continue
+        if (difference > floor && difference <= MAX_MESSAGE_DEPTH) shows = difference
       }
+    } else if (difference !== undefined && (difference <= base || partial)) {
+      // a difference that does not show (see E68 above), or a comparison cut short: the printed lines decide
+      if (difference <= base || (difference > floor && difference <= MAX_MESSAGE_DEPTH)) shows = printsDifferentlyFrom(args, Math.max(floor, base + 1))
+    } else if (difference !== undefined && difference > floor && difference <= MAX_MESSAGE_DEPTH) {
+      shows = printsDifferentlyFrom(args, difference)
     }
     alike.push(record)
     if (shows !== undefined) depth = shows
+  }
+  // E72 (R11-ADV-4): a line that prints differently at `base` only in the order of its keys (which matching does not
+  // see) prints like the expected call to the comparison, and is printed as deep as a difference further down needs.
+  // These lines are compared with what is left of the budget, after the lines that print alike.
+  for (const record of differing) {
+    if (search.entries <= 0) break
+    const args = record.args ?? NO_ARGUMENTS
+    const floor = depth ?? base
+    const difference = firstVisibleDifference(search, expectedArguments, args, floor, base)
+    if (difference <= base || search.complete === false) continue
+    alike.push(record)
+    if (difference > floor && difference <= MAX_MESSAGE_DEPTH) {
+      const shows = printsDifferentlyFrom(args, difference)
+      if (shows !== undefined) depth = shows
+    }
   }
   if (depth === undefined) return undefined
   return { depth, records: new Set(base > MESSAGE_BOUNDS.depth ? records : alike) }
@@ -281,7 +322,7 @@ export class SubstituteException extends Error {
     const plain = new Printer(false)
     // E54: lines that print alike are printed deeper
     const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
-    const print = colors ? new Printer(true) : plain
+    const print = colors ? new Printer(true, undefined, plain.keys) : plain
     let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, print, deeper))
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them

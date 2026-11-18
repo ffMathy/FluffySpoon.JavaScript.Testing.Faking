@@ -302,15 +302,24 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  * - a value at level L (an argument is at level 0, a value inside it at 1, ...) shows once its container shows its
  *   entries, at depth L - 1 (an argument at any depth), and an object there shows as `[Object]`, `[Array]`, `[Foo]`
  *   (`{}`, `[]`, `Foo {}` when it is empty);
- * - the entries of a container at level L show from depth L on: its keys (the first PrintBounds.keys of them, and how
- *   many there are), or its length and first maxArrayLength items;
+ * - the entries of a container at level L show from depth L on: the keys of an object (the first PrintBounds.keys of
+ *   them, and how many there are); the length, the first maxArrayLength items and the other own enumerable keys of an
+ *   array (E67: the `total` of paginated rows, the `index` and `input` of a RegExp match); the size, the first
+ *   maxArrayLength entries (keys and values, in their order) and the own enumerable keys of a Map or a Set (E69);
+ * - E72: keys in another order do not count as a difference (matching does not see it either): the values of the same
+ *   keys are compared, so that a DTO built as `{ ...input, id }` is printed as deep as a difference further down needs;
  * - two strings longer than util.inspect shows of them print alike if what shows is the same, and so do two symbols with
  *   the same description;
- * - a value that is not a plain object, an array or a class instance shown by its keys (a substitute, a function, an
- *   error, a Map, a Date, a proxy, ...) is compared by its printed text (textOf), which the caller keeps per value.
+ * - a matcher stands for the received value only where matching takes it as a matcher, in plain objects and arrays
+ *   (D27); inside a class instance, a Map or a Set it is a value like any other, shown by its label;
+ * - any other value (a substitute, a function, an error, a Date, a typed array, a proxy, an object that prints itself,
+ *   two containers of different kinds or prototypes, an array too long to list its keys cheaply) is compared by its
+ *   printed text (textOf, which the caller keeps per value and depth), at the depths at which it shows in turn, from
+ *   the one at which it starts to show (where a function with properties shows as `[Function]` and a typed array as
+ *   `[Uint8Array]`) to the one at which the texts differ (E69).
  * Only the entries that printing shows are looked at, no deeper than a message prints, and at most
- * DifferenceSearch.entries of them for all the lines of a message. The comparison of a line stops as soon as it prints
- * differently at `floor`. Getters are not run.
+ * DifferenceSearch.entries of them for all the lines of a message. The comparison of a line stops as soon as it knows
+ * what its caller asks (see firstVisibleDifference). Getters are not run.
  */
 
 /**
@@ -325,16 +334,27 @@ export type DifferenceSearch = {
   readonly bounds: PrintBounds
   /** How deep the lines can be printed at most: a difference that shows only deeper does not count. */
   readonly maxDepth: number
-  /** The text of a value printed `depth` levels deep. */
+  /** The text of a value printed `depth` levels deep (-1: as it shows one level deeper than the lines are printed). */
   readonly textOf: (value: unknown, depth: number) => string
   /** The own enumerable keys of the objects looked at (for all the lines of one message). */
   readonly keys: Map<object, PropertyKey[]>
   /** How many more entries may be looked at (see DIFFERENCE_ENTRIES). */
   entries: number
+  /**
+   * Set by firstVisibleDifference: whether it looked at every entry it had to (false when the budget ran out during the
+   * comparison, or a value could not be read; it then gives what it found up to there).
+   */
+  complete?: boolean
 }
 
-/** `stopped`: not every entry that shows was looked at (the budget is spent, or a value cannot be read). */
-type Comparison = { best: number, stopped: boolean, readonly floor: number }
+/**
+ * `best`: the least depth found so far at which the lines print differently. The comparison wants to know whether they
+ * print differently at `base` or less; if not, whether they do at `floor` or less; if not, the least depth at which they
+ * do. So it is decided once `best` is `base` or less, and while `best` is `floor` or less, only a difference at `base` or
+ * less tells it something new (see wanted). `stopped`: not every entry that shows was looked at (the budget is spent,
+ * or a value cannot be read).
+ */
+type Comparison = { best: number, stopped: boolean, readonly floor: number, readonly base: number }
 
 const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
@@ -342,6 +362,12 @@ const isObjectLike = (value: unknown): value is object => (typeof value === 'obj
 const differs = (comparison: Comparison, depth: number): void => {
   if (depth < comparison.best) comparison.best = depth
 }
+
+/** Whether the comparison knows what it wants: the lines print differently at `base` or less. */
+const decided = (comparison: Comparison): boolean => comparison.best <= comparison.base
+
+/** The greatest depth at which a difference still tells the comparison something new. */
+const wanted = (comparison: Comparison): number => comparison.best > comparison.floor ? comparison.best - 1 : comparison.base
 
 /** Whether two different primitives print alike at `level` (see above). */
 const primitivesPrintAlike = (expected: unknown, actual: unknown, level: number, bounds: PrintBounds): boolean => {
@@ -358,20 +384,70 @@ const keysOf = (search: DifferenceSearch, object: object): PropertyKey[] => {
   return keys
 }
 
+/** Whether an object has no own enumerable keys (without listing them, unless they are listed already). */
+const hasNoKeys = (search: DifferenceSearch, object: object): boolean => {
+  const keys = search.keys.get(object)
+  if (keys !== undefined) return keys.length === 0
+  for (const key in object) if (hasOwnProperty.call(object, key)) return false
+  const symbols = Object.getOwnPropertySymbols(object)
+  for (let index = 0; index < symbols.length; index++) if (propertyIsEnumerable.call(object, symbols[index])) return false
+  return true
+}
+
+/** E67: up to how long an array has its keys listed to find its keys other than the indices (a listing lists each index). */
+const ARRAY_KEYS_LIMIT = 1000
+
+const isArrayIndex = (key: string): boolean => /^(?:0|[1-9]\d*)$/.test(key) && Number(key) < 4294967295
+
+/**
+ * E67: the own enumerable keys of an array other than its indices, which util.inspect shows after the items (`total` of
+ * paginated rows, `index`, `input` and `groups` of a RegExp match), in their order (a listing gives the indices first);
+ * undefined for an array longer than `limit`.
+ */
+const arrayExtraKeys = (array: readonly unknown[], limit: number): PropertyKey[] | undefined => {
+  if (array.length > limit) return undefined
+  const keys = Object.keys(array)
+  let start = keys.length
+  while (start > 0 && !isArrayIndex(keys[start - 1])) start--
+  const extra: PropertyKey[] = start === keys.length ? [] : keys.slice(start)
+  const symbols = Object.getOwnPropertySymbols(array)
+  for (let index = 0; index < symbols.length; index++) if (propertyIsEnumerable.call(array, symbols[index])) extra.push(symbols[index])
+  return extra
+}
+
+/** How the comparison looks at a value (see above). */
+type Shape = 'array' | 'collection' | 'keyed' | 'text'
+
+/** The shape of an object (not a function or a proxy) whose prototype is `prototype`. */
+const shapeOf = (value: object, prototype: object | null): Shape => {
+  if (typeof (value as any)[inspectCustom] === 'function') return 'text'
+  if (Array.isArray(value)) return 'array'
+  if (prototype === Object.prototype || prototype === null) return 'keyed'
+  if (isError(value)) return 'text'
+  if (types.isMap(value) || types.isSet(value)) return 'collection'
+  return printsByKeys(value) ? 'keyed' : 'text'
+}
+
 /** Two own properties at `level` (data properties compare their values; accessors show as `[Getter]`, ...). */
-const compareProperties = (search: DifferenceSearch, comparison: Comparison, expected: PropertyDescriptor, actual: PropertyDescriptor, level: number): void => {
+const compareProperties = (
+  search: DifferenceSearch, comparison: Comparison, expected: PropertyDescriptor, actual: PropertyDescriptor, level: number, literal: boolean
+): void => {
   const expectedData = 'value' in expected
-  if (expectedData && isArgumentMatcher(expected.value)) return
-  if (expectedData && 'value' in actual) return compareValues(search, comparison, expected.value, actual.value, level)
+  if (expectedData && !literal && isArgumentMatcher(expected.value)) return
+  if (expectedData && 'value' in actual) return compareValues(search, comparison, expected.value, actual.value, level, literal)
   if (expectedData || 'value' in actual || (expected.get === undefined) !== (actual.get === undefined) || (expected.set === undefined) !== (actual.set === undefined))
     differs(comparison, level - 1)
 }
 
-const compareValues = (search: DifferenceSearch, comparison: Comparison, expected: unknown, actual: unknown, level: number): void => {
-  if (comparison.stopped || comparison.best <= comparison.floor || level - 1 >= comparison.best || level - 1 > search.maxDepth) return
+/**
+ * Two values at `level`. `literal`: they are inside a class instance, a Map or a Set, where a matcher of the expected
+ * call is a value like any other (D27).
+ */
+const compareValues = (search: DifferenceSearch, comparison: Comparison, expected: unknown, actual: unknown, level: number, literal: boolean): void => {
+  const shows = level > 0 ? level - 1 : 0
+  if (comparison.stopped || decided(comparison) || shows > wanted(comparison) || shows > search.maxDepth) return
   // a matcher prints by its label wherever the received value stands
-  if (isArgumentMatcher(expected) || Object.is(expected, actual)) return
-  const shows = Math.max(0, level - 1)
+  if ((!literal && isArgumentMatcher(expected)) || Object.is(expected, actual)) return
   if (!isObjectLike(expected) || !isObjectLike(actual)) {
     if (!isObjectLike(expected) && !isObjectLike(actual) && primitivesPrintAlike(expected, actual, level, search.bounds)) return
     return differs(comparison, shows)
@@ -380,75 +456,160 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
     comparison.stopped = true
     return
   }
-  const isArray = Array.isArray(expected)
-  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual) ||
-    (!isArray && (isError(expected) || !printsByKeys(expected)))) {
-    const depth = Math.max(0, search.maxDepth - level)
-    if (search.textOf(expected, depth) !== search.textOf(actual, depth)) differs(comparison, shows)
-    return
-  }
-  if (isArray !== Array.isArray(actual) || Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual) ||
-    (!isArray && typeof (actual as any)[inspectCustom] === 'function'))
-    return differs(comparison, shows)
-  // an empty container shows as `{}`, `[]` or `Foo {}` at any depth, others as `[Object]`, `[Array]` or `[Foo]` where it
-  // is deeper than the lines are printed
-  if ((isArray ? (expected as unknown[]).length === 0 : keysOf(search, expected).length === 0) !==
-    (isArray ? (actual as unknown[]).length === 0 : keysOf(search, actual).length === 0))
-    return differs(comparison, shows)
-  // deeper than the lines are printed, both show as `[Object]`, `[Array]` or `[Foo]`; the expected call shows a container
-  // that holds a matcher in full, though (see matcherHolders)
+  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual))
+    return compareTexts(search, comparison, expected, actual, level)
+  const prototype = Object.getPrototypeOf(expected)
+  const shape = prototype === Object.getPrototypeOf(actual) ? shapeOf(expected, prototype) : 'text'
+  if (shape === 'text' || shape !== shapeOf(actual, prototype)) return compareTexts(search, comparison, expected, actual, level)
+  if (shape === 'array') return compareArrays(search, comparison, expected as unknown[], actual as unknown[], level, literal)
+  if (shape === 'collection')
+    return compareCollections(search, comparison, expected as Map<unknown, unknown> | Set<unknown>, actual as Map<unknown, unknown> | Set<unknown>, level)
+  // deeper than the lines are printed, both show as `[Object]` or `[Foo]` (`{}` or `Foo {}` when empty); the expected
+  // call shows a container that holds a matcher in full, though (see matcherHolders)
   if (level > search.maxDepth) {
-    if (matcherHolders.has(expected)) differs(comparison, shows)
-    return
-  }
-  if (isArray) {
-    const items = expected as unknown[]
-    const length = items.length
-    if (length !== (actual as unknown[]).length) return differs(comparison, level)
-    const count = Math.min(length, search.bounds.maxArrayLength)
-    search.entries -= count
-    for (let index = 0; index < count; index++) {
-      const expectedItem = Object.getOwnPropertyDescriptor(expected, index)
-      const actualItem = Object.getOwnPropertyDescriptor(actual, index)
-      if (expectedItem === undefined || actualItem === undefined) {
-        if (expectedItem !== actualItem) differs(comparison, level) // a hole
-      } else compareProperties(search, comparison, expectedItem, actualItem, level + 1)
-    }
+    if (hasNoKeys(search, expected) !== hasNoKeys(search, actual) || (!literal && matcherHolders.has(expected))) differs(comparison, shows)
     return
   }
   const expectedKeys = keysOf(search, expected)
   const actualKeys = keysOf(search, actual)
-  if (expectedKeys.length !== actualKeys.length) return differs(comparison, level)
-  const count = Math.min(expectedKeys.length, search.bounds.keys)
-  for (let index = 0; index < count; index++) if (expectedKeys[index] !== actualKeys[index]) return differs(comparison, level)
-  search.entries -= count
-  for (let index = 0; index < count; index++) {
-    const key = expectedKeys[index]
-    compareProperties(search, comparison, Object.getOwnPropertyDescriptor(expected, key)!, Object.getOwnPropertyDescriptor(actual, key)!, level + 1)
+  // an empty object shows as `{}` or `Foo {}` at any depth
+  if ((expectedKeys.length === 0) !== (actualKeys.length === 0)) return differs(comparison, shows)
+  const instance = prototype !== Object.prototype && prototype !== null
+  compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, search.bounds.keys, level, literal || instance)
+}
+
+/**
+ * E68, E69: two values compared by their printed texts, at the depths at which they show, in turn, from the one at which
+ * they start to show, as long as a difference tells the comparison something new (see wanted). A difference anywhere up
+ * to `base` tells as much as one at `base`, and one up to `floor` (when there is none up to `base`) as much as one at
+ * `floor`: those depths are tried before deeper ones, so that the lines of a message are printed at the least depth that
+ * tells them apart. (Two values that print alike at a depth print alike at the depths before it.)
+ */
+const compareTexts = (search: DifferenceSearch, comparison: Comparison, expected: object, actual: object, level: number): void => {
+  let depth = level > 0 ? level - 1 : 0
+  for (;;) {
+    const limit = Math.min(wanted(comparison), search.maxDepth)
+    if (depth > limit) return
+    const tried = depth <= comparison.base ? Math.min(comparison.base, limit) : depth <= comparison.floor ? Math.min(comparison.floor, limit) : depth
+    if (search.textOf(expected, tried - level) !== search.textOf(actual, tried - level)) return differs(comparison, tried)
+    depth = tried + 1
   }
+}
+
+/** E72: whether the first `count` keys of two lists are the same keys, in any order. */
+const sameKeys = (expected: readonly PropertyKey[], actual: readonly PropertyKey[], count: number): boolean => {
+  let index = 0
+  while (index < count && expected[index] === actual[index]) index++
+  if (index === count) return true
+  const shown = new Set<PropertyKey>()
+  for (let other = index; other < count; other++) shown.add(actual[other])
+  for (let other = index; other < count; other++) if (!shown.has(expected[other])) return false
+  return true
+}
+
+/** The own enumerable keys of two containers at `level` that show (the first `cap` of them, see sameKeys), and their values. */
+const compareKeys = (
+  search: DifferenceSearch, comparison: Comparison, expected: object, actual: object,
+  expectedKeys: readonly PropertyKey[], actualKeys: readonly PropertyKey[], cap: number, level: number, literal: boolean
+): void => {
+  if (expectedKeys.length !== actualKeys.length) return differs(comparison, level)
+  const count = Math.min(expectedKeys.length, cap)
+  if (!sameKeys(expectedKeys, actualKeys, count)) return differs(comparison, level)
+  search.entries -= count
+  for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
+    const key = expectedKeys[index]
+    compareProperties(search, comparison, Object.getOwnPropertyDescriptor(expected, key)!, Object.getOwnPropertyDescriptor(actual, key)!, level + 1, literal)
+  }
+}
+
+/** Two arrays at `level` with the same prototype: their length, first items and (E67) other keys. */
+const compareArrays = (search: DifferenceSearch, comparison: Comparison, expected: unknown[], actual: unknown[], level: number, literal: boolean): void => {
+  const length = expected.length
+  // an empty array shows as `[]` at any depth (one with other keys does not), others as `[Array]` where it is deeper
+  // than the lines are printed
+  const isEmpty = (array: unknown[]) => array.length === 0 && arrayExtraKeys(array, 0)!.length === 0
+  if (level > search.maxDepth) {
+    if ((length === 0 || actual.length === 0) && isEmpty(expected) !== isEmpty(actual)) differs(comparison, level - 1)
+    else if (!literal && matcherHolders.has(expected)) differs(comparison, level - 1)
+    return
+  }
+  const expectedExtra = arrayExtraKeys(expected, ARRAY_KEYS_LIMIT)
+  const actualExtra = arrayExtraKeys(actual, ARRAY_KEYS_LIMIT)
+  if (expectedExtra === undefined || actualExtra === undefined) return compareTexts(search, comparison, expected, actual, level)
+  if ((length === 0 && expectedExtra.length === 0) !== (actual.length === 0 && actualExtra.length === 0))
+    return differs(comparison, level > 0 ? level - 1 : 0)
+  if (length !== actual.length) return differs(comparison, level)
+  const count = Math.min(length, search.bounds.maxArrayLength)
+  search.entries -= count
+  for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
+    const expectedItem = Object.getOwnPropertyDescriptor(expected, index)
+    const actualItem = Object.getOwnPropertyDescriptor(actual, index)
+    if (expectedItem === undefined || actualItem === undefined) {
+      if (expectedItem !== actualItem) differs(comparison, level) // a hole
+    } else compareProperties(search, comparison, expectedItem, actualItem, level + 1, literal)
+  }
+  // (util.inspect shows all of them)
+  compareKeys(search, comparison, expected, actual, expectedExtra, actualExtra, Infinity, level, literal)
+}
+
+/** E69: two Maps or two Sets at `level` with the same prototype: their size, first entries (in their order) and own keys. */
+const compareCollections = (
+  search: DifferenceSearch, comparison: Comparison, expected: Map<unknown, unknown> | Set<unknown>, actual: Map<unknown, unknown> | Set<unknown>, level: number
+): void => {
+  const isMap = types.isMap(expected)
+  const size: number = (isMap ? mapSize : setSize).call(expected)
+  const actualSize: number = (isMap ? mapSize : setSize).call(actual)
+  // an empty one shows as `Map(0) {}` at any depth, others as `[Map]` where it is deeper than the lines are printed
+  if ((size === 0 && hasNoKeys(search, expected)) !== (actualSize === 0 && hasNoKeys(search, actual)))
+    return differs(comparison, level > 0 ? level - 1 : 0)
+  if (level > search.maxDepth) return
+  const expectedKeys = keysOf(search, expected)
+  const actualKeys = keysOf(search, actual)
+  if (size !== actualSize) return differs(comparison, level)
+  const count = Math.min(size, search.bounds.maxArrayLength)
+  search.entries -= count
+  const expectedEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(expected)
+  const actualEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(actual)
+  for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
+    const expectedStep = expectedEntries.next()
+    const actualStep = actualEntries.next()
+    if (expectedStep.done === true || actualStep.done === true) break
+    if (isMap) {
+      const [expectedKey, expectedValue] = expectedStep.value as [unknown, unknown]
+      const [actualKey, actualValue] = actualStep.value as [unknown, unknown]
+      compareValues(search, comparison, expectedKey, actualKey, level + 1, true)
+      compareValues(search, comparison, expectedValue, actualValue, level + 1, true)
+    } else compareValues(search, comparison, expectedStep.value, actualStep.value, level + 1, true)
+  }
+  compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, Infinity, level, true)
 }
 
 /**
  * E59, E60: the least depth at which the arguments of an expected call and of a received call print differently, with
- * the matchers of the expected call left out (see above), as far as they are looked at: the comparison stops at a
- * difference that shows at `floor` or less, and when the budget is spent (then what was found so far). Infinity when
- * they print alike up to maxDepth.
+ * the matchers of the expected call left out (see above), as far as they are looked at; Infinity when they print alike
+ * up to maxDepth. The comparison stops once it knows what its caller asks: a depth of `base` or less, if they print
+ * differently there; otherwise a depth up to `floor`, if they do there (`base` is `floor` unless given); otherwise the
+ * least depth. It also stops when the budget is spent (search.complete is then false), with what it found so far.
  */
-export const firstVisibleDifference = (search: DifferenceSearch, expected: readonly unknown[], actual: readonly unknown[], floor: number): number => {
+export const firstVisibleDifference = (
+  search: DifferenceSearch, expected: readonly unknown[], actual: readonly unknown[], floor: number, base: number = floor
+): number => {
+  search.complete = true
   let count = expected.length
   const all = expected.findIndex(isAllArguments)
   // Arg.all() takes the place of the rest of the received arguments
   if (all >= 0) count = all
   else if (expected.length !== actual.length) return 0
   count = Math.min(count, MAX_PRINTED_ARGUMENTS)
-  const comparison: Comparison = { best: Infinity, stopped: false, floor }
-  for (let index = 0; index < count && comparison.best > floor && !comparison.stopped; index++) {
+  const comparison: Comparison = { best: Infinity, stopped: false, floor, base: Math.min(base, floor) }
+  for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
     try {
-      compareValues(search, comparison, expected[index], actual[index], 0)
+      compareValues(search, comparison, expected[index], actual[index], 0, false)
     } catch {
       comparison.stopped = true // a value that cannot be read
     }
   }
+  if (comparison.stopped) search.complete = false
   return comparison.best
 }
 
@@ -476,12 +637,24 @@ const BUDGET_MARGIN = 1000
  *   (`exhausted`).
  * Shared values are prepared again wherever they are printed (util.inspect prints them there again, too), so the budget
  * counts what is printed.
+ * - `keys`: E73, the own enumerable keys of the objects listed so far, when the caller keeps them (a failure message
+ *   prints its values at several depths and compares them, see DifferenceSearch.keys): an object with 5,000 keys is
+ *   listed once per message.
  */
 type Walk = {
   readonly bounds: PrintBounds
   readonly ancestors: Map<object, unknown>
   budget: number
   exhausted: boolean
+  readonly keys?: Map<object, PropertyKey[]>
+}
+
+/** The own enumerable keys of an object (see Walk.keys). */
+const listedKeys = (walk: Walk, object: object): PropertyKey[] => {
+  if (walk.keys === undefined) return ownEnumerableKeys(object)
+  let keys = walk.keys.get(object)
+  if (keys === undefined) walk.keys.set(object, keys = ownEnumerableKeys(object))
+  return keys
 }
 
 /** At least how many characters util.inspect prints for a value (for a container: before its entries). */
@@ -583,15 +756,44 @@ const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => 
         Object.defineProperty(copy, index, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
       }
     }
+    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows); they are listed only
+    // for an array that is short or copied anyway (listing them lists every index)
+    if (!walk.exhausted) {
+      const extra = arrayExtraKeys(array, changed ? Infinity : ARRAY_KEYS_LIMIT)
+      if (extra !== undefined && extra.length > 0 && copyKeys(array, copy, extra, Infinity, level, walk)) changed = true
+    }
   } finally {
     walk.ancestors.delete(array)
   }
   return changed ? copy : array
 }
 
+/**
+ * Copies the first `count` of the own enumerable keys `keys` of `object` to `copy`, data properties prepared, accessors
+ * as they are, as far as the budget goes. Whether the copy prints differently from the object: a value was prepared,
+ * or the budget ran out.
+ */
+const copyKeys = (object: object, copy: object, keys: readonly PropertyKey[], count: number, level: number, walk: Walk): boolean => {
+  let changed = false
+  const shown = Math.min(keys.length, count)
+  for (let index = 0; index < shown; index++) {
+    const key = keys[index]
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    if (descriptor === undefined) continue
+    const isData = 'value' in descriptor
+    if (!spend(walk, SEPARATOR + keyLength(key) + 2 + (isData ? leastLength(descriptor.value, level + 1, walk) : 8))) return true
+    if (isData) {
+      const item = prepared(descriptor.value, level + 1, walk)
+      if (item !== descriptor.value) changed = true
+      Object.defineProperty(copy, key, { value: item, writable: true, enumerable: true, configurable: true })
+    } else Object.defineProperty(copy, key, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
+  }
+  return changed
+}
+
 /** An object shown by its keys: its first `keys` own enumerable keys, data properties prepared, accessors as they are. */
 const preparedKeyed = (object: object, level: number, walk: Walk): unknown => {
-  const keys = ownEnumerableKeys(object)
+  const keys = listedKeys(walk, object)
   const count = Math.min(keys.length, walk.bounds.keys)
   const more: More = { hidden: keys.length - count, unit: 'keys' }
   const copy = Object.create(Object.getPrototypeOf(object))
@@ -599,21 +801,7 @@ const preparedKeyed = (object: object, level: number, walk: Walk): unknown => {
   walk.ancestors.set(object, result)
   let changed = more.hidden > 0
   try {
-    for (let index = 0; index < count; index++) {
-      const key = keys[index]
-      const descriptor = Object.getOwnPropertyDescriptor(object, key)
-      if (descriptor === undefined) continue
-      const isData = 'value' in descriptor
-      if (!spend(walk, SEPARATOR + keyLength(key) + 2 + (isData ? leastLength(descriptor.value, level + 1, walk) : 8))) {
-        changed = true
-        break
-      }
-      if (isData) {
-        const item = prepared(descriptor.value, level + 1, walk)
-        if (item !== descriptor.value) changed = true
-        Object.defineProperty(copy, key, { value: item, writable: true, enumerable: true, configurable: true })
-      } else Object.defineProperty(copy, key, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
-    }
+    if (copyKeys(object, copy, keys, count, level, walk)) changed = true
   } finally {
     walk.ancestors.delete(object)
   }
@@ -659,6 +847,15 @@ const preparedCollection = (collection: Map<unknown, unknown> | Set<unknown>, is
         setAdd.call(copy, member)
       }
     }
+    // E69: and its own keys, which util.inspect shows after the entries (in a copy that leaves entries out, before the
+    // `... N more items` that the copy shows at its end)
+    if (!truncated) {
+      const keys = listedKeys(walk, collection)
+      if (keys.length > 0 && copyKeys(collection, copy, keys, Infinity, level, walk)) {
+        if (walk.exhausted) truncated = true
+        else changed = true
+      }
+    }
   } finally {
     walk.ancestors.delete(collection)
   }
@@ -676,9 +873,9 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
 
 /**
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
- * anything else with a bounded util.inspect, cut after `bounds.characters` characters.
+ * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
  */
-export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean): string => {
+export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
@@ -686,7 +883,7 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
     colors
   }
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
-  const walk: Walk = { bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false }
+  const walk: Walk = { bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys }
   let printable: unknown
   try {
     printable = prepared(value, 0, walk)
@@ -700,9 +897,9 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
   return truncateText(colors ? inspect(printable, { ...options, colors: false }) : text, bounds.characters, walk.exhausted)
 }
 
-export const formatValue = (value: unknown, colors: boolean, bounds: PrintBounds = MESSAGE_BOUNDS): string => {
+export const formatValue = (value: unknown, colors: boolean, bounds: PrintBounds = MESSAGE_BOUNDS, keys?: Map<object, PropertyKey[]>): string => {
   try {
-    return withPrintGuard(() => formatBounded(value, bounds, colors))
+    return withPrintGuard(() => formatBounded(value, bounds, colors, keys))
   } catch {
     return `<${typeof value}>`
   }
