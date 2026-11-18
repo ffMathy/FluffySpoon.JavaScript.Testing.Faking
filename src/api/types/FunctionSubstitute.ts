@@ -398,18 +398,17 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // signature (`same(1, 'x')` of `same<T extends string | number>(a: T, b: T): T`, `log(1, 'x')` of `log<T>(a: T, b: T):
 // void`) take what that list returns (`TReturnType`), never `any` (R8TD-1, T54): `same(1, 'x').returns({})` and
 // `log(1, 'x').returns(5)` do not compile.
-// Matchers (`Arg.is(key => ...)`, whose type is `Argument<keyof Config> & keyof Config`) fit the method's parameters,
-// but TypeScript cannot infer the return type from them when it uses the type parameter as an index (`Config[K]`): for
-// such a call the return type is inferred from the matchers' value types instead (`keyof Config`, R9FE-1, T60), never
-// `any`. Only a return type that is conditional on a type parameter stays `any`.
-type CallReturnTypeOf<F, P extends any[], TReturnType> =
-  F extends (...args: P) => any ?
-  (F extends (...args: P) => infer R ? (IsAny<R> extends true ? TReturnType : R) : MatcherValuesReturnType<F, MatcherValues<P>, TReturnType>) :
+// The return type is inferred from the value types of matcher arguments (`keyof Config` for `Arg.is(key => ...)`,
+// whose type is `Argument<keyof Config> & keyof Config`, R9FE-1, T60): TypeScript cannot infer it from the matcher types
+// themselves when the method uses the type parameter as an index (`Config[K]`), which gave `any`. (Function matchers,
+// `Arg.any('function')`, are kept as they are. Unwrapping the arguments for every call costs less than a second
+// inference after a failed one, which comparisons of such signatures with a method's own generic signature reach.)
+type CallReturnTypeOf<F, P extends any[], TReturnType> = CallReturnTypeFor<F, P, Extract<MatcherValues<P>, any[]>, TReturnType>
+type CallReturnTypeFor<F, P extends any[], TValues extends any[], TReturnType> =
+  F extends (...args: P) => any ? (F extends (...args: TValues) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :
   TReturnType
-type MatcherValuesReturnType<F, P, TReturnType> =
-  F extends (...args: Extract<P, any[]>) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any
 type MatcherValues<P> = { [K in keyof P]: MatcherValue<P[K]> }
-type MatcherValue<T> = T extends Argument<infer V> ? V : T
+type MatcherValue<T> = T extends (...args: any) => any ? T : T extends Argument<infer V> ? V : T
 
 // Generic code: distributive over `TVariant`, so that for a member type such as `T['add']` with `T extends Calculator`
 // TypeScript computes the signatures from the constraint (`Calculator['add']`) when the member is called (T33).
