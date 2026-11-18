@@ -406,6 +406,19 @@ const isOwned = (target: FaceTarget): boolean => ownedTargetCount > 0 && ownedTa
 /** Whether the code under test defined the property on the substitute (E25). */
 const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwned(target) && hasOwnProperty.call(target, property)
 
+/**
+ * E62 (R10V-3): the prototype of a frozen, sealed or non-extensible substitute cannot change, as for any non-extensible
+ * object: Object.setPrototypeOf and `__proto__ =` throw a TypeError that names the substitute (a trap that returned
+ * false would give V8's text about the proxy trap instead). A trap cannot tell Reflect.setPrototypeOf apart from them,
+ * so Reflect.setPrototypeOf throws it too, where it returns false for an ordinary object. Setting the prototype it
+ * already has succeeds.
+ */
+const notExtensibleError = (face: Face, start: Function): TypeError => {
+  const error = new TypeError(`${face.path} is not extensible: its prototype cannot be changed after Object.freeze(), Object.seal() or Object.preventExtensions()`)
+  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(error, start)
+  return error
+}
+
 /*
  * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
  * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
@@ -438,8 +451,8 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     return Reflect.preventExtensions(target)
   },
   // E55: a substitute whose prototype the code under test replaced is recognised by identity from then on
-  setPrototypeOf: (target: FaceTarget, prototype: object | null) => {
-    if (!Reflect.setPrototypeOf(target, prototype)) return false
+  setPrototypeOf: function setPrototypeOf(target: FaceTarget, prototype: object | null) {
+    if (!Reflect.setPrototypeOf(target, prototype)) throw notExtensibleError(target(), setPrototypeOf)
     const proxy = proxyOf(target())
     if (proxy !== undefined && !reprototyped.has(proxy)) {
       reprototyped.add(proxy)
