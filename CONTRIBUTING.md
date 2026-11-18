@@ -91,7 +91,13 @@ of timings), listed once as `timingSensitive` in `ava.config.js`: `spec/regressi
 `spec/regression/fixes/performance.test.ts`, `spec/regression/fixes/round5.test.ts`,
 `spec/regression/fixes/round8.test.ts` and `spec/regression/fixes/ported-from-a.spec.ts`. The second run,
 `ava --config ava.perf.config.js --serial --concurrency=1`, runs only those, one test at a time, so that other test
-files cannot slow them down. Tests that compare timings take the median of several interleaved rounds. Absolute
+files cannot slow them down. Tests that compare timings take the median of several interleaved rounds, and check
+the ratios with `assertRatiosWithin()` from `spec/helpers/timing.ts`: a measurement whose ratio is over its limit is
+made again, up to three measurements in all (`RATIO_ATTEMPTS`), and the smallest ratio of each kind decides, so that
+load that comes and goes during one measurement does not fail the test, while a real slowdown, which is over the limit
+in every measurement, still does. Every measurement is logged. A test in
+`spec/regression/fixes/round10-hashing.test.ts` checks that no timing-sensitive file compares a ratio of timings with
+its limit directly. Absolute
 limits (such as 10,000 calls in under 1 s) are checked with `timeLimit()` and `assertWithin()` from
 `spec/helpers/timing.ts`. Right before the measurement, the helper times a fixed CPU-bound workload in the same
 process, and scales the limit by that time over the workload's time on an idle machine (`IDLE_WORKLOAD_MS`, 9 ms),
@@ -122,8 +128,11 @@ The tests are of two kinds:
   The temporary directories are removed afterwards.
 
 No test leaves files in the temporary directory (`os.tmpdir()`). A run leaves only Node.js' module compile cache there
-(`node-compile-cache/`, written when npm, npx or tsc start Node.js) and an empty directory that ava itself creates
-for each of its two runs.
+(`node-compile-cache/`, which npm, npx and tsc write when they start, on Node.js 22.1 and newer; set
+`NODE_COMPILE_CACHE` to another directory, or `NODE_DISABLE_COMPILE_CACHE=1`, to keep it out). ava keeps its cache in
+`node_modules/.cache/ava`, where (outside CI) it notes the test files that failed, so that its next run starts with
+them; a test in `spec/regression/fixes/round10-hashing.test.ts` checks that the two ava runs leave nothing in
+`os.tmpdir()`.
 
 To run a single file or test, use ava's options after building the specs, for example:
 
