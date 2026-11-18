@@ -110,21 +110,19 @@ type AnyFunction = Argument<Function> & ((...args: any[]) => any) & (new (...arg
 // matcher type (`<Argument<unknown>>Arg.any('undefined')`) keeps working.
 type UndefinedArg<TContext> = undefined extends TContext ? TContext : TContext extends Argument<any> ? TContext : undefined
 
-// 'string', 'number', 'boolean', 'symbol' and 'bigint' also fit parameters whose type is a subtype of that primitive
-// (R9FE-3, T64): a union of string literals (`'EUR' | 'USD'`), a string or numeric enum, a branded string (`string & {
-// __brand: 'OrderId' }`). The matcher then takes the part of the parameter's type that is of its primitive type (it
-// matches only such values anyway). Where the parameter has no such part (`Arg.any('string')` for a number), or without
-// a parameter (`const m = Arg.any('string')`), it is the primitive type itself, which a parameter of another type
-// rejects. (Without a parameter, `TContext` is `undefined`, which without `strictNullChecks` is part of every type.)
-type PrimitiveArg<TContext, TPrimitive> =
-  [TContext] extends [undefined] ? ReturnArg<TPrimitive> :
-  [Extract<TContext, TPrimitive>] extends [never] ? ReturnArg<TPrimitive> : ReturnArg<Extract<TContext, TPrimitive>>
-
-type PrimitiveTypes = { string: string, number: number, boolean: boolean, symbol: symbol, bigint: bigint }
-
+// 'string', 'number', 'boolean', 'symbol' and 'bigint' are typed as that primitive type, whatever the parameter they are
+// passed to (T66, which reverts round 10's T64). A matcher typed by the parameter it is passed to would also fit a
+// parameter of a subtype (`'EUR' | 'USD'`, an enum, a branded string), but it would then fit the FIRST overload whose
+// parameter is such a subtype, and lib.dom's querySelector<K extends keyof HTMLElementTagNameMap>, Node's
+// `on(event: 'close', ...)` overloads and keyed getters (`get(key: 'count'): number`) would resolve to the wrong
+// overload (R11TD-1). For such a parameter, use `Arg.is((c: Currency) => true)` or `Arg.any('string') as Currency`.
 type MapAnyReturn<T, TContext> = T extends 'any' ?
-ReturnArg<any> : T extends keyof PrimitiveTypes ?
-PrimitiveArg<TContext, PrimitiveTypes[T]> : T extends 'undefined' ?
+ReturnArg<any> : T extends 'string' ?
+ReturnArg<string> : T extends 'number' ?
+ReturnArg<number> : T extends 'boolean' ?
+ReturnArg<boolean> : T extends 'symbol' ?
+ReturnArg<symbol> : T extends 'bigint' ?
+ReturnArg<bigint> : T extends 'undefined' ?
 UndefinedArg<TContext> : T extends 'object' ?
 ReturnArg<any> : T extends 'function' ?
 AnyFunction : T extends 'array' ?
@@ -147,8 +145,8 @@ type Any = {
   /**
    * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
    * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
-   * substitutes), 'array' or 'any'. The matcher of a type also fits a parameter whose type is a subtype of it, such as a
-   * union of string literals, an enum or a branded string.
+   * substitutes), 'array' or 'any'. The matcher of a primitive type has that type: for a parameter of a union of string
+   * literals, an enum or a branded string, use `Arg.is((c: Currency) => true)` or `Arg.any('string') as Currency`.
    */
   <T extends AnyType = 'any', TContext = undefined>(type?: T): MapAnyReturn<T, TContext>
   /**

@@ -321,7 +321,7 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
 type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
   TGeneric extends true ?
   GenericPositionalSignature<F, TOverloads[7], TView> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction> &
-  GenericCallSignatureFor<F, TOverloads[7], TView> :
+  GenericCallSignatureFor<F, TOverloads[7], TView> & GenericTrailingAllArgumentsSignatures<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
 
 // Generic methods (R6FE-7, T46): `Overloads` sees a generic signature with its type parameters replaced by their
@@ -351,6 +351,43 @@ type GenericPositionalSignature<F, TOverload extends Overload<any[], any>, V ext
   [TOverload['arguments']] extends [never] ? unknown :
   <P extends TOverload['arguments']>(...args: P | TOverload['arguments']) =>
     CallResult<V, P, CallReturnTypeOf<F, P, TOverload['returnType']>, never>
+// `Arg.all()` after leading arguments of a generic method whose parameter list has no possible arguments with the type
+// parameters replaced by their constraints (`emit(eventName, ...args: Args<K, Events>)` of Node's `EventEmitter<T>`, see
+// above), where `AllArgumentsSignaturesOf` has only the signature for a single `Arg.all()` (R11FE-1, T68):
+// `emit('paid', Arg.all())`, `emit('paid', 'o1', Arg.all())`. For every position `n` from 1 to 6, a signature takes `n`
+// leading arguments and `Arg.all()`; the leading arguments must fit the method's own signature, followed by any
+// arguments (`LeadingArgumentsFit`), so an unknown event name or a wrong leading argument does not compile. As for the
+// positional calls of such a method, the number of arguments is not checked (the parameter list that would tell it has
+// none), so `Arg.all()` after the last parameter compiles here. The result takes what the method returns with the type
+// parameters replaced by their constraints. They come last: a matcher of type `any` (`Arg.any()`, or an `Arg.is()`
+// typed from an `Arg.all()` parameter) also fits their `Arg.all()` parameter, and an argument such as `Arg.is(amount =>
+// ...)` takes its type from the first signature TypeScript tries, `GenericCallSignatureFor`.
+type GenericTrailingAllArgumentsSignatures<F, TOverload extends Overload<any[], any>, V extends SubstituteView> =
+  [TOverload['arguments']] extends [never] ?
+  GenericTrailingAllArgumentsSignaturesFor<F, TOverload['arguments'], TOverload['returnType'], V> :
+  unknown
+type GenericTrailingAllArgumentsSignaturesFor<F, A extends any[], R, V extends SubstituteView> =
+  (<P0 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, ...rest: any[]) => any>,
+    allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>) &
+  (<P0 extends ArgumentValue, P1 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, arg1: P1, ...rest: any[]) => any>, arg1: P1,
+    allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>) &
+  (<P0 extends ArgumentValue, P1 extends ArgumentValue, P2 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, arg1: P1, arg2: P2, ...rest: any[]) => any>, arg1: P1, arg2: P2,
+    allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>) &
+  (<P0 extends ArgumentValue, P1 extends ArgumentValue, P2 extends ArgumentValue, P3 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, arg1: P1, arg2: P2, arg3: P3, ...rest: any[]) => any>, arg1: P1,
+    arg2: P2, arg3: P3, allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>) &
+  (<P0 extends ArgumentValue, P1 extends ArgumentValue, P2 extends ArgumentValue, P3 extends ArgumentValue,
+    P4 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, arg1: P1, arg2: P2, arg3: P3, arg4: P4, ...rest: any[]) => any>,
+    arg1: P1, arg2: P2, arg3: P3, arg4: P4, allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>) &
+  (<P0 extends ArgumentValue, P1 extends ArgumentValue, P2 extends ArgumentValue, P3 extends ArgumentValue,
+    P4 extends ArgumentValue, P5 extends ArgumentValue>(
+    arg0: P0 & LeadingArgumentsFit<F, (arg0: P0, arg1: P1, arg2: P2, arg3: P3, arg4: P4, arg5: P5, ...rest: any[]) => any>,
+    arg1: P1, arg2: P2, arg3: P3, arg4: P4, arg5: P5, allArguments: AllArguments<any[]>) => CallResult<V, A, R, never>)
+type LeadingArgumentsFit<F, TLeading> = F extends TLeading ? unknown : never
 // When the signature takes at least one argument, the first one is a parameter of its own, which carries the check of
 // all arguments: a call without arguments would otherwise infer nothing for `P` and check the arguments against its
 // constraint, which accepts none.
@@ -537,10 +574,23 @@ type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends
 // infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
 // they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
 // `any`, which otherwise made them report "Type instantiation is excessively deep".)
+// A call whose last argument is `Arg.all()` (`onClick(function (this: Btn, n: number) {}, Arg.all())`) fits when its
+// leading arguments fit the first parameters of one of the lists, and that list has a parameter where `Arg.all()` is
+// passed, as for the other `Arg.all()` signatures (R11TD-4, T70): `AllArgumentsLists` are those leading parameters
+// followed by `Arg.all()`, after 1 to 6 parameters.
 type OwnThisArguments<P extends any[], TAllLists> =
   (CallbackThisTypes<P> & {}) extends never ? never :
-  [P] extends [OwnThisLists<TAllLists>] ? unknown : never
+  [P] extends [OwnThisLists<TAllLists> | AllArgumentsLists<OwnThisLists<TAllLists>>] ? unknown : never
 type OwnThisLists<TAllLists> = IsAny<TAllLists> extends true ? any[] : TAllLists
+type AllArgumentsLists<TLists> = TLists extends any[] ? AllArgumentsListsOf<TLists> : never
+type AllArgumentsListsOf<A extends any[]> = [Exclude<A['length'], 0 | 1>] extends [never] ? never :
+  [A[0], AllArgumentsAny] | ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? never :
+  [A[0], A[1], AllArgumentsAny] | ([Exclude<A['length'], 0 | 1 | 2 | 3>] extends [never] ? never :
+  [A[0], A[1], A[2], AllArgumentsAny] | ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4>] extends [never] ? never :
+  [A[0], A[1], A[2], A[3], AllArgumentsAny] | ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5>] extends [never] ? never :
+  [A[0], A[1], A[2], A[3], A[4], AllArgumentsAny] | ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5 | 6>] extends [never] ? never :
+  [A[0], A[1], A[2], A[3], A[4], A[5], AllArgumentsAny])))))
+type AllArgumentsAny = AllArguments<any>
 // The result takes what the overloads return whose parameter lists take the arguments `P` (the variant whose `this`
 // type the callback declares: `onClick(function (this: Btn, n: number) {})` returns what `Btn`'s `onClick` returns),
 // or, when every overload returns the same type, that type (see `UnionReturnType`; the per-overload result of a union
@@ -554,7 +604,8 @@ type OwnThisReturnType<F, P> = {
   [differs: number]: { returnType: OwnThisReturnTypes<F, P> }
 }[ReturnsKind<F, AllReturnTypes<F>>]['returnType']
 type OwnThisReturnTypes<F, P> = F extends unknown ? OverloadReturnTypeFor<Overloads<F>[number], P> : never
-type OverloadReturnTypeFor<TOverload, P> = TOverload extends Overload<infer A, infer R> ? ([P] extends [A] ? R : never) : never
+type OverloadReturnTypeFor<TOverload, P> =
+  TOverload extends Overload<infer A, infer R> ? ([P] extends [A | AllArgumentsListsOf<A>] ? R : never) : never
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,

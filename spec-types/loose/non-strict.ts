@@ -60,11 +60,20 @@ calculator.add(1, 2).resolves(3)
 
 export { asCalculator }
 
-// R9FE-3 / T64 without strictNullChecks: a type matcher created on its own keeps its primitive type (the missing
-// parameter type is `undefined`, which is part of every type there), and one passed to a parameter takes its subtype.
+// R9FE-3 / T64, reverted by T66 (R11TD-1), without strictNullChecks: a type matcher has its primitive type, created on
+// its own or passed to a parameter, so a parameter of a union of string literals needs the documented workarounds.
 const matchesString: boolean = Arg.any('string').matches('foo')
 const notNumber: boolean = Arg.any.not('number').matches(1)
 type Currency = 'EUR' | 'USD'
 interface Payments { charge(currency: Currency, cents: number): string }
 const payments = Substitute.for<Payments>()
+// @ts-expect-error a currency parameter takes only 'EUR' or 'USD' (T66)
 payments.charge(Arg.any('string'), Arg.any('number')).returns('ok')
+payments.charge(Arg.any('string') as Currency, Arg.any('number')).returns('ok')
+payments.charge(Arg.is((c: Currency) => true), Arg.any('number')).returns('ok')
+// R11TD-1 / T66 without strictNullChecks: overloads resolve as at 4b1fa69.
+interface KeyedStore { get(key: 'count'): number; get(key: string): string | undefined }
+const keyed = Substitute.for<KeyedStore>()
+keyed.get(Arg.any('string')).returns('x')
+const doc = Substitute.for<Document>()
+doc.querySelector(Arg.any('string')).returns(Substitute.for<Element>())

@@ -6,7 +6,7 @@
 //   different variants in one call do not compile (TypeScript rejects that call of the union itself);
 // - in a check, assigning a function to a member whose type is a union of function types does not compile, as for
 //   any other callable member (README, Typing limitations), and as TypeScript rejects a function the union rejects.
-import { Substitute, configure, didNotReceive, received } from '../src'
+import { Arg, Substitute, configure, didNotReceive, received } from '../src'
 
 interface Btn { kind: 'b'; onClick(cb: (this: Btn, n: number) => void, options?: { once: boolean }): 'b' }
 interface Lnk { kind: 'l'; onClick(cb: (this: Lnk, n: number) => void, options?: { once: boolean }): 'l' }
@@ -55,8 +55,8 @@ m.pair(function (this: M2) {}, function (this: Window) {})
 // @ts-expect-error the second callback takes a Window
 m.pair(function (this: M1) {}, function (this: M1) {})
 
-interface Cat { kind: 'cat'; speak(loud: boolean): 'meow' }
-interface Dog { kind: 'dog'; speak(loud: boolean): 'woof' }
+interface Cat { kind: 'cat'; speak(loud: boolean): 'meow'; onEvent: (e: string) => void }
+interface Dog { kind: 'dog'; speak(loud: boolean): 'woof'; onEvent: (e: string) => void }
 const pet = Substitute.for<Cat | Dog>()
 pet.received().speak(true)
 pet[received](1).speak(true)
@@ -73,3 +73,34 @@ pet[didNotReceive]().speak = () => {}
 pet.received(1).speak = () => 1
 // @ts-expect-error in a check, a callable member also has the call signatures that take Arg.all()
 pet.received().speak = () => 'meow'
+
+// R11TD-2 / T67: matchers still fit such members in property-set checks, `Arg.any('function')` included (it is typed
+// as any function or constructor).
+pet.received().speak = Arg.any()
+pet.received().speak = Arg.any('function')
+pet[received]().speak = Arg.any('function')
+pet.didNotReceive().speak = Arg.any('function')
+pet[didNotReceive]().speak = Arg.any('function')
+pet.received(1).speak = Arg.any('function')
+pet.received().speak = Arg.is(f => typeof f === 'function')
+pet.received().speak = Arg.any.not('undefined')
+pet.received().onEvent = Arg.any('function')
+pet[received]().onEvent = Arg.any('function')
+pet.received().kind = 'cat'
+// @ts-expect-error not a kind of Cat | Dog
+pet.received().kind = 'cow'
+// @ts-expect-error a string matcher is not a function
+pet.received().speak = Arg.any('string')
+// @ts-expect-error a function that returns nothing is not an onEvent of Cat | Dog either
+pet.received().onEvent = () => 1
+interface Btn2 { kind: 'b'; handler: ((e: MouseEvent) => void) | null }
+interface Lnk2 { kind: 'l'; handler: ((e: KeyboardEvent) => void) | null }
+const control = Substitute.for<Btn2 | Lnk2>()
+control.received().handler = Arg.any('function')
+// @ts-expect-error not a handler
+control.received().handler = 5
+interface Plain { onClick(cb: () => void): void; handler: (e: string) => void }
+const plain = Substitute.for<Plain>()
+plain.received().onClick = Arg.any('function')
+plain.received().handler = Arg.any('function')
+plain.received().handler = Arg.any()
