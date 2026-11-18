@@ -574,24 +574,47 @@ type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends
 // infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
 // they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
 // `any`, which otherwise made them report "Type instantiation is excessively deep".)
+// A call whose last argument is `Arg.all()` (`onClick(function (this: Btn, n: number) {}, Arg.all())`) fits when its
+// leading arguments fit the first parameters of one of the lists, and that list has a parameter where `Arg.all()` is
+// passed, as for the other `Arg.all()` signatures (R11TD-4, T70).
 type OwnThisArguments<P extends any[], TAllLists> =
   (CallbackThisTypes<P> & {}) extends never ? never :
-  [P] extends [OwnThisLists<TAllLists>] ? unknown : never
+  [P] extends [OwnThisLists<TAllLists>] ? unknown :
+  OwnThisLeadingArguments<LeadingArguments<P>, OwnThisLists<TAllLists>>
 type OwnThisLists<TAllLists> = IsAny<TAllLists> extends true ? any[] : TAllLists
+type OwnThisLeadingArguments<TLeading, TLists> = [TLeading] extends [never] ? never :
+  [TLeading] extends [ListPrefixes<TLists, Extract<LengthOf<TLeading>, ArgumentCount>>] ? unknown : never
+// The arguments before a trailing `Arg.all()` (after 1 to 6 arguments), or `never`.
+type LeadingArguments<P> =
+  P extends [infer A0, AllArguments<any>] ? [A0] :
+  P extends [infer A0, infer A1, AllArguments<any>] ? [A0, A1] :
+  P extends [infer A0, infer A1, infer A2, AllArguments<any>] ? [A0, A1, A2] :
+  P extends [infer A0, infer A1, infer A2, infer A3, AllArguments<any>] ? [A0, A1, A2, A3] :
+  P extends [infer A0, infer A1, infer A2, infer A3, infer A4, AllArguments<any>] ? [A0, A1, A2, A3, A4] :
+  P extends [infer A0, infer A1, infer A2, infer A3, infer A4, infer A5, AllArguments<any>] ? [A0, A1, A2, A3, A4, A5] :
+  never
+// The first `TCount` parameters of each list that has a parameter after them.
+type ListPrefixes<TLists, TCount extends ArgumentCount> =
+  TLists extends any[] ? ([Exclude<TLists['length'], CountsUpTo[TCount]>] extends [never] ? never : PrefixOf<TLists, TCount>) : never
+type CountsUpTo = [0, 0 | 1, 0 | 1 | 2, 0 | 1 | 2 | 3, 0 | 1 | 2 | 3 | 4, 0 | 1 | 2 | 3 | 4 | 5, 0 | 1 | 2 | 3 | 4 | 5 | 6, never]
 // The result takes what the overloads return whose parameter lists take the arguments `P` (the variant whose `this`
 // type the callback declares: `onClick(function (this: Btn, n: number) {})` returns what `Btn`'s `onClick` returns),
 // or, when every overload returns the same type, that type (see `UnionReturnType`; the per-overload result of a union
 // of all lib.dom elements, whose listener methods all return `void`, was too complex for TypeScript to represent).
 // (Not `PrefixCallResult`, which was `never` on TypeScript 4.1 and older when the call omits optional parameters,
 // R9TD-1, T62.)
+// (With a trailing `Arg.all()`, a function given to `.mimicks()` takes any arguments.)
 type OwnThisCallResult<V extends SubstituteView, P extends any[], F> =
-  V extends 'assertion' ? void : SetupResult<V, P, OwnThisReturnType<F, P>>
+  V extends 'assertion' ? void : SetupResult<V, OwnThisCallArguments<P>, OwnThisReturnType<F, P>>
+type OwnThisCallArguments<P extends any[]> = [LeadingArguments<P>] extends [never] ? P : any[]
 type OwnThisReturnType<F, P> = {
   same: { returnType: AllReturnTypes<F> }
   [differs: number]: { returnType: OwnThisReturnTypes<F, P> }
 }[ReturnsKind<F, AllReturnTypes<F>>]['returnType']
 type OwnThisReturnTypes<F, P> = F extends unknown ? OverloadReturnTypeFor<Overloads<F>[number], P> : never
-type OverloadReturnTypeFor<TOverload, P> = TOverload extends Overload<infer A, infer R> ? ([P] extends [A] ? R : never) : never
+type OverloadReturnTypeFor<TOverload, P> = TOverload extends Overload<infer A, infer R> ?
+  ([P] extends [A] ? R : [OwnThisLeadingArguments<LeadingArguments<P>, A>] extends [never] ? never : R) :
+  never
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,
