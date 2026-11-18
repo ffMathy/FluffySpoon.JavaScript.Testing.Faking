@@ -306,7 +306,7 @@ interface Jobs {
 
 const jobs = Substitute.for<Jobs>()
 // @ts-expect-error a native promise has no cancel()
-jobs.run('backup').resolves(1)
+jobs.run('cleanup').resolves(1)
 
 // the code under test awaits the result
 jobs.run('backup').returns(Object.assign(Promise.resolve(1), { cancel: () => { } }))
@@ -2076,7 +2076,7 @@ TypeScript cannot express a few things about substitutes:
 * **Assigning a function to a callable member in a check** (`button.received().onClick = handler`) does not compile, because in a check the member also has the call signatures that take `Arg.all()`. Write `(button.received() as Button).onClick = handler`. On a substitute of a union whose variants declare the member with different types (`speak(loud: boolean): 'meow'` in `Cat`, `'woof'` in `Dog`), no function can be assigned to it in a check, in any form (`pet.received().speak = () => 'meow'`, also with `[received]()`, `didNotReceive()`, `[didNotReceive]()` and `received(1)`). Cast to the variant through `unknown`: `(pet.received() as unknown as Cat).speak = handler`. A direct `as Cat` does not compile, and `as Cat | Dog` does not take the function either, because TypeScript writes a property of a union with the intersection of its types.
 * **Optional properties of a type with a string index signature** do not accept `undefined` in a check (`sub.received().note = undefined`). Without an index signature, optional properties that are not functions do.
 * **Nested auto-substitutes** are not typed as substitutes, see [Auto-substitutes](#auto-substitutes-and-nested-members).
-* **Type-check time of very large unions**, mostly on old TypeScript versions. Measured on Node.js 22 (the time of TypeScript's checker, with `strict` and `skipLibCheck`), a file with a few setups and checks on a substitute of the union of all lib.dom element types takes about 3 to 5 seconds on TypeScript 3.6 to 4.5, about 2 to 3 seconds on 5.9 and about 1 to 1.5 seconds on 7.0. A substitute of a union of 60 interfaces whose methods have different parameter lists takes about 32 to 39 seconds on TypeScript 3.6 to 4.2, which build the members of such a union with a lot of repeated work, about 4 seconds on 4.5, about 3 seconds on 5.9 and about 1.4 seconds on 7.0. A file with a few setups on Node.js' `EventEmitter<Events>`, whose generic methods cost the most there, takes about 0.35 seconds on TypeScript 4.8 to 5.9 and 0.05 seconds on 7.0.
+* **Type-check time of very large unions**, mostly on old TypeScript versions. Measured on Node.js 22 (the time of TypeScript's checker, with `strict` and `skipLibCheck`), a file with a few setups and checks on a substitute of the union of all lib.dom element types takes about 3 to 5 seconds on TypeScript 3.6 to 4.5, about 2 to 3 seconds on 5.9 and about 1 to 1.5 seconds on 7.0. A substitute of a union of 60 interfaces whose methods have different parameter lists takes about 32 to 39 seconds on TypeScript 3.6 to 4.2, which merge the signatures of such a union's members in quadratic time, about 4 seconds on 4.5, about 3 seconds on 5.9 and about 1.4 seconds on 7.0. A file with a few setups on Node.js' `EventEmitter<Events>`, whose generic methods cost the most there, takes about 0.35 seconds on TypeScript 4.8 to 5.9 and 0.05 seconds on 7.0.
 
 <!-- docs-check: uses=calculator -->
 ```typescript
@@ -2171,10 +2171,29 @@ interface Greeter {
   greet(name: string): string
 }
 const greeter = Substitute.for<Greeter>()
-// @ts-expect-error Arg.any.not('number') is typed like Arg.any('number')
+// @ts-expect-error Arg.any.not('number') is typed number
 greeter.greet(Arg.any.not('number')).returns('hi')
 greeter.greet(Arg.any()).returns('hi')
 greeter.greet(Arg.any.not('undefined')).returns('hi')
+interface Server {
+  listen(port: 80 | 443): void
+}
+const server = Substitute.for<Server>()
+server.listen(Arg.any('number')).returns()
+// @ts-expect-error Arg.any.not('number') is typed number, which is not 80 | 443
+server.listen(Arg.any.not('number')).returns()
+
+interface Cat { kind: 'cat'; speak(loud: boolean): 'meow' }
+interface Dog { kind: 'dog'; speak(loud: boolean): 'woof' }
+const meow = (loud: boolean): 'meow' => 'meow'
+// the code under test
+const teach = (pet: Cat | Dog) => { if (pet.kind === 'cat') pet.speak = meow }
+const pet = Substitute.for<Cat | Dog>()
+pet.kind.returns('cat')
+teach(pet)
+// @ts-expect-error in a check, no function can be assigned to a member that the variants declare differently
+pet.received().speak = meow
+;(pet.received() as unknown as Cat).speak = meow
 
 const maybeCalculator = Substitute.for<Calculator | undefined>()
 // @ts-expect-error a union with undefined has no setup API
@@ -2182,7 +2201,7 @@ maybeCalculator.add(1, 2).returns(3)
 ```
 
 ```typescript
-import { Substitute, SubstituteOf, configure } from '@fluffy-spoon/substitute'
+import { Substitute, SubstituteOf, Arg, configure } from '@fluffy-spoon/substitute'
 
 interface Cat { kind: 'cat'; speak(): 'meow'; age(): number; load(): Promise<number> }
 interface Dog { kind: 'dog'; speak(): 'woof'; age(): number; load(): Promise<string> }
@@ -2251,6 +2270,10 @@ config.get('port').returns('eighty')
 config[configure]().get('port').returns(Symbol('80'))
 // @ts-expect-error get() takes one argument
 config.get('port', 'extra')
+// a matcher for the key takes what get() returns for keyof Config
+config.get(Arg.is(key => key === 'port')).returns(80)
+// @ts-expect-error get() returns number | string
+config.get(Arg.is(key => key === 'host')).returns(true)
 
 // arguments that fit only the constraints: the value is checked against what same() returns for them
 interface Pairs { same<T extends string | number>(a: T, b: T): T }
@@ -2304,6 +2327,34 @@ orders.on('paid', (orderId: string, amount: number) => { }).returns(orders)
 ```
 
 ```typescript
+import { Substitute, Arg, configure } from '@fluffy-spoon/substitute'
+
+// the shape of @types/pg's Pool.query
+type QueryConfigValues<T> = T extends Array<infer U> ? T : never
+interface QueryConfig<I = any[]> { text: string; values?: QueryConfigValues<I> }
+interface QueryResult<R> { rows: R[] }
+interface Pool {
+  query<R = any, I = any[]>(config: QueryConfig<I>): Promise<QueryResult<R>>
+  query<R = any, I = any[]>(text: string | QueryConfig<I>, values?: QueryConfigValues<I>): Promise<QueryResult<R>>
+}
+
+// the code under test
+const findUser = (pool: Pool, id: number) => pool.query('SELECT * FROM users WHERE id = $1', [id]).then(result => result.rows[0])
+
+const pool = Substitute.for<Pool>()
+// @ts-expect-error a setup that passes values has no setup API
+pool.query('SELECT * FROM orders WHERE id = $1', [1]).resolves({ rows: [] })
+pool.query('SELECT * FROM users WHERE id = $1', [1] as never).resolves({ rows: [{ id: 1 }] })
+pool.query({ text: 'SELECT * FROM users WHERE id = $1', values: [2] as never }).resolves({ rows: [] })
+pool[configure]().query('SELECT * FROM users WHERE id = $1', [3] as never).resolves({ rows: [] })
+pool.query('SELECT now()', Arg.all()).resolves({ rows: [] })
+pool.query('SELECT 1').resolves({ rows: [] })
+
+findUser(pool, 1).then(user => console.log(user)) // prints { id: 1 }
+pool.received(1).query('SELECT * FROM users WHERE id = $1', [1])
+```
+
+```typescript
 import { Substitute, SubstituteOf, Arg, configure } from '@fluffy-spoon/substitute'
 
 // each call is checked against one variant's parameter list as a whole
@@ -2330,6 +2381,23 @@ control.onClick(function (this: Button, x: number) { }).returns()
 control.onClick(function (this: Link, x: number) { }).returns()
 // @ts-expect-error no variant takes a listener whose `this` is an Image
 control.received(0).onClick(function (this: Image, x: number) { })
+
+// such a call takes that variant's return type, also when it leaves out an optional parameter
+interface Btn { kind: 'btn'; onPress(listener: (this: Btn, x: number) => void, options?: { once: boolean }): 'b' }
+interface Lnk { kind: 'lnk'; onPress(listener: (this: Lnk, x: number) => void, options?: { once: boolean }): 'l' }
+const widget = Substitute.for<Btn | Lnk>()
+widget.onPress(function (this: Btn, x: number) { }).returns('b')
+widget.onPress(function (this: Lnk, x: number) { }, { once: true }).returns('l')
+// @ts-expect-error Btn's onPress() returns 'b'
+widget.onPress(function (this: Btn, x: number) { }).returns(true)
+
+// callbacks with the `this` types of different variants in one call
+interface Pair1 { kind: 1; both(a: (this: Pair1) => void, b: (this: Pair1) => void): void }
+interface Pair2 { kind: 2; both(a: (this: Pair2) => void, b: (this: Pair2) => void): void }
+const pair = Substitute.for<Pair1 | Pair2>()
+pair.both(function (this: Pair1) { }, function (this: Pair1) { }).returns()
+// @ts-expect-error no variant takes both
+pair[configure]().both(function (this: Pair1) { }, function (this: Pair2) { }).returns()
 
 // the variants declare the method with different parameter lists
 interface ClientV1 { version: 1; fetch(url: string): Promise<string> }
