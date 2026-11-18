@@ -115,8 +115,9 @@ type UndefinedArg<TContext> = undefined extends TContext ? TContext : TContext e
 // __brand: 'OrderId' }`). The matcher then takes the part of the parameter's type that is of its primitive type (it
 // matches only such values anyway). Where the parameter has no such part (`Arg.any('string')` for a number), or without
 // a parameter (`const m = Arg.any('string')`), it is the primitive type itself, which a parameter of another type
-// rejects.
+// rejects. (Without a parameter, `TContext` is `undefined`, which without `strictNullChecks` is part of every type.)
 type PrimitiveArg<TContext, TPrimitive> =
+  [TContext] extends [undefined] ? ReturnArg<TPrimitive> :
   [Extract<TContext, TPrimitive>] extends [never] ? ReturnArg<TPrimitive> : ReturnArg<Extract<TContext, TPrimitive>>
 
 type PrimitiveTypes = { string: string, number: number, boolean: boolean, symbol: symbol, bigint: bigint }
