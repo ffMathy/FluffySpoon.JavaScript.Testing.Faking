@@ -138,14 +138,15 @@ type AssertionMember<TValue> = {
 // it in a check (`pet.received().speak = () => {}`) does not compile, as for any other callable member, whose call
 // signatures that take `Arg.all()` reject a function with parameters, and as TypeScript rejects a function that does
 // not fit the union (R9TD-5, T62). A call signature would have done that as well, but made calls of such members
-// costlier to type-check; a construct signature is not looked at for calls.
+// costlier to type-check; a construct signature is not looked at for calls. It returns `unknown`, so that the function
+// matcher `Arg.any('function')`, which is typed as any function or constructor, still fits (R11TD-2, T67).
 type AssertionCallMember<TValue> = {
   single: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
   [union: number]: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & UnionAssertionRest<TValue>
 }[VariantsKind<NonNullable<TValue>>]
 type UnionAssertionRest<TValue> =
   [keyof NonNullable<TValue>] extends [never] ? ([Extract<TValue, null | undefined>] extends [never] ? NotAssignable : TValue) : TValue
-type NotAssignable = new (...args: never[]) => never
+type NotAssignable = new (...args: never[]) => unknown
 
 // For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
 type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
