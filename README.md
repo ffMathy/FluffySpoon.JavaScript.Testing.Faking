@@ -303,6 +303,15 @@ interface CancellablePromise<T> extends Promise<T> {
 interface Jobs {
   run(name: string): CancellablePromise<number>
 }
+// a subtype without members of its own, like Prisma's
+interface PrismaPromise<T> extends Promise<T> {
+  readonly [Symbol.toStringTag]: 'PrismaPromise'
+}
+interface Users {
+  count(): PrismaPromise<number>
+}
+
+Substitute.for<Users>().count().resolves(3)
 
 const jobs = Substitute.for<Jobs>()
 // @ts-expect-error a native promise has no cancel()
@@ -2624,7 +2633,7 @@ A call or property read with small arguments takes a few microseconds. Measured 
 
 Finding the setup and the auto-substitute for a call does not scan earlier calls. It looks the arguments up by a hash whose cost is bounded, whatever their size or shape: nested objects, objects with cycles (such as a child that refers back to its parent), errors, long arrays, `Buffer`s and typed arrays, long strings, `Map`s, `Set`s, `Date`s or URLs. Measured on Node.js 22, each of these takes about 0.1 to 0.25 seconds: 10,000 calls with nested-object arguments, 4,000 setups with object arguments plus 4,000 matching calls, 10,000 calls with a different `Error` each, 10,000 calls with objects that refer back to their parent, 200 calls with different 1 MB strings, and 20 calls with arrays of 150,000 objects.
 
-A URL (a WHATWG `URL`) is hashed by its address, so calls with different URLs are told apart without comparing them, also when the URLs are inside other objects, and in fetch `Request`s on Node.js 20 and 22, which hold their URL. Measured on Node.js 22, 10,000 calls with different URLs take about 0.09 seconds, 10,000 calls with different URLs inside an object (`{ url, method }`) about 0.11 seconds, and 10,000 calls with different `Request`s about 0.21 seconds. Promises (on Node.js 24 and newer) and `WeakMap`s and `WeakSet`s (on Node.js 22 and newer), which Node.js compares by identity, are hashed by identity: 10,000 calls with different promises or `WeakMap`s take about 0.1 seconds.
+A URL of the global `URL` class (the one the library finds when it is loaded, a WHATWG `URL`) is hashed by its address, so calls with different URLs are told apart without comparing them, also when the URLs are inside other objects, and in fetch `Request`s on Node.js 20 and 22, which hold their URL. Measured on Node.js 22, 10,000 calls with different URLs take about 0.09 seconds, 10,000 calls with different URLs inside an object (`{ url, method }`) about 0.11 seconds, and 10,000 calls with different `Request`s about 0.21 seconds. Promises (on Node.js 24 and newer) and `WeakMap`s and `WeakSet`s (on Node.js 22 and newer), which Node.js compares by identity, are hashed by identity: 10,000 calls with different promises or `WeakMap`s take about 0.1 seconds.
 
 The hash reads only a bounded part of each argument:
 
@@ -2647,7 +2656,7 @@ Arguments that a setup or an earlier call already used are found by identity fir
 
 Arguments with the same hash are told apart by comparing them in full, with `util.isDeepStrictEqual`, so a copy of an object only matches a setup or an earlier call after that comparison. For wide objects, it costs about 1.3 milliseconds per 5,000 keys: 200 setups with different objects with 5,000 keys plus 200 calls with copies of them take about 0.34 seconds, of which about 0.26 seconds is that comparison.
 
-Arguments that differ only outside the parts that the hash reads get the same hash. They are still told apart correctly, but each new call is compared with every earlier call with that hash, so many such calls get slow: 200 calls with 1 MB strings of the same length that differ only in a few characters in the middle take about 1.6 to 1.8 seconds. The same applies to symbols with the same description (`Symbol('id')`), because a symbol is hashed by its description: 4,000 calls with such symbols take about 0.21 seconds. It applies as well to built-in objects whose state Node.js compares, but which have no keys that the hash could read: `crypto` `KeyObject`s and WebCrypto `CryptoKey`s. Measured on Node.js 22, 24 and 26, 2,000 calls with different secret `KeyObject`s take about 0.5 to 0.9 seconds, and 1,000 calls with different `CryptoKey`s about 1 to 1.1 seconds. A value that cannot be read, such as an object with a getter that throws, is matched by its identity (see [How arguments are compared](#how-arguments-are-compared)) and read at most once per call: 4,000 calls with different such objects take about 0.1 seconds.
+Arguments that differ only outside the parts that the hash reads get the same hash. They are still told apart correctly, but each new call is compared with every earlier call with that hash, so many such calls get slow: 200 calls with 1 MB strings of the same length that differ only in a few characters in the middle take about 1.6 to 1.8 seconds. The same applies to symbols with the same description (`Symbol('id')`), because a symbol is hashed by its description: 4,000 calls with such symbols take about 0.21 seconds. It applies as well to built-in objects whose state Node.js compares, but which have no keys that the hash could read: `crypto` `KeyObject`s and WebCrypto `CryptoKey`s. Measured on Node.js 22, 24 and 26, 2,000 calls with different secret `KeyObject`s take about 0.5 to 0.9 seconds, and 1,000 calls with different `CryptoKey`s about 1 to 1.1 seconds. The same goes for URLs of another `URL` class than the global one, such as jsdom's `window.URL` used from Node.js (`new JSDOM().window.URL`): Node.js compares them by their address, but the library does not recognise them as URLs. Measured on Node.js 22, 1,000 calls with different such URLs take about 0.5 seconds, 2,000 about 1.7 seconds and 4,000 about 7 seconds, while 4,000 calls with different Node.js URLs take about 0.04 seconds. Under `jest-environment-jsdom`, the global `URL` is jsdom's, so its URLs are hashed by their address: 4,000 calls take about 0.08 seconds. A value that cannot be read, such as an object with a getter that throws, is matched by its identity (see [How arguments are compared](#how-arguments-are-compared)) and read at most once per call: 4,000 calls with different such objects take about 0.1 seconds.
 
 Setups with matchers cannot be looked up by a hash: a call tries the matcher setups of its member one by one. So many matcher setups on the same member slow down each call of it: 4,000 setups with `Arg.is()` plus 4,000 calls take about 0.9 seconds, and with a matcher inside an object (`find({ id: i, name: Arg.any() })`) about 10 seconds. A check goes through the received calls of the member that it checks.
 

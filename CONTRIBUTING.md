@@ -97,8 +97,8 @@ made again, up to three measurements in all (`RATIO_ATTEMPTS`), and the smallest
 load that comes and goes during one measurement does not fail the test, while a real slowdown, which is over the limit
 in every measurement, still does. Every measurement is logged. A test in
 `spec/regression/fixes/round10-hashing.test.ts` checks that no timing-sensitive file compares a ratio of timings with
-its limit directly. Absolute
-limits (such as 10,000 calls in under 1 s) are checked with `timeLimit()` and `assertWithin()` from
+its limit directly. Absolute limits (such as 10,000 calls in under 1 s) are checked with `timeLimit()` and
+`assertWithin()` from
 `spec/helpers/timing.ts`. Right before the measurement, the helper times a fixed CPU-bound workload in the same
 process, and scales the limit by that time over the workload's time on an idle machine (`IDLE_WORKLOAD_MS`, 9 ms),
 clamped to between 1 and 4 (`MAX_FACTOR`). If a measurement exceeds its limit, it is judged once more against the
@@ -177,10 +177,20 @@ Afterwards the same script runs two more checks with the TypeScript of this repo
 - `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
   compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
   against the built typings and fails when that needs more type instantiations than its budget,
-  `INSTANTIATION_BUDGET` in the script: 470,000 (469,961 with TypeScript 5.9.2 now, so 39 to spare: a change to the
-  typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change to the typings that needs more must make them cheaper, or raise the budget
-  in the same change with a reason in the script's header. To run it alone: `npm run build && node
-  spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
+  `INSTANTIATION_BUDGET` in the script: 470,000 (469,885 with TypeScript 5.9.2 now, so 115 to spare: a change to the
+  typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change
+  to the typings that needs more must make them cheaper, or raise the budget in the same change with a reason in the
+  script's header. To run it alone: `npm run build && node spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
+
+  The budget covers TypeScript 5.9 only. On older TypeScript, large unions cost more, and that cost is accepted as it
+  is (README, "Typing limitations"). Check times measured on Node.js 22 with `strict` and `skipLibCheck`, best of 3:
+  the T44 fixture takes 4.6 s on TypeScript 3.6, 4.0 s on 4.2, 4.9 s on 4.5, 2.7 s on 5.9 and 1.5 s on 7.0; a
+  substitute of a union of 60 interfaces whose methods have different parameter lists takes 32 s on 3.6 and 39 s on
+  4.2 (those versions merge the signatures of each variant's members in quadratic time, and the per-arity signatures
+  of such methods multiply them), 4.2 s on 4.5, 3.3 s on 5.9 and 1.4 s on 7.0; a few setups on Node.js'
+  `EventEmitter<Events>` (`@types/node` 18) take 0.32 to 0.36 s on 4.8 to 5.9 and 0.05 s on 7.0, mostly for its
+  generic methods, whose signatures are built when the substitute is compared with `EventEmitter`. A change to the
+  typings should not make these slower; compare before and after on TypeScript 3.6 and 5.9.
 
 ### Documentation examples
 
