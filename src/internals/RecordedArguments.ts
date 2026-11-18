@@ -1,5 +1,8 @@
 import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
-import { argumentsAreEquivalent, evaluateArgument, isAllArguments, isArgumentMatcher, isSingleArgument, matcherFactoryOf } from '../shared'
+import {
+  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
+  isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf
+} from '../shared'
 import { SubstituteException } from './SubstituteException'
 import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 import { noteMatcherHolder } from './utilities/Stringify'
@@ -44,17 +47,32 @@ const literalEquals = (expected: unknown, actual: unknown): boolean => {
 
 // ---- D27: matchers nested in plain objects and arrays ------------------------------------------
 
-/** Arrays, and objects whose prototype is Object.prototype or null: the only values that may hold nested matchers. */
-const isPlainContainer = (value: unknown): value is object => {
-  if (typeof value !== 'object' || value === null || isArgumentMatcher(value)) return false
+/**
+ * What a value is to the search for matchers: the kind of matcher of an expected argument (an Arg matcher, or E75 a
+ * matcher of a test runner), 'plain' for a plain container (an array, or an object whose prototype is Object.prototype
+ * or null: the only values that may hold nested matchers, D27), or undefined for anything else. E75: with one look at
+ * the value (one read of the matcher brand, its prototype, and one own-property check for the test runners' matchers,
+ * two for an object that is not plain), wherever matchers are looked for.
+ */
+type Look = MatcherKind | 'plain' | undefined
+
+const lookAt = (value: unknown): Look => {
+  if (typeof value !== 'object' || value === null) return undefined
+  const brand = argumentKindOf(value)
+  if (brand !== undefined) return brand
+  let plain: boolean
   try {
-    if (Array.isArray(value)) return true
+    if (Array.isArray(value)) return 'plain'
     const prototype = Object.getPrototypeOf(value)
-    return prototype === Object.prototype || prototype === null
+    plain = prototype === Object.prototype || prototype === null
   } catch {
-    return false // a revoked proxy
+    return undefined // a revoked proxy
   }
+  return foreignMatcherKind(value, plain) ?? (plain ? 'plain' : undefined)
 }
+
+/** Arrays, and objects whose prototype is Object.prototype or null, that are not matchers (see lookAt). */
+const isPlainContainer = (value: unknown): value is object => lookAt(value) === 'plain'
 
 /** The own enumerable string and symbol keys of a plain object (the keys deep strict equality compares). */
 const ownEnumerableKeys = (object: object): PropertyKey[] => {
@@ -122,10 +140,11 @@ type Search = { root: object, visited: Map<object, boolean> | undefined, items: 
 
 /** `probe`: whether a container may be looked up in the families (see ArgumentHash.hashKeyed): not an array item. */
 const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search, probe: boolean): boolean => {
-  if (isArgumentMatcher(item)) return true
-  if (budget > 0 && depth < MAX_SCAN_DEPTH) return isPlainContainer(item) && holdsMatcher(item, budget, depth + 1, search, probe)
+  const look = lookAt(item)
+  if (look !== 'plain') return look !== undefined
+  if (budget > 0 && depth < MAX_SCAN_DEPTH) return holdsMatcher(item as object, budget, depth + 1, search, probe)
   // E20: only a plain container is ever searched, so only one is left out (a Date or a class instance is not)
-  if (isPlainContainer(item)) search.cuts++
+  search.cuts++
   return false
 }
 
@@ -230,10 +249,11 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
   const pending: Array<[object, number]> = [[root, 0]]
   let items = SCAN_ITEMS
   const look = (value: unknown, depth: number): boolean => {
-    if (isArgumentMatcher(value)) return false
-    if (depth < MAX_SCAN_DEPTH && isPlainContainer(value) && !seen.has(value) && !notSearched.has(value)) {
-      seen.add(value)
-      pending.push([value, depth])
+    const kind = lookAt(value)
+    if (kind !== 'plain') return kind === undefined
+    if (depth < MAX_SCAN_DEPTH && !seen.has(value as object) && !notSearched.has(value as object)) {
+      seen.add(value as object)
+      pending.push([value as object, depth])
     }
     return true
   }
@@ -264,27 +284,36 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
  * Whether a value has a matcher nested in a plain object or array (D27), within the bounds above. A container that
  * cannot be read (a throwing getter) holds no matcher.
  */
-const containsNestedMatcher = (value: unknown): boolean => {
-  if (!isPlainContainer(value)) return false
+const containsNestedMatcher = (value: unknown): boolean => isPlainContainer(value) && holdsNestedMatcher(value)
+
+/** containsNestedMatcher for a value known to be a plain container (see lookAt). */
+const holdsNestedMatcher = (container: object): boolean => {
   try {
-    return holdsMatcher(value, SCAN_BUDGET, 0, { root: value, visited: undefined, items: SCAN_ITEMS, cuts: 0 }, true)
+    return holdsMatcher(container, SCAN_BUDGET, 0, { root: container, visited: undefined, items: SCAN_ITEMS, cuts: 0 }, true)
   } catch {
     return false
   }
 }
 
+/** Whether an argument is a matcher or holds one (D3, D27, E75), with one look at it (see lookAt). */
+const isOrHoldsMatcher = (argument: unknown): boolean => {
+  const look = lookAt(argument)
+  return look === 'plain' ? holdsNestedMatcher(argument as object) : look !== undefined
+}
+
 /** The plain containers in `value` that hold a matcher somewhere inside, for a specification. */
 const collectMatcherContainers = (value: unknown, found: Set<object>, visited: Set<object>): boolean => {
-  if (isArgumentMatcher(value)) return true
-  if (!isPlainContainer(value) || visited.has(value)) return found.has(value as object)
-  visited.add(value)
+  const look = lookAt(value)
+  if (look !== 'plain') return look !== undefined
+  if (visited.has(value as object)) return found.has(value as object)
+  visited.add(value as object)
   let holds = false
   try {
-    for (const [, item] of containerEntries(value)) if (collectMatcherContainers(item, found, visited)) holds = true
+    for (const [, item] of containerEntries(value as object)) if (collectMatcherContainers(item, found, visited)) holds = true
   } catch {
     return false
   }
-  if (holds) found.add(value)
+  if (holds) found.add(value as object)
   return holds
 }
 
@@ -314,18 +343,20 @@ const DIFFERS: Evaluation = { matches: false }
  * A pair of containers that is already being compared further up matches (cycles end).
  */
 const matchNested = (expected: unknown, actual: unknown, matcherContainers: ReadonlySet<object>, comparing: Array<[unknown, unknown]>): Evaluation => {
-  if (isSingleArgument(expected)) {
-    if (isArgumentMatcher(actual)) return DIFFERS
-    const evaluation = evaluateArgument(expected, actual)
+  const kind = matcherKindOf(expected)
+  if (kind === 'all') return MATCHES
+  if (kind !== undefined) {
+    // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3)
+    if (isArgMatcher(actual)) return DIFFERS
+    const evaluation = evaluateMatcher(expected, kind, actual)
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
-  if (isAllArguments(expected)) return MATCHES
   if (!matcherContainers.has(expected as object)) return literalEquals(expected, actual) ? MATCHES : DIFFERS
   if (comparing.some(([e, a]) => e === expected && a === actual)) return MATCHES
 
   const container = expected as object
   try {
-    if (typeof actual !== 'object' || actual === null || isArgumentMatcher(actual)) return DIFFERS
+    if (typeof actual !== 'object' || actual === null || isArgMatcher(actual)) return DIFFERS
     if (Array.isArray(container) !== Array.isArray(actual) || Object.getPrototypeOf(container) !== Object.getPrototypeOf(actual)) return DIFFERS
     let pairs: Array<[unknown, unknown]>
     if (Array.isArray(container)) {
@@ -355,11 +386,20 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
   }
 }
 
+/**
+ * Whether two matchers always give the same answer (see argumentsAreEquivalent). E75: two matchers of a test runner of
+ * the same kind when they are equal (`expect.any(String)` twice: the same class and sample).
+ */
+const equivalentMatchers = (a: unknown, b: unknown): boolean => {
+  if (isArgMatcher(a) || isArgMatcher(b)) return isArgMatcher(a) && isArgMatcher(b) && argumentsAreEquivalent(a, b)
+  return foreignMatcherOf(a) === foreignMatcherOf(b) && literalEquals(a, b)
+}
+
 /** Whether two expected values are the same specification (re-configuration), matchers compared as matchers. */
 const equivalentNested = (a: unknown, b: unknown, depth = 0): boolean => {
   const aIsMatcher = isArgumentMatcher(a)
   const bIsMatcher = isArgumentMatcher(b)
-  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && argumentsAreEquivalent(a, b)
+  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && equivalentMatchers(a, b)
   if (!containsNestedMatcher(a) && !containsNestedMatcher(b)) return literalEquals(a, b)
   if (depth > 64 || !isPlainContainer(a) || !isPlainContainer(b)) return false
   if (Array.isArray(a) !== Array.isArray(b) || Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false
@@ -378,7 +418,7 @@ const equivalentNested = (a: unknown, b: unknown, depth = 0): boolean => {
 const equivalentArgument = (a: unknown, b: unknown): boolean => {
   const aIsMatcher = isArgumentMatcher(a)
   const bIsMatcher = isArgumentMatcher(b)
-  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && argumentsAreEquivalent(a, b)
+  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && equivalentMatchers(a, b)
   return literalEquals(a, b)
 }
 
@@ -394,21 +434,33 @@ export class RecordedArguments {
   private _value?: any[]
   /** D27: the plain objects and arrays among the arguments that hold matchers (undefined when there are none). */
   private _matcherContainers?: ReadonlySet<object>
+  /** The kind of matcher each argument is, if it is one (E75: of any kind); undefined when none is. */
+  private _kinds?: ReadonlyArray<MatcherKind | undefined>
 
   private constructor(rawArguments: any[] | void) {
     if (typeof rawArguments === 'undefined') return this
 
     this._value = rawArguments
     let containers: Set<object> | undefined
-    for (const argument of rawArguments) {
-      if (isArgumentMatcher(argument) || !containsNestedMatcher(argument)) continue
+    let kinds: Array<MatcherKind | undefined> | undefined
+    for (let index = 0; index < rawArguments.length; index++) {
+      const argument = rawArguments[index]
+      const look = lookAt(argument)
+      if (look === undefined) continue
+      if (look !== 'plain') {
+        if (kinds === undefined) kinds = new Array(rawArguments.length)
+        kinds[index] = look
+        continue
+      }
+      if (!holdsNestedMatcher(argument)) continue
       if (containers === undefined) containers = new Set()
       collectMatcherContainers(argument, containers, new Set())
     }
     // E54: messages and printouts show these containers at any depth, so that the matchers in them show
     if (containers !== undefined) containers.forEach(noteMatcherHolder)
     this._matcherContainers = containers
-    this._argumentsClass = this.classifyArguments(rawArguments)
+    this._kinds = kinds
+    this._argumentsClass = this.classifyArguments()
   }
 
   static from(rawArguments: any[]): RecordedArguments {
@@ -471,7 +523,7 @@ export class RecordedArguments {
    */
   static containsMatchers(rawArguments: readonly unknown[]): boolean {
     forgetListings()
-    for (const argument of rawArguments) if (isArgumentMatcher(argument) || containsNestedMatcher(argument)) return true
+    for (const argument of rawArguments) if (isOrHoldsMatcher(argument)) return true
     return false
   }
 
@@ -516,6 +568,7 @@ export class RecordedArguments {
     if (expected === undefined || actualArguments === undefined)
       return expected === undefined && actualArguments === undefined ? MATCH : NO_MATCH
 
+    const kinds = this._kinds
     const length = Math.max(expected.length, actualArguments.length)
     for (let index = 0; index < length; index++) {
       // an argument the specification does not have: only undefined matches it
@@ -524,12 +577,15 @@ export class RecordedArguments {
         continue
       }
       const expectedArgument = expected[index]
-      if (isAllArguments(expectedArgument)) return MATCH
+      const kind = kinds?.[index]
+      if (kind === 'all') return MATCH
       // undefined when the call does not have this argument
       const actualArgument = actualArguments[index]
-      if (isSingleArgument(expectedArgument)) {
-        if (isArgumentMatcher(actualArgument)) return NO_MATCH
-        const evaluation = evaluateArgument(expectedArgument, actualArgument)
+      if (kind !== undefined) {
+        // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3; E75: a test runner's
+        // matcher there is a value like any other)
+        if (isArgMatcher(actualArgument)) return NO_MATCH
+        const evaluation = evaluateMatcher(expectedArgument, kind, actualArgument)
         if (!evaluation.matches)
           return evaluation.threw ? { matches: false, predicateThrew: true, predicateError: evaluation.error } : NO_MATCH
         continue
@@ -567,9 +623,10 @@ export class RecordedArguments {
     return true
   }
 
-  private classifyArguments(rawArguments: any[]): ArgumentsClass {
-    if (this._matcherContainers === undefined && !rawArguments.some(argument => isArgumentMatcher(argument))) return 'plain'
-    if (rawArguments.length > 0 && isAllArguments(rawArguments[0])) return 'wildcard'
+  private classifyArguments(): ArgumentsClass {
+    const kinds = this._kinds
+    if (this._matcherContainers === undefined && kinds === undefined) return 'plain'
+    if (kinds !== undefined && kinds[0] === 'all') return 'wildcard'
     return 'with-predicate'
   }
 

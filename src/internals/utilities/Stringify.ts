@@ -1,5 +1,5 @@
 import { inspect, InspectOptions, types } from 'util'
-import { isAllArguments, isArgumentMatcher } from '../../shared'
+import { foreignMatcherLabel, isAllArguments, isArgumentMatcher } from '../../shared'
 import { libraryGuard } from './Guard'
 
 /**
@@ -709,6 +709,14 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if (typeof value !== 'object' || value === null) return value
   const ancestor = walk.ancestors.get(value)
   if (ancestor !== undefined) return ancestor // a cycle
+  // E75: a matcher of a test runner prints as the runner shows it (`Any<String>`, `StringContaining '@'`, `has("err")`)
+  const foreign = foreignMatcherLabel(value)
+  if (foreign !== undefined) {
+    const text = foreign.text
+    if (foreign.sample === undefined) return printsAs(() => text)
+    const sample = prepared(foreign.sample.value, level + 1, walk)
+    return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth })}`)
+  }
   if (isError(value)) {
     const text = errorText(value)
     walk.budget -= text.length
