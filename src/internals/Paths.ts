@@ -1,5 +1,6 @@
 import { SELF, keyToString } from './Constants'
 import { PATH_BOUNDS, formatBounded, withPrintGuard } from './utilities'
+import { libraryGuard } from './utilities/Guard'
 
 /*
  * The paths of auto-substitutes (`@Substitute.logger`, `@Substitute.getUser(1).name`), as printouts and messages show
@@ -89,19 +90,20 @@ export const pathPieces = (leaf: PathEntry | undefined, ancestor?: PathState): s
  * call print alike, but differ in which substitute is an argument (`use('/admin', @Substitute)` twice), is built again
  * with the roots numbered in the order they appear in it (`@Substitute#1.use('/admin', @Substitute#2)`), see
  * SubstituteException. The numbers belong to that message only, so messages stay the same from run to run.
+ * E71 (R11V-4): the numbers are kept on the guard that the copies of the library share (see Guard), so that a
+ * substitute of another copy among the arguments (duplicate installs) is numbered in the message, too.
  */
-let rootNumbers: Map<PathState, number> | undefined
 
 /**
- * E60: how many root labels have been shown so far (in paths and printouts), so that a failure message can tell which
- * printed values show a substitute, and reuse the others when it is built again with the roots numbered.
+ * E60: how many root labels have been shown so far (in paths and printouts, E71: by any copy), so that a failure message
+ * can tell which printed values show a substitute, and reuse the others when it is built again with the roots numbered.
  */
-let rootLabelsShown = 0
-export const rootLabelCount = (): number => rootLabelsShown
+export const rootLabelCount = (): number => libraryGuard.rootLabels
 
 /** How a root substitute is shown: `@Substitute`, or `@Substitute#n` while roots are numbered. */
 export const rootLabel = (root: PathState): string => {
-  rootLabelsShown++
+  libraryGuard.rootLabels++
+  const rootNumbers = libraryGuard.rootNumbers
   if (rootNumbers === undefined) return '@Substitute'
   let number = rootNumbers.get(root)
   if (number === undefined) {
@@ -113,13 +115,14 @@ export const rootLabel = (root: PathState): string => {
 
 /** Runs `print` with the roots numbered (see above), and gives how many roots it showed. */
 export const withRootNumbers = <T>(print: () => T): { value: T, roots: number } => {
-  const outer = rootNumbers
-  rootNumbers = new Map()
+  const outer = libraryGuard.rootNumbers
+  const rootNumbers = new Map<object, number>()
+  libraryGuard.rootNumbers = rootNumbers
   try {
     const value = print()
     return { value, roots: rootNumbers.size }
   } finally {
-    rootNumbers = outer
+    libraryGuard.rootNumbers = outer
   }
 }
 
@@ -131,8 +134,8 @@ const rootOf = (entry: PathEntry): PathState => {
 
 /** The path of an auto-substitute: `@Substitute.logger`, `@Substitute.getUser(1)`, `@Substitute('saved')`. */
 export const entryPath = (entry: PathEntry): string => {
-  if (rootNumbers !== undefined) return `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
-  rootLabelsShown++
+  if (libraryGuard.rootNumbers !== undefined) return `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
+  libraryGuard.rootLabels++
   return `@Substitute${pathPieces(entry)}`
 }
 

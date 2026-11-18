@@ -14,6 +14,13 @@ export type LibraryGuard = {
   printing: number
   /** How many comparisons of any copy are under way (see literalEquals). */
   comparing: number
+  /**
+   * E71 (R11V-4): while a failure message is built with its roots numbered (E52, see Paths.withRootNumbers), the numbers
+   * of the roots shown so far, so that a substitute of another copy among the arguments is numbered in the same message.
+   */
+  rootNumbers?: Map<object, number>
+  /** E71: how many root labels the copies have shown (see Paths.rootLabelCount). */
+  rootLabels: number
 }
 
 const GUARD_KEY = Symbol.for('@fluffy-spoon/substitute:guard')
@@ -23,14 +30,18 @@ const isGuard = (value: unknown): value is LibraryGuard =>
   typeof (value as LibraryGuard).printing === 'number' && typeof (value as LibraryGuard).comparing === 'number'
 
 const sharedGuard = (): LibraryGuard => {
-  const own: LibraryGuard = { printing: 0, comparing: 0 }
+  const own: LibraryGuard = { printing: 0, comparing: 0, rootNumbers: undefined, rootLabels: 0 }
   // (Node.js 10 has no globalThis)
   const scope: Record<symbol, unknown> | undefined = typeof globalThis === 'object' && globalThis !== null ? globalThis as any
     : typeof global === 'object' && global !== null ? global as any : undefined
   if (scope === undefined) return own
   try {
     const existing = scope[GUARD_KEY]
-    if (isGuard(existing)) return existing
+    if (isGuard(existing)) {
+      // (made by an earlier version of the library, which does not share the numbering)
+      if (typeof existing.rootLabels !== 'number') Object.assign(existing, { rootNumbers: undefined, rootLabels: 0 })
+      return existing
+    }
     Object.defineProperty(scope, GUARD_KEY, { value: own, writable: false, enumerable: false, configurable: true })
   } catch { /* a global object that cannot take it */ }
   return own
