@@ -1,5 +1,5 @@
 import { describe, expect, jest, test } from '@jest/globals'
-import Substitute from '@fluffy-spoon/substitute'
+import Substitute, { Arg } from '@fluffy-spoon/substitute'
 
 // P28 (ENG2-7): jest treats any value whose `asymmetricMatch` member is a function as an asymmetric matcher (like
 // expect.any()) and asks it whether it matches. An unconfigured member of a substitute is an auto-substitute, which is
@@ -214,5 +214,50 @@ User {
     repository.save(new User(1, 'ann')).returns('saved')
     expect(repository.save(new User(1, 'ann'))).toBe('saved')
     repository.received(1).save(new User(1, 'ann'))
+  })
+})
+
+// Round 13 (E75, R12FE-1): jest's asymmetric matchers (expect.any, expect.anything, expect.stringContaining,
+// expect.objectContaining, expect.arrayContaining, expect.closeTo, the expect.not forms) in the expected arguments of a
+// check or a setup match as they do in jest's own equality, at the top level and nested in plain objects and arrays, and
+// a failure message prints them as jest does. Before, they were compared as values: didNotReceive() with them always
+// passed, and setups with them never answered.
+describe('E75 jest asymmetric matchers in checks and setups', () => {
+  test('didNotReceive() with them fails when a matching call was made, and received() with them passes', () => {
+    const mailer = Substitute.for<any>()
+    mailer.send('ann@example.com', 'welcome', { customer: 'cus_1', tags: ['vip'] })
+    expect(() => mailer.didNotReceive().send(expect.any(String), 'welcome', expect.anything())).toThrow(
+      "Expected to receive 0 method calls matching send(Any<String>, 'welcome', Anything), but received 1."
+    )
+    mailer.received(1).send(expect.stringContaining('@'), 'welcome', expect.objectContaining({ customer: 'cus_1' }))
+    mailer.received(1).send(expect.stringMatching(/^ann@/), expect.not.stringContaining('dunning'), {
+      customer: expect.any(String),
+      tags: expect.arrayContaining(['vip'])
+    })
+    mailer.didNotReceive().send(expect.any(Number), Arg.all())
+    expect(() => mailer.received(2).send(expect.stringContaining('@'), 'welcome', expect.objectContaining({ customer: 'cus_1' }))).toThrow(
+      "matching send(StringContaining '@', 'welcome', ObjectContaining { customer: 'cus_1' })"
+    )
+  })
+
+  test('setups with them answer the calls they match, and calls with them are setups, not calls', async () => {
+    const mailer = Substitute.for<any>()
+    mailer.send(expect.any(String), 'dunning').resolves({ messageId: 'm1' })
+    await expect(mailer.send('bob@example.com', 'dunning')).resolves.toEqual({ messageId: 'm1' })
+    expect(typeof mailer.send('bob@example.com', 'welcome')).toBe('function')
+    const calc = Substitute.for<any>()
+    calc.add(expect.closeTo(0.3, 5), Arg.any()).returns(42)
+    expect(calc.add(0.1 + 0.2, 1)).toBe(42)
+    calc.received(1).add(expect.closeTo(0.3, 5), Arg.any())
+    calc.received(1).add(Arg.all())
+  })
+
+  test('substitutes still compare by identity in jest\'s own matchers', () => {
+    const logger = Substitute.for<Logger>()
+    const fn = jest.fn()
+    fn(logger)
+    expect(fn).toHaveBeenCalledWith(logger)
+    expect(fn).toHaveBeenCalledWith(expect.anything())
+    expectAssertionFailure(failureOf(() => expect(fn).toHaveBeenCalledWith(Substitute.for())), 'toHaveBeenCalledWith')
   })
 })
