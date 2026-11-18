@@ -1,5 +1,5 @@
 import { inspect, InspectOptions, types } from 'util'
-import { isArgumentMatcher } from '../../shared'
+import { isAllArguments, isArgumentMatcher } from '../../shared'
 import { libraryGuard } from './Guard'
 
 /**
@@ -290,6 +290,160 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
     // a container that cannot be read
   }
   return deepest
+}
+
+/*
+ * E59, E60: how deep an expected call and a received call that it does not match must be printed to print differently.
+ * A failure message prints such lines deeper when they print alike (see SubstituteException.deeperLines). Printing every
+ * such line at each depth to find out is what made messages slow (R10V-1), and a matcher in the expected call (it prints
+ * by its label) made every line print differently, wherever else they differed (R10-ADV-1). So the values themselves
+ * are compared, the way printing shows them, to find the least depth at which the lines can print differently, with
+ * the matchers of the expected call left out (a matcher stands where the received value it was given stands):
+ * - a value at level L (an argument is at level 0, a value inside it at 1, ...) shows once its container shows its
+ *   entries, at depth L - 1 (an argument at any depth), and an object there shows as `[Object]`, `[Array]`, `[Foo]`;
+ * - the entries of a container at level L show from depth L on: its keys (the first PrintBounds.keys of them, and how
+ *   many there are), or its length and first maxArrayLength items;
+ * - two strings longer than util.inspect shows of them print alike if what shows is the same, and so do two symbols with
+ *   the same description;
+ * - a value that is not a plain object, an array or a class instance shown by its keys (a substitute, a function, an
+ *   error, a Map, a Date, a proxy, ...) is compared by its printed text (textOf), which the caller keeps per value.
+ * Only the entries that printing shows are looked at, no deeper than a message prints, and at most
+ * DifferenceSearch.entries of them for all the lines of a message. The comparison of a line stops as soon as it prints
+ * differently at `floor`. Getters are not run.
+ */
+
+/**
+ * E60: how many entries firstVisibleDifference looks at for one failure message, at most (for all its lines: about as
+ * many as a few of them show four levels deep). The lines of a message are mostly alike in shape, so the first ones
+ * decide how deep the message prints them all; the lines after the budget is spent are printed as deep as those.
+ */
+export const DIFFERENCE_ENTRIES = 2000
+
+export type DifferenceSearch = {
+  /** The bounds the values are printed with (their depth aside). */
+  readonly bounds: PrintBounds
+  /** How deep the lines can be printed at most: a difference that shows only deeper does not count. */
+  readonly maxDepth: number
+  /** The text of a value printed `depth` levels deep. */
+  readonly textOf: (value: unknown, depth: number) => string
+  /** The own enumerable keys of the objects looked at (for all the lines of one message). */
+  readonly keys: Map<object, PropertyKey[]>
+  /** How many more entries may be looked at (see DIFFERENCE_ENTRIES). */
+  entries: number
+}
+
+/** `stopped`: not every entry that shows was looked at (the budget is spent, or a value cannot be read). */
+type Comparison = { best: number, stopped: boolean, readonly floor: number }
+
+const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
+
+/** A difference that shows from `depth` on. */
+const differs = (comparison: Comparison, depth: number): void => {
+  if (depth < comparison.best) comparison.best = depth
+}
+
+/** Whether two different primitives print alike at `level` (see above). */
+const primitivesPrintAlike = (expected: unknown, actual: unknown, level: number, bounds: PrintBounds): boolean => {
+  if (typeof expected === 'string' && typeof actual === 'string') {
+    const shown = level === 0 ? stringLimit(expected, bounds) : bounds.maxStringLength
+    return expected.length === actual.length && expected.length > shown && expected.slice(0, shown) === actual.slice(0, shown)
+  }
+  return typeof expected === 'symbol' && typeof actual === 'symbol' && expected.toString() === actual.toString()
+}
+
+const keysOf = (search: DifferenceSearch, object: object): PropertyKey[] => {
+  let keys = search.keys.get(object)
+  if (keys === undefined) search.keys.set(object, keys = ownEnumerableKeys(object))
+  return keys
+}
+
+/** Two own properties at `level` (data properties compare their values; accessors show as `[Getter]`, ...). */
+const compareProperties = (search: DifferenceSearch, comparison: Comparison, expected: PropertyDescriptor, actual: PropertyDescriptor, level: number): void => {
+  const expectedData = 'value' in expected
+  if (expectedData && isArgumentMatcher(expected.value)) return
+  if (expectedData && 'value' in actual) return compareValues(search, comparison, expected.value, actual.value, level)
+  if (expectedData || 'value' in actual || (expected.get === undefined) !== (actual.get === undefined) || (expected.set === undefined) !== (actual.set === undefined))
+    differs(comparison, level - 1)
+}
+
+const compareValues = (search: DifferenceSearch, comparison: Comparison, expected: unknown, actual: unknown, level: number): void => {
+  if (comparison.stopped || comparison.best <= comparison.floor || level - 1 >= comparison.best || level - 1 > search.maxDepth) return
+  // a matcher prints by its label wherever the received value stands
+  if (isArgumentMatcher(expected) || Object.is(expected, actual)) return
+  const shows = Math.max(0, level - 1)
+  if (!isObjectLike(expected) || !isObjectLike(actual)) {
+    if (!isObjectLike(expected) && !isObjectLike(actual) && primitivesPrintAlike(expected, actual, level, search.bounds)) return
+    return differs(comparison, shows)
+  }
+  if (--search.entries < 0) {
+    comparison.stopped = true
+    return
+  }
+  const isArray = Array.isArray(expected)
+  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual) ||
+    (!isArray && (isError(expected) || !printsByKeys(expected)))) {
+    const depth = Math.max(0, search.maxDepth - level)
+    if (search.textOf(expected, depth) !== search.textOf(actual, depth)) differs(comparison, shows)
+    return
+  }
+  if (isArray !== Array.isArray(actual) || Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual) ||
+    (!isArray && typeof (actual as any)[inspectCustom] === 'function'))
+    return differs(comparison, shows)
+  // deeper than the lines are printed, both show as `[Object]`, `[Array]` or `[Foo]`; the expected call shows a container
+  // that holds a matcher in full, though (see matcherHolders)
+  if (level > search.maxDepth) {
+    if (matcherHolders.has(expected)) differs(comparison, shows)
+    return
+  }
+  if (isArray) {
+    const items = expected as unknown[]
+    const length = items.length
+    if (length !== (actual as unknown[]).length) return differs(comparison, level)
+    const count = Math.min(length, search.bounds.maxArrayLength)
+    search.entries -= count
+    for (let index = 0; index < count; index++) {
+      const expectedItem = Object.getOwnPropertyDescriptor(expected, index)
+      const actualItem = Object.getOwnPropertyDescriptor(actual, index)
+      if (expectedItem === undefined || actualItem === undefined) {
+        if (expectedItem !== actualItem) differs(comparison, level) // a hole
+      } else compareProperties(search, comparison, expectedItem, actualItem, level + 1)
+    }
+    return
+  }
+  const expectedKeys = keysOf(search, expected)
+  const actualKeys = keysOf(search, actual)
+  if (expectedKeys.length !== actualKeys.length) return differs(comparison, level)
+  const count = Math.min(expectedKeys.length, search.bounds.keys)
+  for (let index = 0; index < count; index++) if (expectedKeys[index] !== actualKeys[index]) return differs(comparison, level)
+  search.entries -= count
+  for (let index = 0; index < count; index++) {
+    const key = expectedKeys[index]
+    compareProperties(search, comparison, Object.getOwnPropertyDescriptor(expected, key)!, Object.getOwnPropertyDescriptor(actual, key)!, level + 1)
+  }
+}
+
+/**
+ * E59, E60: the least depth at which the arguments of an expected call and of a received call print differently, with
+ * the matchers of the expected call left out (see above), as far as they are looked at: the comparison stops at a
+ * difference that shows at `floor` or less, and when the budget is spent (then what was found so far). Infinity when
+ * they print alike up to maxDepth.
+ */
+export const firstVisibleDifference = (search: DifferenceSearch, expected: readonly unknown[], actual: readonly unknown[], floor: number): number => {
+  let count = expected.length
+  const all = expected.findIndex(isAllArguments)
+  // Arg.all() takes the place of the rest of the received arguments
+  if (all >= 0) count = all
+  else if (expected.length !== actual.length) return 0
+  count = Math.min(count, MAX_PRINTED_ARGUMENTS)
+  const comparison: Comparison = { best: Infinity, stopped: false, floor }
+  for (let index = 0; index < count && comparison.best > floor && !comparison.stopped; index++) {
+    try {
+      compareValues(search, comparison, expected[index], actual[index], 0)
+    } catch {
+      comparison.stopped = true // a value that cannot be read
+    }
+  }
+  return comparison.best
 }
 
 /** Settings for tests. `budget`: whether a value is prepared only as far as it shows before the cut (see Walk.budget). */

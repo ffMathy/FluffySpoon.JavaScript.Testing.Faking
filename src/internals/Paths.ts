@@ -92,8 +92,16 @@ export const pathPieces = (leaf: PathEntry | undefined, ancestor?: PathState): s
  */
 let rootNumbers: Map<PathState, number> | undefined
 
+/**
+ * E60: how many root labels have been shown so far (in paths and printouts), so that a failure message can tell which
+ * printed values show a substitute, and reuse the others when it is built again with the roots numbered.
+ */
+let rootLabelsShown = 0
+export const rootLabelCount = (): number => rootLabelsShown
+
 /** How a root substitute is shown: `@Substitute`, or `@Substitute#n` while roots are numbered. */
 export const rootLabel = (root: PathState): string => {
+  rootLabelsShown++
   if (rootNumbers === undefined) return '@Substitute'
   let number = rootNumbers.get(root)
   if (number === undefined) {
@@ -122,8 +130,11 @@ const rootOf = (entry: PathEntry): PathState => {
 }
 
 /** The path of an auto-substitute: `@Substitute.logger`, `@Substitute.getUser(1)`, `@Substitute('saved')`. */
-export const entryPath = (entry: PathEntry): string =>
-  `${rootNumbers === undefined ? '@Substitute' : rootLabel(rootOf(entry))}${pathPieces(entry)}`
+export const entryPath = (entry: PathEntry): string => {
+  if (rootNumbers !== undefined) return `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
+  rootLabelsShown++
+  return `@Substitute${pathPieces(entry)}`
+}
 
 /** The path of a substitute (`@Substitute` for a root) relative to one of its ancestors: `logger`, `getUser(1)`, `('x')`. */
 export const relativePath = (state: PathState, ancestor: PathState): string => {

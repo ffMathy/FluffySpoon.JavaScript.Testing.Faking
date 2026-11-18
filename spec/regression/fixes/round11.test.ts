@@ -186,3 +186,70 @@ test('R10V-2 (E61) a dangling check view after them is still reported, without t
     clock.uninstall()
   }
 })
+
+// ---- E59 (R10-ADV-1): the deeper re-print also applies when the expected call holds matchers -----------------------
+
+/** The message of a failing check, without colours and without its "called at" lines. */
+const messageOf = (assertion: () => unknown): string => {
+  try {
+    assertion()
+  } catch (error) {
+    if (!(error instanceof SubstituteException)) throw error
+    return plain(error.message).split('\n').filter(line => !/^\s+called at /.test(line)).join('\n')
+  }
+  throw new Error('expected the assertion to fail')
+}
+
+/** The expected-call line and the listed received calls of a message, each on one line. */
+const linesOf = (message: string) => {
+  const flat = message.replace(/\n\s*/g, ' ')
+  const expected = /matching (.*?), but received/.exec(flat)?.[1]
+  const received = message.split('\n› ').slice(1).map(line => line.replace(/\n\s*/g, ' ').replace(/^[✔✘] /, '').trim())
+  return { expected, received }
+}
+
+test('R10-ADV-1 (E59) a matcher for a generated id next to a DTO that differs three levels down: both lines are printed deeper', t => {
+  const repo = Substitute.for<any>()
+  repo.save({ id: 'u-81f3', profile: { address: { geo: { lat: 59.9, lng: 10.7 } } } })
+  const saved = linesOf(messageOf(() => repo.received(1).save({ id: Arg.any('string'), profile: { address: { geo: { lat: 60.4, lng: 5.3 } } } })))
+  // 8ce308a: save({ id: Arg.any{string}, profile: { address: { geo: [Object] } } }) and save({ id: 'u-81f3', profile: { address: { geo: [Object] } } })
+  t.is(saved.expected, 'save({ id: Arg.any{string}, profile: { address: { geo: { lat: 60.4, lng: 5.3 } } } })')
+  t.deepEqual(saved.received, ["@Substitute.save({ id: 'u-81f3', profile: { address: { geo: { lat: 59.9, lng: 10.7 } } } })"])
+
+  // a matcher in another argument (a callback)
+  const http = Substitute.for<any>()
+  http.post('/orders', { order: { lines: [{ sku: 'A', qty: 1 }] } }, (): void => undefined)
+  const posted = linesOf(messageOf(() => http.received(1).post('/orders', { order: { lines: [{ sku: 'A', qty: 2 }] } }, Arg.any('function'))))
+  t.is(posted.expected, "post('/orders', { order: { lines: [ { sku: 'A', qty: 2 } ] } }, Arg.any{function})")
+  t.deepEqual(posted.received, ["@Substitute.post('/orders', { order: { lines: [ { sku: 'A', qty: 1 } ] } }, [Function (anonymous)])"])
+
+  // Arg.any() for a timestamp in an ORM update, and Arg.all() for the rest of the arguments
+  const prisma = Substitute.for<any>()
+  prisma.user.update({ where: { id: 7 }, data: { updatedAt: new Date(0), settings: { notifications: { email: true } } } })
+  const updated = linesOf(messageOf(() => prisma.user.received(1).update({ where: { id: 7 }, data: { updatedAt: Arg.any(), settings: { notifications: { email: false } } } })))
+  t.is(updated.expected, 'update({ where: { id: 7 }, data: { updatedAt: Arg.any{any}, settings: { notifications: { email: false } } } })')
+  t.deepEqual(updated.received, ['@Substitute.user.update({ where: { id: 7 }, data: { updatedAt: 1970-01-01T00:00:00.000Z, settings: { notifications: { email: true } } } })'])
+  const log = Substitute.for<any>()
+  log.write({ a: { b: { c: { d: 1 } } } }, 'x', 'y')
+  const written = linesOf(messageOf(() => log.received(1).write({ a: { b: { c: { d: 2 } } } }, Arg.all())))
+  t.is(written.expected, 'write({ a: { b: { c: { d: 2 } } } }, Arg.all{})')
+  t.deepEqual(written.received, ["@Substitute.write({ a: { b: { c: { d: 1 } } } }, 'x', 'y')"])
+})
+
+test('R10-ADV-1 (E59) where only a matcher that does not match tells the lines apart, they are printed as before', t => {
+  const s = Substitute.for<any>()
+  s.f(3, { a: { b: { c: { d: 1 } } } })
+  // the lines differ at the matcher only: printing deeper would show nothing new
+  const same = linesOf(messageOf(() => s.received(1).f(Arg.is((n: number) => n > 5), { a: { b: { c: { d: 1 } } } })))
+  t.is(same.expected, 'f(Arg.is{(n) => n > 5}, { a: { b: { c: [Object] } } })')
+  t.deepEqual(same.received, ['@Substitute.f(3, { a: { b: { c: [Object] } } })'])
+  // and where they also differ further down, the lines are printed as deep as that takes
+  const deeper = linesOf(messageOf(() => s.received(1).f(Arg.is((n: number) => n > 5), { a: { b: { c: { d: 2 } } } })))
+  t.is(deeper.expected, 'f(Arg.is{(n) => n > 5}, { a: { b: { c: { d: 2 } } } })')
+  t.deepEqual(deeper.received, ['@Substitute.f(3, { a: { b: { c: { d: 1 } } } })'])
+  // a line that already differs where it is printed stays as it was
+  s.f(4, { a: 1 })
+  const mixed = linesOf(messageOf(() => s.received(1).f(Arg.any('number'), { a: { b: { c: { d: 2 } } } })))
+  t.is(mixed.expected, 'f(Arg.any{number}, { a: { b: { c: { d: 2 } } } })')
+  t.deepEqual(mixed.received, ['@Substitute.f(3, { a: { b: { c: { d: 1 } } } })', '@Substitute.f(4, { a: 1 })'])
+})
