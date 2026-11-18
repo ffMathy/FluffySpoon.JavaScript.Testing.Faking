@@ -384,6 +384,16 @@ const keysOf = (search: DifferenceSearch, object: object): PropertyKey[] => {
   return keys
 }
 
+/** Whether an object has no own enumerable keys (without listing them, unless they are listed already). */
+const hasNoKeys = (search: DifferenceSearch, object: object): boolean => {
+  const keys = search.keys.get(object)
+  if (keys !== undefined) return keys.length === 0
+  for (const key in object) if (hasOwnProperty.call(object, key)) return false
+  const symbols = Object.getOwnPropertySymbols(object)
+  for (let index = 0; index < symbols.length; index++) if (propertyIsEnumerable.call(object, symbols[index])) return false
+  return true
+}
+
 /** E67: up to how long an array has its keys listed to find its keys other than the indices (a listing lists each index). */
 const ARRAY_KEYS_LIMIT = 1000
 
@@ -454,17 +464,16 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
   if (shape === 'array') return compareArrays(search, comparison, expected as unknown[], actual as unknown[], level, literal)
   if (shape === 'collection')
     return compareCollections(search, comparison, expected as Map<unknown, unknown> | Set<unknown>, actual as Map<unknown, unknown> | Set<unknown>, level)
-  const expectedKeys = keysOf(search, expected)
-  const actualKeys = keysOf(search, actual)
-  // an empty object shows as `{}` or `Foo {}` at any depth, others as `[Object]` or `[Foo]` where it is deeper than the
-  // lines are printed
-  if ((expectedKeys.length === 0) !== (actualKeys.length === 0)) return differs(comparison, shows)
-  // deeper than the lines are printed, both show as `[Object]` or `[Foo]`; the expected call shows a container that
-  // holds a matcher in full, though (see matcherHolders)
+  // deeper than the lines are printed, both show as `[Object]` or `[Foo]` (`{}` or `Foo {}` when empty); the expected
+  // call shows a container that holds a matcher in full, though (see matcherHolders)
   if (level > search.maxDepth) {
-    if (!literal && matcherHolders.has(expected)) differs(comparison, shows)
+    if (hasNoKeys(search, expected) !== hasNoKeys(search, actual) || (!literal && matcherHolders.has(expected))) differs(comparison, shows)
     return
   }
+  const expectedKeys = keysOf(search, expected)
+  const actualKeys = keysOf(search, actual)
+  // an empty object shows as `{}` or `Foo {}` at any depth
+  if ((expectedKeys.length === 0) !== (actualKeys.length === 0)) return differs(comparison, shows)
   const instance = prototype !== Object.prototype && prototype !== null
   compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, search.bounds.keys, level, literal || instance)
 }
@@ -515,17 +524,20 @@ const compareKeys = (
 
 /** Two arrays at `level` with the same prototype: their length, first items and (E67) other keys. */
 const compareArrays = (search: DifferenceSearch, comparison: Comparison, expected: unknown[], actual: unknown[], level: number, literal: boolean): void => {
+  const length = expected.length
+  // an empty array shows as `[]` at any depth (one with other keys does not), others as `[Array]` where it is deeper
+  // than the lines are printed
+  const isEmpty = (array: unknown[]) => array.length === 0 && arrayExtraKeys(array, 0)!.length === 0
+  if (level > search.maxDepth) {
+    if ((length === 0 || actual.length === 0) && isEmpty(expected) !== isEmpty(actual)) differs(comparison, level - 1)
+    else if (!literal && matcherHolders.has(expected)) differs(comparison, level - 1)
+    return
+  }
   const expectedExtra = arrayExtraKeys(expected, ARRAY_KEYS_LIMIT)
   const actualExtra = arrayExtraKeys(actual, ARRAY_KEYS_LIMIT)
   if (expectedExtra === undefined || actualExtra === undefined) return compareTexts(search, comparison, expected, actual, level)
-  // an empty array shows as `[]` at any depth (one with other keys does not)
-  if ((expected.length === 0 && expectedExtra.length === 0) !== (actual.length === 0 && actualExtra.length === 0))
+  if ((length === 0 && expectedExtra.length === 0) !== (actual.length === 0 && actualExtra.length === 0))
     return differs(comparison, level > 0 ? level - 1 : 0)
-  if (level > search.maxDepth) {
-    if (!literal && matcherHolders.has(expected)) differs(comparison, level - 1)
-    return
-  }
-  const length = expected.length
   if (length !== actual.length) return differs(comparison, level)
   const count = Math.min(length, search.bounds.maxArrayLength)
   search.entries -= count
@@ -547,12 +559,12 @@ const compareCollections = (
   const isMap = types.isMap(expected)
   const size: number = (isMap ? mapSize : setSize).call(expected)
   const actualSize: number = (isMap ? mapSize : setSize).call(actual)
-  const expectedKeys = keysOf(search, expected)
-  const actualKeys = keysOf(search, actual)
   // an empty one shows as `Map(0) {}` at any depth, others as `[Map]` where it is deeper than the lines are printed
-  if ((size === 0 && expectedKeys.length === 0) !== (actualSize === 0 && actualKeys.length === 0))
+  if ((size === 0 && hasNoKeys(search, expected)) !== (actualSize === 0 && hasNoKeys(search, actual)))
     return differs(comparison, level > 0 ? level - 1 : 0)
   if (level > search.maxDepth) return
+  const expectedKeys = keysOf(search, expected)
+  const actualKeys = keysOf(search, actual)
   if (size !== actualSize) return differs(comparison, level)
   const count = Math.min(size, search.bounds.maxArrayLength)
   search.entries -= count
