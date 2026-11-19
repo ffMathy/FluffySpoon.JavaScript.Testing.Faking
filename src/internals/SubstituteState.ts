@@ -530,6 +530,18 @@ const memberPath = (state: SubstituteState, key: PropertyKey): string =>
   key === SELF ? state.path : `${state.path}.${keyToString(key)}`
 
 /**
+ * E81, E88 (R14-ADV-5): what a received call answered with when a setup or a mimicked instance answered it (see
+ * SubstituteState.noteConfiguredAnswer): a substitute of this copy of the library (its AutoEntry or SubstituteState), or
+ * anything the engine notes about another value (what gave it, or the value itself, see the engine's handOutConfigured).
+ */
+export type ConfiguredAnswer = object
+
+/** E88: several received calls of one member, one after the other in its records, that the same answer answered. */
+class AnswerRun {
+  constructor(public readonly first: CallRecord, public last: CallRecord) { }
+}
+
+/**
  * Everything the library knows about one substitute (the root, or a cached auto-substitute):
  * the received calls, the configured substitutions, the mimicked instance and the auto-substitutes.
  * Received calls and configured substitutions are kept apart, so that resolving a call never scans
@@ -556,11 +568,12 @@ export class SubstituteState {
   private _handedOutBy?: CallRecord
   private _handedOutAt?: number
   /**
-   * E81: the received calls answered with a configured value that is a substitute, in order, each run of calls answered
-   * by the same one after it (see noteConfiguredAnswer), and the last of them.
+   * E81, E88: what the received calls answered with a configured value (see noteConfiguredAnswer), as pairs of an answer
+   * and the calls it answered (a record, or an AnswerRun of records that follow each other in the records of their
+   * member), and per member where the pair of its latest answer is.
    */
-  private _configuredAnswers?: Array<CallRecord | AutoEntry | SubstituteState>
-  private _lastConfiguredAnswer?: AutoEntry | SubstituteState
+  private _configuredAnswers?: unknown[]
+  private _latestAnswers?: Map<PropertyKey, number>
 
   constructor(public readonly owner?: AutoEntry) { }
 
@@ -661,27 +674,77 @@ export class SubstituteState {
   /**
    * E81: notes that a received call of this substitute answered with a configured value that is a substitute (a setup's
    * value, the auto-substitute of a nested setup through a call with matchers, a mimicked instance's value), so that a
-   * check through a call with matchers can count that substitute's calls. An unconfigured call answers the auto-substitute
-   * of its arguments, which is found again from them (existingCallEntry), so it is not noted.
+   * check through a call with matchers can count that substitute's calls. E88 (R14-ADV-5): and what answered a call with
+   * any other configured value (see ConfiguredAnswer), so that such a check knows that it cannot count it. An
+   * unconfigured call answers the auto-substitute of its arguments, which is found again from them (existingCallEntry), so
+   * it is not noted.
+   *
+   * E88: calls of a member that follow each other in its records and are answered alike (`logger.log(i)` in a loop with
+   * `log(Arg.any()).returns(undefined)`, a fluent loop) are kept as one run, which grows with each call: noting costs no
+   * memory per call then. A call that does not follow the run (another call or read of the member came in between)
+   * starts a new one.
    */
-  public noteConfiguredAnswer(record: CallRecord, answer: AutoEntry | SubstituteState): void {
-    // (a run of calls answered by the same substitute, as in a fluent loop, keeps it once, before the run)
-    const answers = this._configuredAnswers
-    if (answers === undefined) this._configuredAnswers = [answer, record]
-    else if (this._lastConfiguredAnswer === answer) answers.push(record)
-    else answers.push(answer, record)
-    this._lastConfiguredAnswer = answer
+  public noteConfiguredAnswer(record: CallRecord, answer: ConfiguredAnswer): void {
+    const key = record.key
+    // the run noted last goes on when the call comes right after its last call among all the records (a loop)
+    const top = this._configuredAnswers
+    if (top !== undefined && top[top.length - 2] === answer) {
+      const records = this._records
+      const length = records.length
+      const run = top[top.length - 1] as CallRecord | AnswerRun
+      const last = run instanceof AnswerRun ? run.last : run
+      if (last === record) return // (noted already)
+      if (length > 1 && records[length - 1] === record && records[length - 2] === last && last.key === key) {
+        if (run instanceof AnswerRun) run.last = record
+        else top[top.length - 1] = new AnswerRun(run, record)
+        return
+      }
+    }
+    const answers = top ?? (this._configuredAnswers = [])
+    const latest = this._latestAnswers ?? (this._latestAnswers = new Map())
+    const at = latest.get(key)
+    if (at !== undefined && answers[at] === answer) {
+      const records = this._recordsByKey.get(key)
+      const length = records === undefined ? 0 : records.length
+      const run = answers[at + 1] as CallRecord | AnswerRun
+      const last = run instanceof AnswerRun ? run.last : run
+      if (last === record) return // (noted already)
+      if (length > 1 && records![length - 1] === record && records![length - 2] === last) {
+        if (run instanceof AnswerRun) run.last = record
+        else answers[at + 1] = new AnswerRun(run, record)
+        return
+      }
+    }
+    latest.set(key, answers.length)
+    answers.push(answer, record)
   }
 
   /** E81: what the received calls of one member answered, for those noted by noteConfiguredAnswer. */
-  public configuredAnswers(key: PropertyKey): Map<CallRecord, AutoEntry | SubstituteState> | undefined {
+  public configuredAnswers(key: PropertyKey): Map<CallRecord, ConfiguredAnswer> | undefined {
     const answers = this._configuredAnswers
-    if (answers === undefined) return undefined
-    const byRecord = new Map<CallRecord, AutoEntry | SubstituteState>()
-    let answer: AutoEntry | SubstituteState | undefined
-    for (const item of answers) {
-      if (!(item instanceof CallRecord)) answer = item
-      else if (item.key === key) byRecord.set(item, answer!)
+    const records = this._recordsByKey.get(key)
+    if (answers === undefined || records === undefined) return undefined
+    // where the runs of the member start (a call noted again starts a run of its own, which takes its place)
+    const starts = new Map<CallRecord, number>()
+    for (let index = 0; index < answers.length; index += 2) {
+      const run = answers[index + 1] as CallRecord | AnswerRun
+      const first = run instanceof AnswerRun ? run.first : run
+      if (first.key === key) starts.set(first, index)
+    }
+    if (starts.size === 0) return undefined
+    const byRecord = new Map<CallRecord, ConfiguredAnswer>()
+    let answer: ConfiguredAnswer | undefined
+    let last: CallRecord | undefined
+    for (const record of records) {
+      const start = starts.get(record)
+      if (start !== undefined) {
+        answer = answers[start] as ConfiguredAnswer
+        const run = answers[start + 1] as CallRecord | AnswerRun
+        last = run instanceof AnswerRun ? run.last : run
+      }
+      if (answer === undefined) continue
+      byRecord.set(record, answer)
+      if (record === last) answer = last = undefined
     }
     return byRecord
   }
@@ -704,7 +767,7 @@ export class SubstituteState {
       state._records.length = 0
       state._recordsByKey.clear()
       state._pendingReads.clear()
-      if (state._configuredAnswers !== undefined) state._configuredAnswers = state._lastConfiguredAnswer = undefined
+      if (state._configuredAnswers !== undefined) state._configuredAnswers = state._latestAnswers = undefined
       for (const entry of state.entries()) {
         const nested = entry.materializedState
         if (nested !== undefined) pending.push(nested)
