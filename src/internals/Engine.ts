@@ -388,19 +388,12 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined) {
       if ((face instanceof AutoEntry ? face.materializedState : face) !== owner) face.handOut(record)
-      // E81: what the call answered, for checks through a call with matchers (see answeredFaces)
-      if (record.kind === 'call') configuredAnswers.set(record, face)
+      // E81: what the call answered, for checks through a call with matchers (see throughCall)
+      if (record.kind === 'call') owner.noteConfiguredAnswer(record, face)
     }
   }
   return value
 }
-
-/**
- * E81: the substitutes (of this copy of the library) that received calls answered as their configured value: a setup's
- * value, the auto-substitute of a nested setup through a call with matchers, or a mimicked instance's value. An
- * unconfigured call answers the auto-substitute of its arguments, which is found again from them (see answeredFaces).
- */
-const configuredAnswers = new WeakMap<CallRecord, Face>()
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
@@ -1567,9 +1560,12 @@ const assertionMember = (state: CheckSubject, key: PropertyKey, count: ExpectedC
 const hasMatchers = (specification: RecordedArguments): boolean =>
   specification.argumentsClass === 'with-predicate' || specification.argumentsClass === 'wildcard'
 
-/** The substitute that a received call answered (see configuredAnswers), if it has received anything itself. */
-const answeredState = (state: SubstituteState, key: PropertyKey, record: CallRecord): SubstituteState | undefined => {
-  const face = configuredAnswers.get(record)
+/**
+ * The substitute that a received call answered, if it has received anything itself: the configured value noted for it
+ * (see handOutConfigured), or else the auto-substitute of its arguments.
+ */
+const answeredState = (state: SubstituteState, key: PropertyKey, record: CallRecord, configured: Map<CallRecord, Face> | undefined): SubstituteState | undefined => {
+  const face = configured?.get(record)
   if (face !== undefined) return face instanceof AutoEntry ? face.materializedState : face
   return state.existingCallEntry(key, new ArgumentHashes(record.args ?? []))?.materializedState
 }
@@ -1595,9 +1591,11 @@ class StateList {
 /** The substitutes that the received calls of `key` on `states` whose arguments match answered. */
 const throughCall = (states: readonly SubstituteState[], key: PropertyKey, matches: (args: readonly unknown[]) => boolean): SubstituteState[] => {
   const answered = new StateList()
-  for (const state of states)
+  for (const state of states) {
+    const configured = state.configuredAnswers(key)
     for (const record of state.recordsFor(key))
-      if (record.kind === 'call' && matches(record.args ?? [])) answered.add(answeredState(state, key, record))
+      if (record.kind === 'call' && matches(record.args ?? [])) answered.add(answeredState(state, key, record, configured))
+  }
   return answered.states
 }
 

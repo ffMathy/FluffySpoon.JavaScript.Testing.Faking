@@ -555,6 +555,12 @@ export class SubstituteState {
   /** E39: the record of the operation that last answered with this substitute (a configured value), and when. */
   private _handedOutBy?: CallRecord
   private _handedOutAt?: number
+  /**
+   * E81: the received calls answered with a configured value that is a substitute, in order, each run of calls answered
+   * by the same one after it (see noteConfiguredAnswer), and the last of them.
+   */
+  private _configuredAnswers?: Array<CallRecord | AutoEntry | SubstituteState>
+  private _lastConfiguredAnswer?: AutoEntry | SubstituteState
 
   constructor(public readonly owner?: AutoEntry) { }
 
@@ -652,6 +658,34 @@ export class SubstituteState {
     return undefined
   }
 
+  /**
+   * E81: notes that a received call of this substitute answered with a configured value that is a substitute (a setup's
+   * value, the auto-substitute of a nested setup through a call with matchers, a mimicked instance's value), so that a
+   * check through a call with matchers can count that substitute's calls. An unconfigured call answers the auto-substitute
+   * of its arguments, which is found again from them (existingCallEntry), so it is not noted.
+   */
+  public noteConfiguredAnswer(record: CallRecord, answer: AutoEntry | SubstituteState): void {
+    // (a run of calls answered by the same substitute, as in a fluent loop, keeps it once, before the run)
+    const answers = this._configuredAnswers
+    if (answers === undefined) this._configuredAnswers = [answer, record]
+    else if (this._lastConfiguredAnswer === answer) answers.push(record)
+    else answers.push(answer, record)
+    this._lastConfiguredAnswer = answer
+  }
+
+  /** E81: what the received calls of one member answered, for those noted by noteConfiguredAnswer. */
+  public configuredAnswers(key: PropertyKey): Map<CallRecord, AutoEntry | SubstituteState> | undefined {
+    const answers = this._configuredAnswers
+    if (answers === undefined) return undefined
+    const byRecord = new Map<CallRecord, AutoEntry | SubstituteState>()
+    let answer: AutoEntry | SubstituteState | undefined
+    for (const item of answers) {
+      if (!(item instanceof CallRecord)) answer = item
+      else if (item.key === key) byRecord.set(item, answer!)
+    }
+    return byRecord
+  }
+
   /** Received calls of one member, in order, without retracted records. */
   public recordsFor(key: PropertyKey): CallRecord[] {
     const records = this._recordsByKey.get(key)
@@ -670,6 +704,7 @@ export class SubstituteState {
       state._records.length = 0
       state._recordsByKey.clear()
       state._pendingReads.clear()
+      if (state._configuredAnswers !== undefined) state._configuredAnswers = state._lastConfiguredAnswer = undefined
       for (const entry of state.entries()) {
         const nested = entry.materializedState
         if (nested !== undefined) pending.push(nested)
