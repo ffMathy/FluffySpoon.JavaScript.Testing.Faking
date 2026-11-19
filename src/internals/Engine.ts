@@ -1740,10 +1740,11 @@ const deferredRead = (state: SubstituteState, key: PropertyKey, record: CallReco
   const resolve = () => {
     if (!resolved) {
       resolved = true
-      // E106: the read answered the property value (it is no call, see noteReadAnswer)
-      if (substitution.method === 'throws') state.noteConfiguredAnswer(record, substitution)
+      // E106: what the read answered, while it is a read (invoked, it is a call, whose answer resolveCall notes)
+      const read = record.kind === 'get'
+      if (read && substitution.method === 'throws') state.noteConfiguredAnswer(record, substitution)
       value = execute(substitution)
-      if (record.kind === 'get') noteReadAnswer(state, record, value)
+      if (read) noteReadAnswer(state, record, value)
     }
     return value
   }
