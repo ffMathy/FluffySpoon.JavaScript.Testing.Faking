@@ -1,4 +1,5 @@
 import test from 'ava'
+import { inspect } from 'util'
 
 import { Substitute } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
@@ -134,3 +135,83 @@ test('R13-ADV-1 (E84) a failing check whose calls hold a Set or a Map in another
   t.true(message.includes("g: { h: 0 }"), message)
   t.false(message.includes('Some calls print the same'), message)
 })
+
+// ---- E86 (R13FE-1): matchers of test runners nested in the samples of others ----------------------------------------
+
+/*
+ * The shapes of jest's and vitest's asymmetric matchers (expect 30: own `$$typeof`, `sample`, `inverse`; @vitest/expect 5:
+ * own `sample`, `inverse`, `$$typeof`; both with asymmetricMatch and toString, and some with toAsymmetricMatcher, on the
+ * prototype). The compatibility checks use the real ones.
+ */
+const runnerMatchers = (order: 'jest' | 'vitest') => {
+  class AsymmetricMatcher<T> {
+    $$typeof!: symbol
+    sample!: T
+    inverse!: boolean
+    constructor(sample: T, inverse = false) {
+      if (order === 'jest') this.$$typeof = Symbol.for('jest.asymmetricMatcher')
+      this.sample = sample
+      this.inverse = inverse
+      if (order === 'vitest') this.$$typeof = Symbol.for('jest.asymmetricMatcher')
+    }
+  }
+  class Any extends AsymmetricMatcher<Function> {
+    asymmetricMatch(other: unknown): boolean { return this.sample === Number ? typeof other === 'number' : other instanceof this.sample }
+    toString(): string { return 'Any' }
+    toAsymmetricMatcher(): string { return `Any<${this.sample.name}>` }
+  }
+  class ObjectContaining extends AsymmetricMatcher<Record<string, unknown>> {
+    asymmetricMatch(other: any): boolean {
+      return typeof other === 'object' && other !== null && Object.keys(this.sample).every(key => {
+        const expected: any = this.sample[key]
+        return expected instanceof AsymmetricMatcher ? (expected as any).asymmetricMatch(other[key]) : other[key] === expected
+      })
+    }
+    toString(): string { return `Object${this.inverse ? 'Not' : ''}Containing` }
+  }
+  class ArrayContaining extends AsymmetricMatcher<unknown[]> {
+    asymmetricMatch(other: unknown): boolean {
+      return Array.isArray(other) && this.sample.every((expected: any) => other.some(item =>
+        expected instanceof AsymmetricMatcher ? (expected as any).asymmetricMatch(item) : item === expected))
+    }
+    toString(): string { return `Array${this.inverse ? 'Not' : ''}Containing` }
+  }
+  return {
+    any: (sample: Function) => new Any(sample),
+    objectContaining: (sample: Record<string, unknown>) => new ObjectContaining(sample),
+    arrayContaining: (sample: unknown[]) => new ArrayContaining(sample)
+  }
+}
+
+for (const runner of ['jest', 'vitest'] as const) {
+  test(`R13FE-1 (E86) ${runner}'s matchers nested three levels deep in the samples of others print with their own text`, t => {
+    const expect = runnerMatchers(runner)
+    // an AWS SDK v3 style check
+    const client = Substitute.for<any>()
+    client.send({ input: { TransactItems: [1, 2] } })
+    const message = messageOf(() => client.received(1).send(expect.objectContaining({ input: expect.objectContaining({ TransactItems: expect.arrayContaining([3]) }) })))
+    t.true(message.includes('send(ObjectContaining { input: ObjectContaining { TransactItems: ArrayContaining [ 3 ] } })'), message)
+    // three levels deep, in a failure message, a printout of the substitute and a path label
+    const three = (name: string) => expect.objectContaining({ a: expect.objectContaining({ b: expect.objectContaining({ c: expect.any(Number) }) }), name })
+    const threeText = (name: string) => `ObjectContaining { a: ObjectContaining { b: ObjectContaining { c: Any<Number> } }, name: '${name}' }`
+    const deep = messageOf(() => client.received(1).send(three('x')))
+    t.true(deep.replace(/\n\s*/g, ' ').includes(`send(${threeText('x')})`), deep)
+    const repo = Substitute.for<any>()
+    repo.find(three('setup')).returns(5)
+    const printout = plain(String(repo))
+    t.true(printout.replace(/\n\s*/g, ' ').includes(`find(${threeText('setup')}) => returns(5)`), printout)
+    const path = plain(inspect(repo.find(three('path'))))
+    t.true(path.includes(`@Substitute.find(${threeText('path')})`), path)
+    // a matcher in an array in a sample, and in a plain object in a sample deeper than the message prints
+    const inArray = messageOf(() => client.received(1).send({ input: { items: expect.arrayContaining([expect.objectContaining({ id: expect.any(String) })]) } }))
+    t.true(inArray.includes('items: ArrayContaining [ ObjectContaining { id: Any<String> } ]'), inArray)
+    const inObject = messageOf(() => client.received(1).send(expect.objectContaining({ input: { deep: { deeper: { items: expect.arrayContaining([expect.any(String)]) } } } })))
+    t.true(inObject.replace(/\n\s*/g, ' ').includes('ObjectContaining { input: { deep: { deeper: { items: ArrayContaining [ Any<String> ] } } } }'), inObject)
+    for (const text of [message, deep, printout, path, inArray, inObject]) {
+      t.false(text.includes('$$typeof'), text)
+      t.false(text.includes('inverse'), text)
+    }
+    // and they still match as the runner's matchers do
+    t.notThrows(() => client.received(1).send(expect.objectContaining({ input: expect.objectContaining({ TransactItems: expect.arrayContaining([2]) }) })))
+  })
+}

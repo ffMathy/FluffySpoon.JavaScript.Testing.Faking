@@ -923,6 +923,8 @@ type Walk = {
   readonly sorted: boolean
   /** E84: counts the objects and entries that are printed, when the caller wants to know (see sortedText). */
   readonly counted?: Counted
+  /** E86: the containers in the samples of matchers of test runners that hold a matcher (see preparedSample). */
+  holders?: Set<object>
 }
 
 /** E84: how many objects, keys, items and entries a print showed (see Walk.counted). */
@@ -948,7 +950,7 @@ const leastLength = (value: unknown, level: number, walk: Walk): number => {
     case 'object':
       if (value === null) return 4
       // deeper than util.inspect looks: `[Object]`, `[Array]` (other objects may print themselves, or `[Foo]`)
-      if (level > walk.bounds.depth && !types.isProxy(value) && !hasOwnProperty.call(value, inspectCustom) && !matcherHolders.has(value)) {
+      if (level > walk.bounds.depth && !types.isProxy(value) && !hasOwnProperty.call(value, inspectCustom) && !holdsMatcher(value, walk)) {
         if (Array.isArray(value)) return 7
         if (Object.getPrototypeOf(value) === Object.prototype) return 8
       }
@@ -995,8 +997,10 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if (foreign !== undefined) {
     const text = foreign.text
     if (foreign.sample === undefined) return printsAs(() => text)
-    const sample = prepared(foreign.sample.value, level + 1, walk)
-    return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth })}`)
+    // E86 (R13FE-1): and with its sample (`ObjectContaining { input: ... }`), which is part of its text: at its level,
+    // with at least its first level shown (when the matcher is deeper than util.inspect looks)
+    const sample = preparedSample(foreign.sample.value, level, walk)
+    return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth: Math.max(depth, 0) })}`)
   }
   if (isError(value)) {
     const text = errorText(value, walk.sorted, walk.counted)
@@ -1006,7 +1010,7 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if (level > walk.bounds.depth) {
     // deeper than util.inspect looks (it shows `[Object]`): only errors are replaced, as their stand-in shows more, and
     // containers that hold a matcher are shown
-    if (!matcherHolders.has(value) || types.isProxy(value)) return value
+    if (!holdsMatcher(value, walk) || types.isProxy(value)) return value
     const copy = Array.isArray(value) ? preparedArray(value, level, walk) : preparedKeyed(value, level, walk)
     return printsAs((_, options) => inspect(copy, { ...options, depth: 0 }))
   }
@@ -1014,6 +1018,57 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if ((types.isMap(value) || types.isSet(value)) && !types.isProxy(value) && typeof (value as any)[inspectCustom] !== 'function')
     return preparedCollection(value as Map<unknown, unknown> | Set<unknown>, types.isMap(value), level, walk)
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
+}
+
+/** Whether an object is a container that holds a matcher: in the arguments of a setup or a check, or (E86) in a sample. */
+const holdsMatcher = (value: object, walk: Walk): boolean => matcherHolders.has(value) || walk.holders?.has(value) === true
+
+/**
+ * E86 (R13FE-1): the sample of a matcher of a test runner (`expect.objectContaining({ input: expect.objectContaining({
+ * items: expect.arrayContaining([3]) }) })`), prepared at the matcher's level (it prints as part of the matcher's
+ * text). The matchers in it, at any depth, are shown by their own text, as those of the expected call are (see
+ * matcherHolders): the containers in it that hold one are noted (Walk.holders), looking at the entries that print, at
+ * most MATCHER_SEARCH_ENTRIES of them, and not into the samples of the matchers (they are noted when those print).
+ * Deeper than util.inspect looks, the sample shows its first level, as a container that holds a matcher does.
+ */
+const preparedSample = (sample: unknown, level: number, walk: Walk): unknown => {
+  if (typeof sample !== 'object' || sample === null || types.isProxy(sample)) return sample
+  const holders = walk.holders ??= new Set()
+  let entries = MATCHER_SEARCH_ENTRIES
+  const visiting = new Set<object>()
+  /** Whether a value is a matcher or a container that holds one. */
+  const visit = (value: unknown): boolean => {
+    if (typeof value !== 'object' || value === null || types.isProxy(value)) return false
+    if (holders.has(value) || isArgumentMatcher(value)) return true
+    const isArray = Array.isArray(value)
+    if (visiting.has(value) || !(isArray || printsByKeys(value))) return false
+    visiting.add(value)
+    let holds = false
+    if (isArray) {
+      const count = Math.min((value as unknown[]).length, walk.bounds.maxArrayLength)
+      for (let index = 0; index < count && --entries >= 0; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index)
+        if (descriptor !== undefined && 'value' in descriptor && visit(descriptor.value)) holds = true
+      }
+    } else {
+      const keys = listedKeys(walk, value)
+      const count = Math.min(keys.length, walk.bounds.keys)
+      for (let index = 0; index < count && --entries >= 0; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, keys[index])
+        if (descriptor !== undefined && 'value' in descriptor && visit(descriptor.value)) holds = true
+      }
+    }
+    if (holds) holders.add(value)
+    return holds
+  }
+  try {
+    visit(sample)
+  } catch {
+    // a value that cannot be read
+  }
+  if (level <= walk.bounds.depth) return prepared(sample, level, walk)
+  if (walk.ancestors.has(sample)) return walk.ancestors.get(sample) // a cycle
+  return Array.isArray(sample) ? preparedArray(sample, level, walk) : printsByKeys(sample) ? preparedKeyed(sample, level, walk) : prepared(sample, level, walk)
 }
 
 /**
