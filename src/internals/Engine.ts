@@ -892,6 +892,17 @@ const directReadingOf = (face: Face): DirectReading => {
 const NOT_CONFIGURED: unique symbol = Symbol('not configured')
 
 /**
+ * E91 (R14-ADV-2): whether the first argument of a call/apply invocation can be the `this` that a wrapper passes on
+ * (`fn.apply(this, args)`, `fn.call(undefined, ...args)`, sinon.spy, jest.fn, mem, lodash): undefined, null, an object or a
+ * function. A primitive first argument (`rpc.call('getUser', 1)`, `redis.call('get', 'k')`) is an argument of a member
+ * of that name that the code under test's own API has (JSON-RPC, ioredis), and the invocation then answers as the member
+ * reading only: its own auto-substitute per raw arguments, so that `rpc.call('getUser', 1)` and `rpc.call('getOrder', 1)`
+ * are different substitutes. (An object first argument, web3's `.call({ from })`, still shares the direct call's.)
+ */
+const wrapperThis = (thisArg: unknown): boolean =>
+  thisArg === undefined || thisArg === null || typeof thisArg === 'object' || typeof thisArg === 'function'
+
+/**
  * The member reading answers when a substitution configured on the member named call/apply/bind matches the raw
  * arguments, or when a mimicked instance has such a member of its own (a function's call/apply/bind inherited from
  * Function.prototype is the direct reading itself, recorded as such).
@@ -945,7 +956,8 @@ const setupEntryOf = (entry: AutoEntry, chainHead: CallRecord | undefined): Auto
  *     configured value (a mimicked function or mimicks() receives the thisArg) or, E82 (R13FE-5), the same
  *     auto-substitute as x(...arguments) (D2), so that what a wrapper calling `fn.apply(this, args)` gets has the
  *     nested setups made on `x(...arguments)` and its calls are checked there. (Not for a member called received or
- *     didNotReceive, whose direct call would be a check, D11: the member reading's auto-substitute.)
+ *     didNotReceive, whose direct call would be a check, D11, nor, E91, for a primitive first argument, see
+ *     wrapperThis: the member reading's auto-substitute.)
  * The invocation is recorded once, with both readings (see CallRecord.twin), so that `x.received().call(t, 1)` and
  * `x.received()(1)` both count it. Setups written through the helper (`.returns` on its result, see setupEntryOf, or
  * arguments with matchers) configure the member reading. For bind, the bind call is only a call of the member `bind`;
@@ -986,14 +998,23 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
       const directHashes = new ArgumentHashes(directArgs!)
       const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
       if (directAnswer !== NOT_CONFIGURED) return noteHelperAnswer(directAnswer, memberRecord, memberState, directRecord, direct.state)
-      // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf)
+      // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf). E91: only when the
+      // invocation can be a wrapper's (see wrapperThis); otherwise the member reading's own auto-substitute, below.
       if (!isStringAssertionKey(direct.key)) {
-        const directEntry = direct.state.callEntry(direct.key, directHashes)
-        directEntry.handOut(memberRecord)
-        directAnswers.set(memberRecord, memberState)
-        // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
-        memberState.noteConfiguredAnswer(memberRecord, directEntry)
-        return entryProxy(directEntry)
+        if (wrapperThis(thisArg)) {
+          const directEntry = direct.state.callEntry(direct.key, directHashes)
+          directEntry.handOut(memberRecord)
+          directAnswers.set(memberRecord, memberState)
+          // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
+          memberState.noteConfiguredAnswer(memberRecord, directEntry)
+          return entryProxy(directEntry)
+        }
+        // E91 with E81: the direct reading answers the member reading's auto-substitute, so that a check through a
+        // direct call with matchers (`redis(Arg.any())[received](1).toString()`) counts the calls made on it
+        const entry = memberState.callEntry(helper, hashes)
+        entry.handOut(memberRecord)
+        if (directRecord.kind === 'call') direct.state.noteConfiguredAnswer(directRecord, entry)
+        return entryProxy(entry)
       }
     }
     const entry = memberState.callEntry(helper, hashes)
