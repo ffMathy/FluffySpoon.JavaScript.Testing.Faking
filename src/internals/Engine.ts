@@ -537,10 +537,6 @@ const notExtensibleError = (face: Face, start: Function): TypeError => {
   return error
 }
 
-/*
- * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
- * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
- */
 /**
  * E100 (R15-ADV-4): whether an operation on a substitute (a substitute or an auto-substitute, its state, or a proxy the
  * library handed out) is part of the look at the arguments of the real call being matched against setups (see Look):
@@ -549,6 +545,10 @@ const notExtensibleError = (face: Face, start: Function): TypeError => {
 const looksAt = (subject: Face | object): boolean =>
   isLooked(subject instanceof AutoEntry ? subject.proxy : subject instanceof SubstituteState ? proxyOfState(subject) : subject)
 
+/*
+ * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
+ * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
+ */
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)

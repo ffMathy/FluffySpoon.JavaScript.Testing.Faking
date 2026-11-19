@@ -7,7 +7,6 @@ import {
   coarseHashArguments, hashArguments, identityHashArguments, lastHashContentUses, lastHashMetUnreadable, lastHashMetWide,
   lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn
 } from './utilities'
-
 import { libraryGuard } from './utilities/Guard'
 import { closeLook, openLook } from './utilities/Look'
 
