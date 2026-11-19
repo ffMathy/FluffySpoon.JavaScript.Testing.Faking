@@ -140,6 +140,30 @@ A block that uses a block that does not exist:
 calculator.add(1, 2)
 ```
 
+A version of `@types/node` that is not a major version:
+
+<!-- self-test: expect=needs a major version of @types/node -->
+<!-- docs-check: types-node-below=24.x -->
+```typescript
+const value = 1
+```
+
+A block for `@types/node` older than 1 is not checked, so its error is not reported:
+
+<!-- self-test: expect=pass -->
+<!-- docs-check: types-node-below=1 -->
+```typescript
+const value: number = 'not a number'
+```
+
+A block for `@types/node` older than 999 is checked:
+
+<!-- self-test: expect=Type 'string' is not assignable to type 'number' -->
+<!-- docs-check: types-node-below=999 -->
+```typescript
+const value: number = 'not a number'
+```
+
 An unknown directive:
 
 <!-- self-test: expect=unknown docs-check directive "compileonly" -->

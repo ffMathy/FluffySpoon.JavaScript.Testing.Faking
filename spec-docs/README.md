@@ -39,6 +39,7 @@ Blocks can be marked with an HTML comment right before the fence (several direct
 | `<!-- docs-check: compile-only -->` | Only type-checked, for example code that needs a test runner. |
 | `<!-- docs-check: esm -->` | An ES module (`.mts` / `.mjs`) instead of CommonJS. |
 | `<!-- docs-check: uncaught=SubstituteException -->` | The block must end with that uncaught exception (a check reported later, from a microtask). |
+| `<!-- docs-check: types-node-below=25 -->` | Only checked when the installed `@types/node` is older than that major version, for an example of what older versions declare. Otherwise the check prints that it did not check the block, and counts it as skipped. |
 | `<!-- docs-check: error-message -->` | On a ```` ```text ```` block: must equal `<name>: <message>` of the error thrown by the last `// throws` line of the checked block before it. Lines starting with `called at` match any stack frame. |
 | `<!-- docs-check: skip <reason> -->` | Not checked at all: code for an old version, or deliberately partial code. |
 

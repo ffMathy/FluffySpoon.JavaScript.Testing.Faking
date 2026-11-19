@@ -19,6 +19,8 @@
 //                     gets a fresh copy
 //   esm               an ES module (.mts / .mjs) instead of CommonJS
 //   uncaught=<Name>   the block must end with an uncaught <Name> (a check reported later, from a microtask)
+//   types-node-below=<major>  only checked when the installed @types/node is older than that major version (an
+//                     example of what older @types/node versions declare); otherwise reported as not checked
 // A ```text block marked <!-- docs-check: error-message --> must equal "<name>: <message>" of the error thrown by the
 // last `// throws` line of the preceding checked block (lines starting with "called at" match any stack frame).
 //
@@ -32,7 +34,7 @@ const { spawn } = require('child_process')
 const root = path.resolve(__dirname, '..')
 const defaultFiles = ['README.md', 'MIGRATION.md', 'CHANGELOG.md']
 const checkedLanguages = { typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js' }
-const knownDirectives = new Set(['skip', 'compile-only', 'name', 'uses', 'esm', 'uncaught', 'error-message'])
+const knownDirectives = new Set(['skip', 'compile-only', 'name', 'uses', 'esm', 'uncaught', 'error-message', 'types-node-below'])
 const snippetTimeout = 20 * 1000
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -64,8 +66,21 @@ const parseDirectives = (text, problems, location) => {
     else if (key === 'name') directives.name = value
     else if (key === 'uses') directives.uses = value.split(',').filter(Boolean)
     else if (key === 'uncaught') directives.uncaught = value
+    else if (key === 'types-node-below') {
+      if (/^[1-9][0-9]*$/.test(value)) directives.typesNodeBelow = Number(value)
+      else problems.push({ ...location, message: `docs-check directive "${token}" needs a major version of @types/node` })
+    }
   }
   return directives
+}
+
+// The version of @types/node that the examples are type-checked with (types: ['node'] below), if any.
+const installedTypesNode = () => {
+  try {
+    return require(path.join(root, 'node_modules', '@types', 'node', 'package.json')).version
+  } catch (error) {
+    return undefined
+  }
 }
 
 /** Splits a Markdown file into fenced code blocks, with the HTML comments directly before each fence. */
@@ -249,6 +264,14 @@ const buildSnippets = parsed => {
           problems.push({ ...location, message: `docs-check directives on a \`\`\`${block.language} block, which is not checked` })
         }
         continue
+      }
+      if (directives.typesNodeBelow !== undefined && !directives.skip) {
+        // An example of what @types/node declares, which holds only for the versions before that major version.
+        const version = installedTypesNode()
+        if (version === undefined || Number(version.split('.')[0]) >= directives.typesNodeBelow) {
+          directives.skip = `it needs @types/node older than ${directives.typesNodeBelow}, and ${version || 'none'} is installed`
+          console.log(`docs-check: ${block.file}:${block.fenceLine}: not checked, because ${directives.skip}`)
+        }
       }
       if (directives.skip) continue
       const snippetProblems = []
