@@ -1000,7 +1000,11 @@ const setupEntryOf = (entry: AutoEntry, chainHead: CallRecord | undefined): Auto
  */
 const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord | undefined): Function => {
   const invokeHelper = (rawArgs: any[], thisArg: unknown, directArgs: any[] | undefined, site: StackHolder): any => {
-    if (libraryGuard.matching > 0) return peekHelper(face, helper, rawArgs, thisArg, directArgs)
+    if (libraryGuard.matching > 0) {
+      // E95 (see peekCall): with Arg matchers among the arguments it is a setup or a check, which records nothing
+      if (RecordedArguments.containsMatchers(rawArgs)) return configureCall(faceState(face), helper, RecordedArguments.forSpecification(rawArgs))
+      return peekHelper(face, helper, rawArgs, thisArg, directArgs)
+    }
     const direct = directReadingOf(face)
     const read = direct.readSource === TAKE_PENDING_READ ? direct.state.takePendingRead(direct.key) : undefined
     const memberState = faceState(face)
@@ -1072,7 +1076,8 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         const rawArgs = [thisArg, ...boundArgs]
         const memberState = faceState(face)
         if (libraryGuard.matching > 0) {
-          // E95: a matcher's look (see peekGet)
+          // E95: a matcher's look (see peekGet); with Arg matchers among the arguments, a setup (see peekCall)
+          if (RecordedArguments.containsMatchers(rawArgs)) return configureCall(memberState, 'bind', RecordedArguments.forSpecification(rawArgs))
           const hashes = new ArgumentHashes(rawArgs)
           const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, undefined, thisArg)
           return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', hashes), thisArg, boundArgs)
@@ -1321,8 +1326,14 @@ const peekDeferredRead = (state: SubstituteState, key: PropertyKey, substitution
   })
 }
 
-/** E95: an invocation made while a matcher looks at a value (see peekGet), answered as resolveCall would. */
+/**
+ * E95: an invocation made while a matcher looks at a value (see peekGet), answered as resolveCall would. With Arg
+ * matchers among its arguments it is a setup or a check, as anywhere else (D3, E81: `bus.on('saved', Arg.any())[received](1)()`
+ * made inside a predicate counts the calls of what the matching calls answered); that records nothing either, and no
+ * pending read is taken.
+ */
 const peekCall = (state: SubstituteState, key: PropertyKey, args: any[], self: Self): any => {
+  if (RecordedArguments.containsMatchers(args)) return configureCall(state, key, RecordedArguments.forSpecification(args), isStringAssertionKey(key))
   const hashes = new ArgumentHashes(args)
   const answer = configuredAnswer(state, key, args, hashes, undefined, self)
   if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return answer
