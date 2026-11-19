@@ -216,6 +216,30 @@ for (const runner of ['jest', 'vitest'] as const) {
   })
 }
 
+test('R13FE-1 (E86) samples that refer to themselves, hold a revoked proxy or chain many matchers print within the bounds', t => {
+  const expect = runnerMatchers('jest')
+  const client = Substitute.for<any>()
+  client.send({ a: 1 })
+  // a sample that refers to itself
+  const cyclic: Record<string, unknown> = { x: 1, m: expect.any(Number) }
+  cyclic.self = cyclic
+  const cycle = messageOf(() => client.received(1).send(expect.objectContaining(cyclic)))
+  t.true(cycle.includes('send(ObjectContaining <ref *1> { x: 1, m: Any<Number>, self: [Circular *1] })'), cycle)
+  // a revoked proxy in a sample (nothing of it can be read)
+  const { proxy, revoke } = Proxy.revocable({}, {})
+  revoke()
+  const revoked = messageOf(() => client.received(1).send(expect.objectContaining({ p: proxy, q: expect.any(String) })))
+  t.true(revoked.includes('send(ObjectContaining { p: <Revoked Proxy>, q: Any<String> })'), revoked)
+  // 200 matchers, each in the sample of the next: the start of the text, as far as it shows
+  let chain: unknown = expect.any(Number)
+  for (let index = 0; index < 200; index++) chain = expect.objectContaining({ [`k${index}`]: chain })
+  const long = messageOf(() => client.received(1).send(chain))
+  t.true(long.includes('send(ObjectContaining {\n  k199: ObjectContaining {\n    k198: ObjectContaining {'), long)
+  t.true(long.includes('… (more characters)'), long)
+  t.true(long.length < 3000, `${long.length}`)
+  for (const text of [cycle, revoked, long]) t.false(text.includes('$$typeof'), text)
+})
+
 // ---- E87 (R13FE-2): lines that still print alike -------------------------------------------------------------------
 
 const CALLS_NOTE = 'Some calls print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.'

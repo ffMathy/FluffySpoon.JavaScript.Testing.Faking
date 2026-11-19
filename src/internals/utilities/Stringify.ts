@@ -992,13 +992,18 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if (typeof value !== 'object' || value === null) return value
   const ancestor = walk.ancestors.get(value)
   if (ancestor !== undefined) return ancestor // a cycle
+  // a revoked proxy, of which nothing can be read (util.inspect shows `<Revoked Proxy>`)
+  if (isRevokedProxy(value)) return value
   // E75: a matcher of a test runner prints as the runner shows it (`Any<String>`, `StringContaining '@'`, `has("err")`)
   const foreign = foreignMatcherLabel(value)
   if (foreign !== undefined) {
     const text = foreign.text
     if (foreign.sample === undefined) return printsAs(() => text)
     // E86 (R13FE-1): and with its sample (`ObjectContaining { input: ... }`), which is part of its text: at its level,
-    // with at least its first level shown (when the matcher is deeper than util.inspect looks)
+    // with at least its first level shown (when the matcher is deeper than util.inspect looks). Its text and the
+    // indentation of the level it opens count towards the budget (each matcher prints its sample anew, and indents
+    // what it holds), so that a chain of nested matchers costs no more than the text that shows.
+    if (!spend(walk, text.length + 2 * level)) return printsAs(() => text)
     const sample = preparedSample(foreign.sample.value, level, walk)
     return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth: Math.max(depth, 0) })}`)
   }
@@ -1018,6 +1023,17 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if ((types.isMap(value) || types.isSet(value)) && !types.isProxy(value) && typeof (value as any)[inspectCustom] !== 'function')
     return preparedCollection(value as Map<unknown, unknown> | Set<unknown>, types.isMap(value), level, walk)
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
+}
+
+/** Whether a value is a revoked proxy (Array.isArray throws for one, and any other read). */
+const isRevokedProxy = (value: object): boolean => {
+  if (!types.isProxy(value)) return false
+  try {
+    Array.isArray(value)
+    return false
+  } catch {
+    return true
+  }
 }
 
 /** Whether an object is a container that holds a matcher: in the arguments of a setup or a check, or (E86) in a sample. */
