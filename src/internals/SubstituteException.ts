@@ -19,6 +19,8 @@ export type ListedCall = {
   matches: boolean
   predicateThrew?: boolean
   predicateError?: unknown
+  /** E81: the substitute the record belongs to, when the check counts the calls of several (undefined: the subject). */
+  owner?: { readonly path: string }
 }
 
 export type CallCountMismatch = {
@@ -417,16 +419,18 @@ export class SubstituteException extends Error {
         if (listedCharacters >= MAX_LISTED_CHARACTERS) break
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         const call = describeRecord(listed.record, print, colors, deeper)
+        // E81: a record of one of several substitutes is shown with that substitute's own path
+        const recordPath = listed.owner === undefined ? memberPath : key === SELF ? listed.owner.path : `${listed.owner.path}.${keyToString(key)}`
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
-          .add(listed.record.constructed === true ? `new ${memberPath}` : memberPath, style)
+          .add(listed.record.constructed === true ? `new ${recordPath}` : recordPath, style)
           .add(call, style)
         const frame = firstStackFrame(listed.record.stack)
         if (frame !== undefined) textBuilder.newLine().add(frame.replace('at ', 'called at '), t => t.faint())
         if (listed.predicateThrew)
           textBuilder.newLine().add(`    (an Arg.is predicate threw while matching this call: ${describeError(listed.predicateError)})`, t => t.faint())
         listedCount++
-        listedCharacters += memberPath.length + call.length + (frame === undefined ? 0 : frame.length)
+        listedCharacters += recordPath.length + call.length + (frame === undefined ? 0 : frame.length)
       }
       const hidden = mismatch.listed.length - listedCount
       if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
