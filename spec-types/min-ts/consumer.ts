@@ -393,6 +393,18 @@ function delegateTo<T>(sub: SubstituteOf<T>, instance: T) {
 }
 delegateTo(calculator, asCalculator)
 
+// R13TD-4 / T74: in generic code a substitute of `T | undefined` / `T | null` mimicks a `T` as well; a concrete
+// nullable type still takes a partial instance
+function delegateToOptional<T>(sub: SubstituteOf<T | undefined>, instance: T) {
+  sub[mimick](instance)
+}
+function delegateToNullable<T>(sub: SubstituteOf<T | null>, instance: T | null) {
+  sub[mimick](instance)
+}
+delegateToOptional(Substitute.for<Calculator | undefined>(), asCalculator)
+delegateToNullable(Substitute.for<Calculator | null>(), null)
+Substitute.for<Calculator | undefined>()[mimick]({ add: (a, b) => a + b })
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {

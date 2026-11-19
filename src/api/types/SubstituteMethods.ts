@@ -70,8 +70,11 @@ type SymbolSubstituteMethods<T> = {
 // A union is handled per variant (`Cat | Dog` takes `Partial<Cat> | Partial<Dog>`). In generic code the instance is a
 // `T`, as before: the choice is an indexed access whose key (`GenericKind`) is `any` for a concrete type, which selects
 // the number index signature, and `'generic'` for a type parameter, as in Utilities.ts. (A distributive conditional
-// type on `T` would not accept a value of type `T` there.)
-type MimickInstance<T> = { generic: T, [concrete: number]: EachMimickInstance<T> }[GenericKind<T>]
+// type on `T` would not accept a value of type `T` there.) The key is taken without `null | undefined`: `keyof (T |
+// undefined)` is `never` even for a type parameter, which would make `SubstituteOf<T | undefined>` and `SubstituteOf<T |
+// null>` count as concrete, and a `T` would not fit the deferred per-variant type then (R13TD-4, T74). A concrete
+// `Thing | undefined` still takes a partial instance.
+type MimickInstance<T> = { generic: T, [concrete: number]: EachMimickInstance<T> }[GenericKind<NonNullable<T>>]
 type EachMimickInstance<T> = T extends unknown ?
   ({} extends T ? T : T extends Function | readonly unknown[] ? T : Partial<T>) :
   never

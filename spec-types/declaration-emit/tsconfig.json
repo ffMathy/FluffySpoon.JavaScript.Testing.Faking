@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "declaration": true,
+    "emitDeclarationOnly": true,
+    "outDir": "../../node_modules/.cache/substitute-spec-types-declaration-emit",
+    "strict": true
+  },
+  "include": [
+    "./*.ts"
+  ]
+}

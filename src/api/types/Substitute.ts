@@ -143,15 +143,16 @@ type AssertionMember<TValue> = {
 // (constructing `any`), still fits (R11TD-2, T67), while a real constructor does not: `String`, `Boolean`, `Date` or a
 // class construct instances that lack the brand, and are rejected as TypeScript rejects them for the union (R12TD-2,
 // T71). (`unknown` would accept every constructor, `never` would reject `Arg.any('function')`.)
+// The brand is a string-keyed member of a type literal, which declaration emit writes out in place, so that a project
+// built with `declaration: true` can export a check view (`export const view = pet.received()`) or a function returning
+// one (R13TD-1, T73). A module-private interface or `unique symbol` there cannot be named in the emitted `.d.ts`.
 type AssertionCallMember<TValue> = {
   single: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
   [union: number]: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & UnionAssertionRest<TValue>
 }[VariantsKind<NonNullable<TValue>>]
 type UnionAssertionRest<TValue> =
   [keyof NonNullable<TValue>] extends [never] ? ([Extract<TValue, null | undefined>] extends [never] ? NotAssignable : TValue) : TValue
-type NotAssignable = new (...args: never[]) => NotAssignableInstance
-declare const notAssignable: unique symbol
-interface NotAssignableInstance { readonly [notAssignable]: true }
+type NotAssignable = new (...args: never[]) => { readonly '@fluffy-spoon/substitute:not-assignable': true }
 
 // For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
 type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
