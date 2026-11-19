@@ -59,6 +59,15 @@ const readWithoutCallHint = (state: CheckSubject, key: PropertyKey, reads: numbe
   `${state.memberPath(key)} was read ${times(reads)} without being called; reading a method does not count as calling it.`
 
 /**
+ * E98 (R14-ADV-3): a method assertion found too few calls of a member whose reads answered values that cannot be called
+ * (see answersValues), so it is no method: its reads are what can be checked, by a check that does not call it.
+ */
+const readValuesHint = (state: CheckSubject, key: PropertyKey, reads: number, count: ExpectedCount): string =>
+  `${state.memberPath(key)} was read ${times(reads)}, and its reads answered a value that cannot be called, so they are ` +
+  `property reads, not method calls. To check them, leave out the call: ` +
+  `${asExpression(state)}.received(${count === undefined ? '' : count})${memberAccess(key)}`
+
+/**
  * didNotReceive().m(...) on a member that was only read (A:RT-3). The property-style half of the assertion is
  * decided when the member is read (D9), so the reads fail it even when an invocation follows.
  */
@@ -110,7 +119,10 @@ export const assertCall = (state: CheckSubject, key: PropertyKey, args: any[], c
     expected: { count, kind: 'method', specification },
     receivedText: receivedText(matches),
     listed,
-    hints: tooFew && reads > 0 ? [readWithoutCallHint(state, key, reads)] : undefined
+    // E98: no method hint for a member that is no method (decided as E85 decides it)
+    hints: tooFew && reads > 0
+      ? [answersValues(state, key) ? readValuesHint(state, key, reads, count) : readWithoutCallHint(state, key, reads)]
+      : undefined
   }, stackStart)
 }
 
