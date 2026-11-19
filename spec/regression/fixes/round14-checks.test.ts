@@ -1,7 +1,7 @@
 import test, { ExecutionContext } from 'ava'
 import { inspect } from 'util'
 
-import { Substitute, Arg, configure, mimick, received, didNotReceive } from '../../../src'
+import { Substitute, Arg, clearReceivedCalls, configure, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -320,6 +320,60 @@ test('R13FE-3 (E81) nested setups through a call with matchers keep working, and
   repo.find(Arg.any())[mimick]({ id: 7 })
   t.is(repo.find(3).id, 7)
   t.true(inspect(repo.find(Arg.is((id: number) => id > 0))).endsWith(' (configure)'))
+})
+
+test('R13FE-3 (E81) checks through two calls with matchers, function substitutes, constructions and member handles as configured values', t => {
+  const app = Substitute.for<any>()
+  app.db('main').table('users').insert(1) // the code under test
+  app.db('other').table('logs').insert(2)
+  const users = app.db('main').table('users')
+  t.notThrows(() => app.db(Arg.any()).table(Arg.any())[received](2).insert(Arg.any()))
+  t.notThrows(() => app.db('main').table(Arg.any())[received](1).insert(1))
+  t.notThrows(() => app.db(Arg.any()).table('users')[received](1).insert(1))
+  t.throws(() => app.db(Arg.any()).table(Arg.any()).didNotReceive().insert(2), { instanceOf: SubstituteException })
+  t.is(app.db('main').table('users'), users)
+  t.notThrows(() => users.received(1).insert(1))
+
+  // a function substitute, and `new`
+  const factory = Substitute.for<any>()
+  factory(1).start()
+  factory(2)
+  t.notThrows(() => factory(Arg.any())[received](1).start())
+  t.true(failureOf(t, () => factory(Arg.any()).received(2).start()).includes('› ✔ @Substitute(1).start()'))
+  const ns = Substitute.for<any>()
+  const client = new ns.Client('https://api')
+  client.connect()
+  t.notThrows(() => ns.Client(Arg.any())[received](1).connect())
+
+  // a member handle of another substitute configured as the value: its direct calls are calls of that member
+  const subscriptions = Substitute.for<any>()
+  const bus = Substitute.for<any>()
+  bus.on('saved', Arg.any()).returns(subscriptions.cancel)
+  bus.on('saved', (): void => undefined)()
+  t.notThrows(() => bus.on(Arg.any(), Arg.any())[received](1)())
+  t.notThrows(() => subscriptions.received(1).cancel())
+
+  // the string forms further down a call with matchers are checks, too (and setups of a member of that name in the
+  // configure view, D5)
+  t.notThrows(() => app.db(Arg.any()).table(Arg.any()).received(2).insert(Arg.any()))
+  t.notThrows(() => app.db(Arg.any()).table('users').received(1).insert(1))
+  t.true(failureOf(t, () => app.db(Arg.any()).table('users').didNotReceive().insert(1)).includes("› ✔ @Substitute.db('main').table('users').insert(1)"))
+  const store = Substitute.for<any>()
+  store.open('a').cache.clear() // the code under test
+  t.notThrows(() => store.open(Arg.any()).cache.received(1).clear())
+  t.throws(() => store.open(Arg.any()).cache.didNotReceive().clear(), { instanceOf: SubstituteException })
+  store.open(Arg.any()).cache.received(5).returns('a member called received')
+  t.is(store.open('b').cache.received(5), 'a member called received')
+  store[configure]().open(Arg.any()).log.received(1).returns('configured')
+  t.is(store.open('c').log.received(1), 'configured')
+  t.is(app.db('main').table('users'), users)
+
+  // received calls cleared: nothing is left to count
+  const cleared = Substitute.for<any>()
+  cleared.repo('a').save(1)
+  t.throws(() => cleared.repo(Arg.any()).didNotReceive().save(1), { instanceOf: SubstituteException })
+  cleared[clearReceivedCalls]()
+  t.notThrows(() => cleared.repo(Arg.any()).didNotReceive().save(1))
 })
 
 // ---- E85 (R13-ADV-2): property checks of members whose reads answer values ------------------------------------------

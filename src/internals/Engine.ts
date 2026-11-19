@@ -1561,61 +1561,81 @@ const hasMatchers = (specification: RecordedArguments): boolean =>
   specification.argumentsClass === 'with-predicate' || specification.argumentsClass === 'wildcard'
 
 /**
- * The substitute that a received call answered, if it has received anything itself: the configured value noted for it
- * (see handOutConfigured), or else the auto-substitute of its arguments.
+ * A substitute that a check through a call with matchers counts the calls of: a substitute itself, or an auto-substitute
+ * (its entry: it may have no state, and a member handle's direct calls are recorded on its parent).
  */
-const answeredState = (state: SubstituteState, key: PropertyKey, record: CallRecord, configured: Map<CallRecord, Face> | undefined): SubstituteState | undefined => {
-  const face = configured?.get(record)
-  if (face !== undefined) return face instanceof AutoEntry ? face.materializedState : face
-  return state.existingCallEntry(key, new ArgumentHashes(record.args ?? []))?.materializedState
+type Checked = SubstituteState | AutoEntry
+
+/** The one value that stands for a substitute (an auto-substitute's state stands for its entry). */
+const checkedOf = (face: Face): Checked => face instanceof AutoEntry ? face : face.owner ?? face
+
+/** Where the calls of `key` on a checked substitute are recorded (a direct call of a member handle is a call of the member). */
+const recordedAt = (checked: Checked, key: PropertyKey): { state: SubstituteState, key: PropertyKey } | undefined => {
+  if (!(checked instanceof AutoEntry)) return { state: checked, key }
+  if (key === SELF && checked.kind === 'get') return { state: checked.parent, key: checked.key }
+  const state = checked.materializedState
+  return state === undefined ? undefined : { state, key }
 }
 
-/** The state of a substitute of this copy of the library that a value is, if it has received anything. */
-const substituteStateOf = (value: unknown): SubstituteState | undefined => {
+/** The state of a checked substitute, if it has one (it has received nothing and has no setups otherwise). */
+const stateOf = (checked: Checked): SubstituteState | undefined => checked instanceof AutoEntry ? checked.materializedState : checked
+
+/** The substitute of this copy of the library that a value is, if it is one. */
+const checkedValue = (value: unknown): Checked | undefined => {
   if (!isFaceProxy(value)) return undefined
   const face = (value as any)[INTERNAL] as Face | undefined
-  return face instanceof AutoEntry ? face.materializedState : face
+  return face === undefined ? undefined : checkedOf(face)
 }
 
-/** Collects states without repeats, in the order they are added. */
-class StateList {
-  readonly states: SubstituteState[] = []
-  private readonly seen = new Set<SubstituteState>()
-  add(state: SubstituteState | undefined): void {
-    if (state === undefined || this.seen.has(state)) return
-    this.seen.add(state)
-    this.states.push(state)
+/** Collects substitutes without repeats, in the order they are added. */
+class CheckedList {
+  readonly items: Checked[] = []
+  private readonly seen = new Set<Checked>()
+  add(checked: Checked | undefined): void {
+    if (checked === undefined || this.seen.has(checked)) return
+    this.seen.add(checked)
+    this.items.push(checked)
   }
-}
-
-/** The substitutes that the received calls of `key` on `states` whose arguments match answered. */
-const throughCall = (states: readonly SubstituteState[], key: PropertyKey, matches: (args: readonly unknown[]) => boolean): SubstituteState[] => {
-  const answered = new StateList()
-  for (const state of states) {
-    const configured = state.configuredAnswers(key)
-    for (const record of state.recordsFor(key))
-      if (record.kind === 'call' && matches(record.args ?? [])) answered.add(answeredState(state, key, record, configured))
-  }
-  return answered.states
 }
 
 /**
- * The substitutes that reads of `key` on `states` answered: its auto-substitute, or the values of its property setup or
+ * The substitutes that the received calls of `key` on `checked` whose arguments match answered: the configured value
+ * noted for a call (see handOutConfigured), or else the auto-substitute of its arguments, if it has been created.
+ */
+const throughCall = (checked: readonly Checked[], key: PropertyKey, matches: (args: readonly unknown[]) => boolean): Checked[] => {
+  const answered = new CheckedList()
+  for (const item of checked) {
+    const at = recordedAt(item, key)
+    if (at === undefined) continue
+    const configured = at.state.configuredAnswers(at.key)
+    for (const record of at.state.recordsFor(at.key)) {
+      if (record.kind !== 'call' || !matches(record.args ?? [])) continue
+      const face = configured?.get(record)
+      answered.add(face !== undefined ? checkedOf(face) : at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
+    }
+  }
+  return answered.items
+}
+
+/**
+ * The substitutes that reads of `key` on `checked` answered: its auto-substitute, or the values of its property setup or
  * of the mimicked instance (a data property: no getter is run) that are substitutes.
  */
-const throughRead = (states: readonly SubstituteState[], key: PropertyKey): SubstituteState[] => {
-  const answered = new StateList()
-  for (const state of states) {
+const throughRead = (checked: readonly Checked[], key: PropertyKey): Checked[] => {
+  const answered = new CheckedList()
+  for (const item of checked) {
+    const state = stateOf(item)
+    if (state === undefined) continue
     const property = state.propertySubstitution(key)
-    if (property !== undefined && property.method === 'returns') for (const value of property.values) answered.add(substituteStateOf(value))
+    if (property !== undefined && property.method === 'returns') for (const value of property.values) answered.add(checkedValue(value))
     const instance = state.mimicked?.instance
     if (property === undefined && instance !== undefined && !types.isProxy(instance) && hasMember(instance, key)) {
       const descriptor = ownOrInheritedDescriptor(instance, key)
-      if (descriptor !== undefined && 'value' in descriptor) answered.add(descriptor.value === instance ? state : substituteStateOf(descriptor.value))
+      if (descriptor !== undefined && 'value' in descriptor) answered.add(descriptor.value === instance ? item : checkedValue(descriptor.value))
     }
-    answered.add(state.existingPropertyEntry(key)?.materializedState)
+    answered.add(state.existingPropertyEntry(key))
   }
-  return answered.states
+  return answered.items
 }
 
 const ownOrInheritedDescriptor = (instance: object, key: PropertyKey): PropertyDescriptor | undefined => {
@@ -1636,23 +1656,23 @@ const ownOrInheritedDescriptor = (instance: object, key: PropertyKey): PropertyD
  * found from the substitute above that call, step by step down to `state`: through each call, the substitutes that the
  * matching received calls answered, and through each member, the substitutes its reads answered.
  */
-const checkedStates = (state: SubstituteState): SubstituteState[] => {
+const checkedSubstitutes = (state: SubstituteState): Checked[] => {
   const steps: AutoEntry[] = []
   let top = -1
   for (let current = state; current.owner !== undefined; current = current.owner.parent) {
     if (current.owner.specifiesMatchers) top = steps.length
     steps.push(current.owner)
   }
-  if (top < 0) return [state]
-  let states: SubstituteState[] = [steps[top].parent]
+  if (top < 0) return [checkedOf(state)]
+  let checked: Checked[] = [checkedOf(steps[top].parent)]
   for (let index = top; index >= 0; index--) {
     const step = steps[index]
-    states = step.kind === 'get' ? throughRead(states, step.key) : throughCall(states, step.key, args => step.matchesCall(args))
+    checked = step.kind === 'get' ? throughRead(checked, step.key) : throughCall(checked, step.key, args => step.matchesCall(args))
   }
-  return states
+  return checked
 }
 
-/** What a check view opened on `state` (in a configure view) counts the calls of (see checkedStates). */
+/** What a check view opened on `state` (in a configure view) counts the calls of (see checkedSubstitutes). */
 const checkSubjectOf = (state: SubstituteState): CheckSubject => {
   for (let current = state; current.owner !== undefined; current = current.owner.parent)
     if (current.owner.specifiesMatchers) return new MatchedSubstitutes(state)
@@ -1661,12 +1681,12 @@ const checkSubjectOf = (state: SubstituteState): CheckSubject => {
 
 /**
  * The substitutes behind a check through a call with matchers (see above): those that the check view opened on `origin`
- * counts (see checkedStates), or, with `call`, those that the received calls matching that call with matchers on them
- * answered. Found when the check is made.
+ * counts (see checkedSubstitutes), or, with `call`, those that the received calls matching that call with matchers on
+ * them answered. Found when the check is made.
  */
 class MatchedSubstitutes implements SeveralSubstitutes {
-  private _states?: readonly SubstituteState[]
-  private _owners?: Map<CallRecord, SubstituteState>
+  private _checked?: readonly Checked[]
+  private _owners?: Map<CallRecord, Checked>
 
   constructor(private readonly origin: SubstituteState, private readonly call?: { key: PropertyKey, specification: RecordedArguments }) { }
 
@@ -1676,13 +1696,23 @@ class MatchedSubstitutes implements SeveralSubstitutes {
     return call === undefined ? this.origin.path : `${this.origin.memberPath(call.key)}${pathArguments(call.specification.value)}`
   }
 
-  public get states(): readonly SubstituteState[] {
-    if (this._states === undefined) {
+  private get checked(): readonly Checked[] {
+    if (this._checked === undefined) {
       const call = this.call
-      const states = checkedStates(this.origin)
-      this._states = call === undefined ? states : throughCall(states, call.key, args => call.specification.matches(args))
+      const checked = checkedSubstitutes(this.origin)
+      this._checked = call === undefined ? checked : throughCall(checked, call.key, args => call.specification.matches(args))
     }
-    return this._states
+    return this._checked
+  }
+
+  /** The states of the substitutes (those without one have received nothing and have no setups). */
+  public get states(): readonly SubstituteState[] {
+    const states: SubstituteState[] = []
+    for (const checked of this.checked) {
+      const state = stateOf(checked)
+      if (state !== undefined) states.push(state)
+    }
+    return states
   }
 
   public memberPath(key: PropertyKey): string {
@@ -1692,16 +1722,16 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   public recordsFor(key: PropertyKey): CallRecord[] {
     const owners = this._owners = new Map()
     const records: CallRecord[] = []
-    for (const state of this.states) {
-      // a direct call of a member handle is a call of the member (see assertDirectCall)
-      const handle = key === SELF && state.owner !== undefined && state.owner.kind === 'get' ? state.owner : undefined
-      for (const record of handle === undefined ? state.recordsFor(key) : handle.parent.recordsFor(handle.key)) {
+    for (const checked of this.checked) {
+      const at = recordedAt(checked, key)
+      if (at === undefined) continue
+      for (const record of at.state.recordsFor(at.key)) {
         if (owners.has(record)) continue
-        owners.set(record, state)
+        owners.set(record, checked)
         records.push(record)
       }
     }
-    return this.states.length > 1 ? records.sort((a, b) => a.seq - b.seq) : records
+    return this.checked.length > 1 ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
@@ -1718,15 +1748,22 @@ const checkArguments = (name: StringAssertionKey, args: readonly unknown[]): boo
  * configure view). As on any other substitute (D11): invoked and then followed by anything but a substitution method, it
  * is a check of the same substitutes as the symbol forms; followed by a substitution method
  * (`repo.find(Arg.any()).received(1).returns(x)`), or used without being invoked, it is a nested setup of a member of
- * that name, as before. `subject`: what the check counts (see MatchedSubstitutes).
+ * that name, as before. `subject`: what the check counts (see MatchedSubstitutes). Further down such a call, the string
+ * forms are checks the same way (see configureMember).
  */
 const stringCheckThroughMatchers = (
   state: SubstituteState, key: PropertyKey, specification: RecordedArguments, name: StringAssertionKey, subject: () => MatchedSubstitutes
 ): any => {
   // the member of that name of the auto-substitute that a nested setup through the call configures
-  const member = (start: Function): any => nestedSetupTarget(state, key, specification, name, start)[name]
+  const member = (start: Function): any => nestedSetupTarget(state, key, specification, name, start, false)[name]
   const path = () => `${state.memberPath(key)}${pathArguments(specification.value)}.${name}`
   const print: Printer = () => path()
+  // E48: the member of that name has a setup (a nested setup through the call), so such a call is no check
+  const configured = (): boolean => {
+    const existing = state.callSubstitutionFor(key, specification)
+    const nested = existing?.method === 'auto' ? existing.entry!.materializedState : undefined
+    return nested !== undefined && configuresMember(nested, name)
+  }
   return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
@@ -1737,7 +1774,7 @@ const stringCheckThroughMatchers = (
       return true
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-      return stringCheckView(state, key, specification, name, args, subject(), member, path, apply)
+      return stringCheckView(name, args, subject(), start => member(start)(...args), () => `${path()}${pathArguments(args)}`, configured, apply)
     },
     construct: function construct(_target: unknown, args: any[]) {
       const constructor = member(construct)
@@ -1746,19 +1783,19 @@ const stringCheckThroughMatchers = (
   })
 }
 
-/** `repo.find(Arg.any()).received(1)`: a check view, unless a substitution method follows (see stringCheckThroughMatchers). */
+/**
+ * E81: `repo.find(Arg.any()).received(1)`, `repo.find(Arg.any()).items.received(1)`: a check view of `subject` (with the
+ * count from the arguments), unless a substitution method follows: then `setupCall` gives the setup of the member of that
+ * name that it configures. E48: reported when nothing follows and the arguments are those of a check, unless
+ * `configured()` (the member of that name has a setup, see deferStringCheck).
+ */
 const stringCheckView = (
-  state: SubstituteState, key: PropertyKey, specification: RecordedArguments, name: StringAssertionKey, args: any[],
-  subject: MatchedSubstitutes, member: (start: Function) => any, path: () => string, stackStart: Function
+  name: StringAssertionKey, args: any[], subject: CheckSubject, setupCall: (start: Function) => any, path: () => string,
+  configured: () => boolean, stackStart: Function
 ): any => {
-  const print: Printer = () => `${path()}${pathArguments(args)}`
-  // E48: a check that nothing follows is reported, unless the member of that name is configured (see deferStringCheck)
+  const print: Printer = () => path()
   const dangling = checkArguments(name, args)
-    ? deferDanglingCheck(subject, 'string', name === 'didNotReceive' ? 0 : args[0], checkViewSite(stackStart), () => {
-      const existing = state.callSubstitutionFor(key, specification)
-      const nested = existing?.method === 'auto' ? existing.entry!.materializedState : undefined
-      return nested === undefined || !configuresMember(nested, name)
-    })
+    ? deferDanglingCheck(subject, 'string', name === 'didNotReceive' ? 0 : args[0], checkViewSite(stackStart), () => !configured())
     : undefined
   const count = (start: Function): ExpectedCount => {
     settle(dangling)
@@ -1769,7 +1806,7 @@ const stringCheckView = (
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (substitutionMethodOf(property) !== undefined) {
         settle(dangling)
-        return member(get)(...args)[property]
+        return setupCall(get)[property]
       }
       return assertionMember(subject, property, count(get), get)
     },
@@ -1803,23 +1840,28 @@ const configureSetError = (start: Function) => SubstituteException.generic(
   start
 )
 
-const createConfigureProxy = (state: SubstituteState): any => {
+/**
+ * `configuring`: an explicit configure view (`sub[configure]()`), where every call is a setup (D5), also of a member called
+ * received or didNotReceive. Otherwise (E81) the view is part of a nested setup that started with a call with matchers
+ * outside it (`repo.find(Arg.any()).items...`), where the string forms are checks, as on any other substitute (D11).
+ */
+const createConfigureProxy = (state: SubstituteState, configuring = true): any => {
   const print: Printer = () => `${state.path}[configure]()`
   return createView(print, {
     get: function get(_target: unknown, property: PropertyKey) {
       if (isSpecialProperty(property)) return special(property, print, undefined)
       if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, get)
-      return configureMember(state, property)
+      return configureMember(state, property, configuring)
     },
     set: function set() {
       throw configureSetError(set)
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-      return configureCall(state, SELF, RecordedArguments.forSpecification(args), false, true)
+      return configureCall(state, SELF, RecordedArguments.forSpecification(args), false, configuring)
     },
     // E23: a setup of `new` is a setup of the call
     construct: function construct(_target: unknown, args: any[]) {
-      return configureCall(state, SELF, RecordedArguments.forSpecification(args), false, true)
+      return configureCall(state, SELF, RecordedArguments.forSpecification(args), false, configuring)
     }
   })
 }
@@ -1832,10 +1874,10 @@ const createConfigureProxy = (state: SubstituteState): any => {
  */
 
 /** The configure view of a substitute value: of this copy of the library directly, of another copy through its symbol. */
-const configureViewOf = (value: any): any => {
+const configureViewOf = (value: any, configuring: boolean): any => {
   if (isFaceProxy(value)) {
     const face = value[INTERNAL] as Face | undefined
-    if (face !== undefined) return createConfigureProxy(faceState(face))
+    if (face !== undefined) return createConfigureProxy(faceState(face), configuring)
   }
   return value[constants.CONTEXT.configure.symbol]()
 }
@@ -1849,23 +1891,24 @@ const nestedOfRealValueError = (path: string, member: string, reason: string, st
 
 /** The configure view to forward a nested setup to, or undefined when the member or call does not answer yet. */
 const forwardNestedSetup = (
-  path: string, member: string, substitution: Substitution | undefined, mimicked: { value: unknown } | undefined, start: Function
+  path: string, member: string, substitution: Substitution | undefined, mimicked: { value: unknown } | undefined, start: Function,
+  configuring: boolean
 ): any => {
   if (substitution !== undefined && substitution.method !== 'auto') {
     if (substitution.method !== 'returns')
       throw nestedOfRealValueError(path, member, `is configured with ${substitution.method}()`, start)
     const value = substitution.peekValue()
-    if (isSubstituteProxy(value)) return configureViewOf(value)
+    if (isSubstituteProxy(value)) return configureViewOf(value, configuring)
     throw nestedOfRealValueError(path, member, `returns ${formatValue(value, false)}`, start)
   }
   if (mimicked !== undefined) {
-    if (isSubstituteProxy(mimicked.value)) return configureViewOf(mimicked.value)
+    if (isSubstituteProxy(mimicked.value)) return configureViewOf(mimicked.value, configuring)
     throw nestedOfRealValueError(path, member, `is mimicked with ${formatValue(mimicked.value, false)}`, start)
   }
   return undefined
 }
 
-const configureMember = (state: SubstituteState, key: PropertyKey): any => {
+const configureMember = (state: SubstituteState, key: PropertyKey, configuring = true): any => {
   const context = contextMethodOf(key)
   if (context !== undefined) return contextFunction(context, () => state, undefined, () => checkSubjectOf(state))
   const print: Printer = () => `${state.memberPath(key)} (configure)`
@@ -1886,19 +1929,25 @@ const configureMember = (state: SubstituteState, key: PropertyKey): any => {
       // a real method of a mimicked instance reads as a handle (see realGet), so nested setups configure that handle
       const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || isSubstituteProxy(mimickedValue))
         ? { value: mimickedValue } : undefined
-      const forwarded = forwardNestedSetup(`${state.memberPath(key)}.${keyToString(property)}`, keyToString(key), substitution, mimicked, get)
+      const forwarded = forwardNestedSetup(`${state.memberPath(key)}.${keyToString(property)}`, keyToString(key), substitution, mimicked, get, configuring)
       if (forwarded !== undefined) return forwarded[property]
       // D26: call/apply/bind are members here like any other: setups through them configure the member reading
-      return configureMember(state.propertyEntry(key).state, property)
+      return configureMember(state.propertyEntry(key).state, property, configuring)
     },
     set: function set() {
       throw configureSetError(set)
     },
     apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
-      return configureCall(state, key, RecordedArguments.forSpecification(args), false, true)
+      // E81: below a call with matchers, outside a configure view, `received(n)` is a check (see createConfigureProxy)
+      if (!configuring && isStringAssertionKey(key)) {
+        const setupCall = () => configureCall(state, key, RecordedArguments.forSpecification(args), false, false)
+        return stringCheckView(key, args, checkSubjectOf(state), setupCall, () => `${state.memberPath(key)}${pathArguments(args)}`,
+          () => configuresMember(state, key), apply)
+      }
+      return configureCall(state, key, RecordedArguments.forSpecification(args), false, configuring)
     },
     construct: function construct(_target: unknown, args: any[]) {
-      return configureCall(state, key, RecordedArguments.forSpecification(args), false, true)
+      return configureCall(state, key, RecordedArguments.forSpecification(args), false, configuring)
     }
   })
 }
@@ -1917,14 +1966,16 @@ const nestedEntry = (state: SubstituteState, key: PropertyKey, specification: Re
  * auto-substitute registered for the specification. For an argument list without matchers, the substitution that
  * answers that call now counts; for one with matchers, the substitution configured with the same specification.
  */
-const nestedSetupTarget = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, property: PropertyKey | undefined, start: Function): any => {
+const nestedSetupTarget = (
+  state: SubstituteState, key: PropertyKey, specification: RecordedArguments, property: PropertyKey | undefined, start: Function, configuring: boolean
+): any => {
   const answering = specification.argumentsClass === 'plain'
     ? state.findCallSubstitution(key, new ArgumentHashes(specification.value!))
     : state.callSubstitutionFor(key, specification)
   const call = `${memberLabel(key)}${formatArguments(specification.value, false)}`
   const path = `${state.memberPath(key)}${formatArguments(specification.value, false)}${property === undefined ? '(...)' : `.${keyToString(property)}`}`
-  const forwarded = forwardNestedSetup(path, call, answering, undefined, start)
-  return forwarded !== undefined ? forwarded : createConfigureProxy(nestedEntry(state, key, specification).state)
+  const forwarded = forwardNestedSetup(path, call, answering, undefined, start, configuring)
+  return forwarded !== undefined ? forwarded : createConfigureProxy(nestedEntry(state, key, specification).state, configuring)
 }
 
 /**
@@ -1935,7 +1986,7 @@ const nestedSetupTarget = (state: SubstituteState, key: PropertyKey, specificati
  * name like any other; followed by any other member access or an assignment it is the assertion API (D11), so
  * `sub.received(Arg.any()).add(1)` reports the invalid count (D10) instead of configuring something silently.
  */
-const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, stringAssertion = false, inConfigureView = false): any => {
+const configureCall = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, stringAssertion = false, configuring = false): any => {
   const print: Printer = () => `${state.memberPath(key)}${pathArguments(specification.value)} (configure)`
   const assertionCount = (start: Function): ExpectedCount =>
     key === 'didNotReceive' ? 0 : validateExpectedCount(specification.value?.[0], start)
@@ -1953,9 +2004,9 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
         const context = contextMethodOf(property)
         const subject = () => new MatchedSubstitutes(state, { key, specification })
         if (context === 'received' || context === 'didNotReceive') return contextFunction(context, () => state, undefined, subject)
-        if (!inConfigureView && isStringAssertionKey(property)) return stringCheckThroughMatchers(state, key, specification, property, subject)
+        if (!configuring && isStringAssertionKey(property)) return stringCheckThroughMatchers(state, key, specification, property, subject)
       }
-      return nestedSetupTarget(state, key, specification, property, get)[property]
+      return nestedSetupTarget(state, key, specification, property, get, configuring)[property]
     },
     set: function set(_target: unknown, property: PropertyKey, value: unknown) {
       if (!stringAssertion) throw configureSetError(set)
@@ -1967,14 +2018,14 @@ const configureCall = (state: SubstituteState, key: PropertyKey, specification: 
         assertDirectCall(state, args, assertionCount(apply), apply)
         return undefined
       }
-      return nestedSetupTarget(state, key, specification, undefined, apply)(...args)
+      return nestedSetupTarget(state, key, specification, undefined, apply, configuring)(...args)
     },
     construct: function construct(_target: unknown, args: any[]) {
       if (stringAssertion) {
         assertDirectCall(state, args, assertionCount(construct), construct)
         return {}
       }
-      return constructed(nestedSetupTarget(state, key, specification, undefined, construct)(...args))
+      return constructed(nestedSetupTarget(state, key, specification, undefined, construct, configuring)(...args))
     }
   })
 }
