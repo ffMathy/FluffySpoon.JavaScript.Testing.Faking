@@ -138,21 +138,23 @@ export const foreignMatcherKind = (value: object, plain: boolean): ForeignMatche
   }
 }
 
-/** Whether a value is an object whose prototype is Object.prototype or null (undefined: it cannot be read). */
-const isPlainObject = (value: object): boolean | undefined => {
-  try {
-    const prototype = Object.getPrototypeOf(value)
-    return prototype === Object.prototype || prototype === null
-  } catch {
-    return undefined
-  }
-}
-
-/** The matcher of a test runner that a value is (see ForeignMatcherKind), if it is one. */
+/**
+ * The matcher of a test runner that a value is (see ForeignMatcherKind), if it is one. E83 (R13V-1): every look at the
+ * value is guarded, as RecordedArguments' lookAt is (E14/E18): Array.isArray and Object.getPrototypeOf throw for a
+ * revoked proxy (an immer draft after produce() ended), and a proxy's traps may throw. Such a value is not a matcher, and
+ * is compared like any other value (by identity, as it cannot be read).
+ */
 export const foreignMatcherOf = (value: unknown): ForeignMatcherKind | undefined => {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
-  const plain = isPlainObject(value)
-  return plain === undefined ? undefined : foreignMatcherKind(value, plain)
+  if (typeof value !== 'object' || value === null) return undefined
+  let plain: boolean
+  try {
+    if (Array.isArray(value)) return undefined
+    const prototype = Object.getPrototypeOf(value)
+    plain = prototype === Object.prototype || prototype === null
+  } catch {
+    return undefined // a revoked proxy, a throwing getPrototypeOf trap
+  }
+  return foreignMatcherKind(value, plain)
 }
 
 /** Every kind of matcher of an expected argument: Arg.any/Arg.is ('single'), Arg.all ('all'), and E75's. */
