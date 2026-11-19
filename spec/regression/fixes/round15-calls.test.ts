@@ -1,7 +1,8 @@
 import test from 'ava'
 
-import { Substitute, Arg, configure, received, didNotReceive } from '../../../src'
+import { Substitute, Arg, configure, received, didNotReceive, mimick } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 15: the calls-and-arguments part of the round-14 findings (R14-ADV-2, R14V-1, R14FE-1, R14FE-4), decided in the
 // fix spec as E91, E93, E95 and E96.
@@ -188,4 +189,136 @@ test('R14V-1 a container whose keys can no longer be listed at the call is compa
   t.is(repo.load({ filter }), 'n')
   t.not(repo.load({ filter: { id: 7 } }), 'n')
   t.notThrows(() => repo.received(1).load({ filter }))
+})
+
+// ---- E95 (R14FE-1): a matcher's look at a substitute argument leaves no trace -----------------------------------------
+
+/** jest's and vitest's asymmetric matchers, as E75 recognises them (the shape, without the runner). */
+const asymmetric = (test: (value: any) => boolean): object => ({ $$typeof: Symbol.for('jest.asymmetricMatcher'), asymmetricMatch: test })
+/** sinon's matchers, as E75 recognises them (the shape, without sinon): an object that is not plain, with test and message. */
+class SinonLikeMatcher {
+  constructor(public test: (value: any) => boolean, public message = 'match(fn)') { }
+  and(): void { }
+  or(): void { }
+}
+
+test('R14FE-1 a check whose predicate reads a substitute argument does not record the read or use up a sequence value', t => {
+  const user = Substitute.for<any>()
+  user.name.returns('ann', 'bob')
+  const bus = Substitute.for<any>()
+  bus.publish(user) // code under test
+  t.notThrows(() => bus.received(1).publish(Arg.is(u => u.name === 'ann')))
+  t.notThrows(() => bus.received(1).publish(Arg.is(u => u.name === 'ann')), 'the predicate sees the same value again')
+  t.notThrows(() => user.didNotReceive().name)
+  t.is(user.name, 'ann', 'the code under test\'s first read gets the first value')
+  t.notThrows(() => user.received(1).name)
+  t.is(user.name, 'bob')
+
+  // methods, chains and call/apply/bind inside the predicate
+  const order = Substitute.for<any>()
+  order.total().returns(5, 7)
+  order.items.count.returns(2)
+  const sink = Substitute.for<any>()
+  sink.write(order)
+  t.notThrows(() => sink.received(1).write(Arg.is(o => o.total() === 5 && o.items.count === 2)))
+  t.notThrows(() => sink.received(1).write(Arg.is(o => o.total.call(o) === 5 && o.total.apply(null, []) === 5 && o.total.bind(o)() === 5)))
+  t.notThrows(() => sink.received(1).write(Arg.is(o => o.meta().tag.length !== 0 && new o.Item(1) !== undefined)))
+  t.notThrows(() => order.didNotReceive().total())
+  t.notThrows(() => order.didNotReceive().items)
+  t.notThrows(() => order.didNotReceive().meta(Arg.all()))
+  t.notThrows(() => order.didNotReceive().Item(Arg.all()))
+  t.is(order.total(), 5)
+  t.notThrows(() => order.received(1).total())
+  t.is(plain(String(order)), [
+    '@Substitute {',
+    '  received:',
+    '    total()',
+    '  configured:',
+    '    total() => returns(5, 7)',
+    '    items.count => returns(2)',
+    '}'
+  ].join('\n'))
+})
+
+test('R14FE-1 a setup whose predicate reads the argument of a real call records nothing and uses up nothing', t => {
+  const repo = Substitute.for<any>()
+  repo.save(Arg.is(u => u.name === 'ann')).returns('saved')
+  const user = Substitute.for<any>()
+  user.name.returns('ann', 'bob')
+  t.is(repo.save(user), 'saved') // code under test
+  t.is(repo.save(user), 'saved')
+  t.notThrows(() => user.didNotReceive().name)
+  t.is(user.name, 'ann')
+  t.notThrows(() => repo.received(2).save(user))
+
+  // a nested predicate (in a plain object) and a test runner's and sinon's matchers alike
+  const logger = Substitute.for<any>()
+  const client = Substitute.for<any>()
+  client.id.returns('c1', 'c2')
+  logger.info({ client }) // code under test
+  t.notThrows(() => logger.received(1).info({ client: Arg.is((c: any) => c.id === 'c1') }))
+  t.notThrows(() => logger.received(1).info({ client: asymmetric(c => c.id === 'c1') }))
+  t.notThrows(() => logger.received(1).info(new SinonLikeMatcher(entry => entry.client.id === 'c1')))
+  logger.warn(asymmetric(c => c.id === 'c1')).returns('warned')
+  t.is(logger.warn(client), 'warned')
+  t.notThrows(() => client.didNotReceive().id)
+  t.is(client.id, 'c1')
+})
+
+test('R14FE-1 a throws() setup still throws inside the predicate (a non-match), and the read is neither recorded nor listed', t => {
+  const order = Substitute.for<any>()
+  order.total.throws(new Error('not loaded'))
+  const sink = Substitute.for<any>()
+  sink.write(order)
+  t.notThrows(() => sink.didNotReceive().write(Arg.is(o => o.total > 0)))
+  const message = failureOf(t, () => sink.received(1).write(Arg.is(o => o.total > 0)))
+  t.true(message.includes('an Arg.is predicate threw while matching this call: Error: not loaded'), message)
+  t.notThrows(() => order.didNotReceive().total)
+  t.throws(() => order.total, { message: 'not loaded' }) // code under test
+  const listing = failureOf(t, () => order.received(2).total)
+  t.is((listing.match(/called at/g) ?? []).length, 1, listing)
+  t.false(listing.includes(`${__filename.replace(/.*[\\/]/, '').replace(/\.js$/, '')}:`) && listing.includes('o.total > 0'), listing)
+})
+
+test('R14FE-1 what the predicate does leaves nothing behind: assignments, a mimicked instance, promises of a sequence', async t => {
+  const instance = { count: 1, get: (key: string) => key }
+  const mimicked = Substitute.for<any>()
+  mimicked[mimick](instance)
+  const queue = Substitute.for<any>()
+  queue.push(mimicked)
+  t.notThrows(() => queue.received(1).push(Arg.is(m => m.count === 1 && m.get('a') === 'a')))
+  t.notThrows(() => queue.received(1).push(Arg.is(m => { m.count = 9; return true })))
+  t.is(instance.count, 1)
+  t.notThrows(() => mimicked.didNotReceive().count)
+  t.notThrows(() => mimicked.didNotReceive().get(Arg.all()))
+  t.notThrows(() => mimicked.didNotReceive().count = Arg.any())
+
+  const service = Substitute.for<any>()
+  service.load().resolves('one', 'two')
+  service.fail().rejects(new Error('failed'))
+  const jobs = Substitute.for<any>()
+  jobs.add(service)
+  t.notThrows(() => jobs.received(1).add(Arg.is(s => s.load() instanceof Promise && s.fail() instanceof Promise)))
+  t.is(await service.load(), 'one')
+  await t.throwsAsync(service.fail(), { message: 'failed' })
+  t.notThrows(() => service.received(1).load())
+})
+
+test('R14FE-1 the property-style half of a check (D9) is still deferred, and later checks are unaffected', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const user = Substitute.for<any>()
+    user.name.returns('ann')
+    const bus = Substitute.for<any>()
+    bus.publish(user)
+    void bus.received(2).publish
+    const errors = clock.run()
+    t.is(errors.length, 1)
+    t.true(plain(String((errors[0] as Error).message)).includes('Expected to receive 2 property reads matching publish, but received none.'))
+    t.notThrows(() => bus.received(1).publish(Arg.is(u => u.name === 'ann')))
+    t.is(clock.run().length, 0)
+    t.notThrows(() => user.didNotReceive().name)
+  } finally {
+    clock.uninstall()
+  }
 })

@@ -15,6 +15,11 @@ export type LibraryGuard = {
   /** How many comparisons of any copy are under way (see literalEquals). */
   comparing: number
   /**
+   * E95 (R14FE-1): how many matchers of any copy are looking at a value (an Arg.is predicate, a test runner's
+   * asymmetricMatch or a sinon matcher's test, see evaluateArgument): what they do to substitutes leaves no trace.
+   */
+  matching: number
+  /**
    * E71 (R11V-4): while a failure message is built with its roots numbered (E52, see Paths.withRootNumbers), the numbers
    * of the roots shown so far, so that a substitute of another copy among the arguments is numbered in the same message.
    */
@@ -30,7 +35,7 @@ const isGuard = (value: unknown): value is LibraryGuard =>
   typeof (value as LibraryGuard).printing === 'number' && typeof (value as LibraryGuard).comparing === 'number'
 
 const sharedGuard = (): LibraryGuard => {
-  const own: LibraryGuard = { printing: 0, comparing: 0, rootNumbers: undefined, rootLabels: 0 }
+  const own: LibraryGuard = { printing: 0, comparing: 0, matching: 0, rootNumbers: undefined, rootLabels: 0 }
   // (Node.js 10 has no globalThis)
   const scope: Record<symbol, unknown> | undefined = typeof globalThis === 'object' && globalThis !== null ? globalThis as any
     : typeof global === 'object' && global !== null ? global as any : undefined
@@ -40,6 +45,7 @@ const sharedGuard = (): LibraryGuard => {
     if (isGuard(existing)) {
       // (made by an earlier version of the library, which does not share the numbering)
       if (typeof existing.rootLabels !== 'number') Object.assign(existing, { rootNumbers: undefined, rootLabels: 0 })
+      if (typeof existing.matching !== 'number') existing.matching = 0
       return existing
     }
     Object.defineProperty(scope, GUARD_KEY, { value: own, writable: false, enumerable: false, configurable: true })

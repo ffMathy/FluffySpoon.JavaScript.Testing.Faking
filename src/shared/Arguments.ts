@@ -1,4 +1,5 @@
 import { inspect } from 'util'
+import { libraryGuard } from '../internals/utilities/Guard'
 
 export type PredicateFunction<T> = (arg: T) => boolean
 export type ArgumentOptions = {
@@ -169,13 +170,19 @@ export const matcherKindOf = (value: unknown): MatcherKind | undefined => brandO
  */
 export const isArgumentMatcher = (value: unknown): boolean => matcherKindOf(value) !== undefined
 
-/** Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. */
+/**
+ * Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. E95: what
+ * it does to substitutes leaves no trace (see evaluateArgument).
+ */
 export const evaluateForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown): ArgumentEvaluation => {
   let result: unknown
+  libraryGuard.matching++
   try {
     result = kind === 'asymmetric' ? (matcher as any).asymmetricMatch(value) : (matcher as any).test(value)
   } catch (error) {
     return { matches: false, error, threw: true }
+  } finally {
+    libraryGuard.matching--
   }
   return { matches: !!result, threw: false }
 }
@@ -206,15 +213,23 @@ export const foreignMatcherLabel = (value: unknown): { text: string, sample?: { 
 
 /**
  * Evaluates a matcher against a value. A predicate that throws is treated as a non-match and the error is reported.
+ * E95 (R14FE-1): while it runs (in checks, and when a call is matched against setups), what it does to substitutes
+ * leaves no trace: its reads and calls are not recorded, do not use up the values of a returns() or resolves()
+ * sequence (they see what the next real read or call would get) and create nothing that a check or a printout shows.
+ * They still answer with configured values, and a throws() setup still throws (a non-match). See the record path in
+ * Engine, which consults the counter of the matchers under way (`libraryGuard.matching`, shared by the copies).
  */
 export const evaluateArgument = (argument: AnyArgument, value: unknown): ArgumentEvaluation => {
   const matchingFunction = argument['_matchingFunction'] as PredicateFunction<unknown>
   const inverseMatch = argument['_options']?.inverseMatch ?? false
   let result: unknown
+  libraryGuard.matching++
   try {
     result = matchingFunction(value)
   } catch (error) {
     return { matches: false, error, threw: true }
+  } finally {
+    libraryGuard.matching--
   }
   if (isThenable(result)) throw thenablePredicateError(argument, result)
   return { matches: inverseMatch ? !result : !!result, threw: false }
