@@ -292,9 +292,21 @@ type TrailingAllArgumentsSignaturesOf<TOverload, TView extends SubstituteView, T
   unknown
 // (Written out without a type alias for the signatures: a substitute of all lib.dom element types needs fewer type
 // instantiations then, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
+// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away.)
+// A generic method has a single signature (see `IsGenericSignature`): its `Arg.all()` signatures are only those of that
+// signature, without the other overloads, whose types TypeScript would then instantiate anew for each use of the
+// method (they made a substitute of Node's `EventEmitter<Events>` 12% costlier to check).
+type SingleOverloadAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  ((allArguments: AllArguments<TOverload['arguments']>) =>
+    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction>) &
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
+  unknown
 type LastAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction, TOverloads extends any[]> =
   TOverload extends Overload<any[], any> ?
-  ((allArguments: AllArguments<TOverload['arguments']>) => AllArgumentsResult<TView, TOverloads>) &
+  ((allArguments: AllArguments<TOverload['arguments']>) => TOverloads[6] extends NoOverload ?
+    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction> :
+    AllArgumentsResult<TView, TOverloads>) &
   TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
   unknown
 
@@ -355,7 +367,7 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
   SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
 type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
   TGeneric extends true ?
-  GenericPositionalSignature<F, TOverloads[7], TView> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction> &
+  GenericPositionalSignature<F, TOverloads[7], TView> & SingleOverloadAllArgumentsSignatures<TOverloads[7], TView, TFunction> &
   GenericCallSignatureFor<F, TOverloads[7], TView> & GenericTrailingAllArgumentsSignatures<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
 
