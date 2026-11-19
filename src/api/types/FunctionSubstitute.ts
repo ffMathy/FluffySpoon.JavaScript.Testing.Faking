@@ -312,7 +312,27 @@ type AllArgumentsSignaturesOf<TOverloads extends any[], TView extends Substitute
 // All positional signatures come before the `Arg.all()` signatures, so a call with a single matcher
 // (`Arg.any()`, `Arg.is(...)`) resolves against the real parameter lists first (T:TY-10).
 type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, TFunction> =
-  PositionalSignatures<TOverloads, TView, TFunction> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction>
+  PositionalSignatures<TOverloads, TView, TFunction> & CatchAllSignature<TOverloads, TView> &
+  AllArgumentsSignaturesOf<TOverloads, TView, TFunction>
+
+// A single `Arg.all()` matches every call of the member, whichever overload it calls (R14FE-2, T76). On a member whose
+// overloads return different types it therefore resolves to this signature, before the `Arg.all()` signatures of the
+// overloads: its result takes what any overload returns (`.returns()`, `.resolves()`), and `.mimicks()` an
+// implementation that takes the parameter list of every overload (`(...args: A1 | A2 | ...)`) and returns what any
+// overload returns. Before, `pool.query(Arg.all())` of @types/pg resolved to the first overload it fits, the
+// `Submittable` stream overload, so `.resolves(result)` did not compile. When all overloads return the same type (and
+// for a member with one signature) there is no such signature, and the overloads' own `Arg.all()` signatures are used
+// as before (`.mimicks()` takes the first overload's parameters). Not in the assertion view, where calls return nothing.
+// (A union of members goes through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
+type CatchAllSignature<TOverloads extends any[], TView extends SubstituteView> =
+  TView extends 'assertion' ? unknown :
+  false extends EachOverloadReturnsAll<TOverloads[number], OverloadReturnTypes<TOverloads[number]>> ?
+  ((allArguments: AllArguments<OverloadArgumentLists<TOverloads[number]>>) =>
+    CallResult<TView, OverloadArgumentLists<TOverloads[number]>, OverloadReturnTypes<TOverloads[number]>, never>) :
+  unknown
+type OverloadArgumentLists<TOverload> = TOverload extends Overload<infer A, any> ? A : never
+type OverloadReturnTypes<TOverload> = TOverload extends Overload<any[], infer R> ? R : never
+type EachOverloadReturnsAll<TOverload, TAll> = TOverload extends Overload<any[], infer R> ? ([TAll] extends [R] ? true : false) : never
 
 // The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)

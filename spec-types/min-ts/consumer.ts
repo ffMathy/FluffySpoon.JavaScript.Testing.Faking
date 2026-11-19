@@ -422,6 +422,21 @@ const anonymousMember = Arg.is.not((member: Member) => member.name)
 members.save(namedMember).returns('named')
 members.save(anonymousMember).returns('anonymous')
 
+// R14FE-2 / T76: a single Arg.all() on a member whose overloads return different types takes the value of any overload
+interface PgSubmittable { submit: (connection: unknown) => void }
+interface PgResult { rows: unknown[]; rowCount: number | null }
+interface PgPool {
+  query<T extends PgSubmittable>(queryStream: T): T
+  query(text: string, values?: unknown[]): Promise<PgResult>
+  query(text: string, callback: (err: Error, result: PgResult) => void): void
+}
+const pgPool = Substitute.for<PgPool>()
+const pgResult: PgResult = { rows: [], rowCount: 0 }
+pgPool.query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.all()).mimicks(async () => pgResult)
+pgPool[configure]().query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.any('string'), Arg.all()).resolves(pgResult)
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
