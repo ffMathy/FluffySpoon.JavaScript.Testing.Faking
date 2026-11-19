@@ -1,7 +1,7 @@
 import test from 'ava'
 import { inspect } from 'util'
 
-import { Substitute } from '../../../src'
+import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { DifferenceSearch, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, firstVisibleDifference, formatValue, messageBounds } from '../../../src/internals/utilities/Stringify'
 
@@ -171,4 +171,56 @@ test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, S
   t.is(least([new Map([['a', { b: { c: 1 } }]])], [new Map([['a', { b: { c: 2 } }]])]), 2)
   t.is(least([new Set([{ x: 1 }])], [new Set([{ x: 2 }])]), 1)
   t.is(printed, 0)
+})
+
+// ---- E79 (R12-ADV-2): numbering of substitutes, with matchers and key order -----------------------------------------
+
+const NUMBERED = 'The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.'
+
+test('R12-ADV-2 (E79) lines that differ only in which substitute is the argument are numbered also with a matcher elsewhere or keys in another order', t => {
+  const app = Substitute.for<any>()
+  const plugin = Substitute.for<any>()
+  // the code under test subscribes the plugin's handler with a generated id; the test expects the app's handler
+  const bus = Substitute.for<any>()
+  bus.subscribe({ id: 'sub-81f3', handler: plugin.onEvent })
+  const matcher = messageOf(() => bus.received(1).subscribe({ id: Arg.any('string'), handler: app.onEvent }))
+  t.true(matcher.includes(NUMBERED), matcher)
+  const withMatcher = linesOf(matcher)
+  t.is(withMatcher.expected, 'subscribe({ id: Arg.any{string}, handler: @Substitute#2.onEvent })')
+  t.deepEqual(withMatcher.received, ["@Substitute#1.subscribe({ id: 'sub-81f3', handler: @Substitute#3.onEvent })"])
+  // a DTO built as `{ ...input, id }`
+  const other = Substitute.for<any>()
+  other.subscribe({ ...{ handler: plugin.onEvent }, id: 'sub-1' })
+  const order = messageOf(() => other.received(1).subscribe({ id: 'sub-1', handler: app.onEvent }))
+  t.true(order.includes(NUMBERED), order)
+  const inOtherOrder = linesOf(order)
+  t.is(inOtherOrder.expected, "subscribe({ id: 'sub-1', handler: @Substitute#2.onEvent })")
+  t.deepEqual(inOtherOrder.received, ["@Substitute#1.subscribe({ handler: @Substitute#3.onEvent, id: 'sub-1' })"])
+  // and a Map in another order (E78)
+  const third = Substitute.for<any>()
+  third.subscribe(new Map<string, unknown>([['handler', plugin.onEvent], ['id', 1]]))
+  const map = messageOf(() => third.received(1).subscribe(new Map<string, unknown>([['id', 1], ['handler', app.onEvent]])))
+  t.true(map.includes(NUMBERED), map)
+  t.deepEqual(linesOf(map).received, ["@Substitute#1.subscribe(Map(2) { 'handler' => @Substitute#3.onEvent, 'id' => 1 })"])
+})
+
+test('R12-ADV-2 (E79) lines that do not differ in which substitute is the argument are not numbered', t => {
+  const app = Substitute.for<any>()
+  const plugin = Substitute.for<any>()
+  // the same substitute, and a matcher that the received value does not satisfy
+  const bus = Substitute.for<any>()
+  bus.subscribe({ id: 3, handler: plugin.onEvent })
+  const rejected = messageOf(() => bus.received(1).subscribe({ id: Arg.is((id: number) => id > 5), handler: plugin.onEvent }))
+  t.false(rejected.includes(NUMBERED), rejected)
+  t.is(linesOf(rejected).expected, 'subscribe({ id: Arg.is{(id) => id > 5}, handler: @Substitute.onEvent })')
+  // lines that print differently in another way
+  const other = Substitute.for<any>()
+  other.subscribe({ id: 'a', handler: plugin.onEvent })
+  const differing = messageOf(() => other.received(1).subscribe({ id: 'b', handler: app.onEvent }))
+  t.false(differing.includes(NUMBERED), differing)
+  // lines without substitutes are never numbered
+  const third = Substitute.for<any>()
+  third.subscribe({ handler: 'h', id: 1 }, Arg.any())
+  const plain = messageOf(() => third.received(1).subscribe({ id: 1, handler: 'h' }, 2))
+  t.false(plain.includes(NUMBERED), plain)
 })
