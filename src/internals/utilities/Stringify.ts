@@ -363,8 +363,11 @@ export type DifferenceSearch = {
  * do. So it is decided once `best` is `base` or less, and while `best` is `floor` or less, only a difference at `base` or
  * less tells it something new (see wanted). `stopped`: not every entry that shows was looked at (the budget is spent,
  * or a value cannot be read).
+ * E84: `defer`: the comparisons in any order that matching ignores are put off (see inAnyOrder and
+ * firstVisibleDifference); `reordered`: then, the least depth at which values compared in their order print
+ * differently where that may be only such an order (it is not in `best`).
  */
-type Comparison = { best: number, stopped: boolean, readonly floor: number, readonly base: number }
+type Comparison = { best: number, stopped: boolean, readonly floor: number, readonly base: number, readonly defer: boolean, reordered: number }
 
 const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
@@ -539,6 +542,8 @@ const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from:
  * least depth at which they print differently in more than such an order; the greater of the two counts. (A comparison
  * in any order that the budget cuts short does not count: the one in their order does then.) `reordered`: whether the
  * comparison in any order can find something else at all (it is made only then).
+ * E84 (R13-ADV-1): while the comparison puts it off (`defer`), the comparison in any order is not made: what the one in
+ * their order found is noted as `reordered` instead, as it may be only an order (see firstVisibleDifference).
  */
 const inAnyOrder = (
   comparison: Comparison, inOrder: (comparison: Comparison) => void, anyOrder: (comparison: Comparison) => void, reordered?: () => boolean
@@ -546,6 +551,10 @@ const inAnyOrder = (
   const first: Comparison = { ...comparison }
   inOrder(first)
   if (first.best < comparison.best && !first.stopped && (reordered === undefined || reordered())) {
+    if (comparison.defer) {
+      comparison.reordered = Math.min(first.best, first.reordered)
+      return
+    }
     const second: Comparison = { ...comparison }
     anyOrder(second)
     if (!second.stopped) {
@@ -555,6 +564,7 @@ const inAnyOrder = (
   }
   comparison.best = first.best
   comparison.stopped = first.stopped
+  comparison.reordered = first.reordered
 }
 
 /**
@@ -807,6 +817,14 @@ const entryText = (search: DifferenceSearch, value: unknown, depth: number): str
  * up to maxDepth. The comparison stops once it knows what its caller asks: a depth of `base` or less, if they print
  * differently there; otherwise a depth up to `floor`, if they do there (`base` is `floor` unless given); otherwise the
  * least depth. It also stops when the budget is spent (search.complete is then false), with what it found so far.
+ *
+ * E84 (R13-ADV-1): the comparisons in any order that matching ignores (E78) cost much more than those in their order (they
+ * print the values), and they can only find that values print differently at a greater depth than their comparison in
+ * their order found, never at a lesser one. So the arguments are compared in their order first, with those comparisons
+ * put off (see inAnyOrder). Only when that leaves the least depth to a difference that may be only an order, the
+ * arguments that hold such a difference are compared again, now also in any order, from the least depth found
+ * elsewhere: a comparison in any order is made only for a value whose difference in their order decides the least
+ * depth, and not when another argument already prints differently at a depth no greater than that.
  */
 export const firstVisibleDifference = (
   search: DifferenceSearch, expected: readonly unknown[], actual: readonly unknown[], floor: number, base: number = floor
@@ -818,16 +836,41 @@ export const firstVisibleDifference = (
   if (all >= 0) count = all
   else if (expected.length !== actual.length) return 0
   count = Math.min(count, MAX_PRINTED_ARGUMENTS)
-  const comparison: Comparison = { best: Infinity, stopped: false, floor, base: Math.min(base, floor) }
+  const comparison: Comparison = { best: Infinity, stopped: false, floor, base: Math.min(base, floor), defer: true, reordered: Infinity }
+  /** For each argument compared, the least depth at which it prints differently in its order where that may be only an order. */
+  const reordered: number[] = []
+  /** And how many entries its comparison looked at (one that is compared again looks at them again: they count once). */
+  const looked: number[] = []
   for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
-    try {
-      compareValues(search, comparison, expected[index], actual[index], 0, false)
-    } catch {
-      comparison.stopped = true // a value that cannot be read
-    }
+    const entries = search.entries
+    comparison.reordered = Infinity
+    compareArgument(search, comparison, expected[index], actual[index])
+    reordered.push(comparison.reordered)
+    looked.push(entries - search.entries)
   }
-  if (comparison.stopped) search.complete = false
-  return comparison.best
+  if (comparison.stopped) {
+    // with what it found so far (in their order)
+    search.complete = false
+    return Math.min(comparison.best, ...reordered)
+  }
+  if (decided(comparison) || !reordered.some(depth => depth <= wanted(comparison))) return comparison.best
+  const again: Comparison = { best: comparison.best, stopped: false, floor, base: comparison.base, defer: false, reordered: Infinity }
+  for (let index = 0; index < reordered.length && !decided(again) && !again.stopped; index++) {
+    if (reordered[index] > wanted(again)) continue
+    search.entries += looked[index]
+    compareArgument(search, again, expected[index], actual[index])
+  }
+  if (again.stopped) search.complete = false
+  return again.best
+}
+
+/** Two arguments (see firstVisibleDifference). */
+const compareArgument = (search: DifferenceSearch, comparison: Comparison, expected: unknown, actual: unknown): void => {
+  try {
+    compareValues(search, comparison, expected, actual, 0, false)
+  } catch {
+    comparison.stopped = true // a value that cannot be read
+  }
 }
 
 /** Settings for tests. `budget`: whether a value is prepared only as far as it shows before the cut (see Walk.budget). */
