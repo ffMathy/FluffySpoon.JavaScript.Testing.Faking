@@ -154,7 +154,11 @@ npm run test:types
 ```
 
 Type-level tests in `spec-types/` check the public typings with the TypeScript compiler of this repository
-(`spec-types/` with `strict`, `spec-types/loose/` without). CI runs them with `npm run test:types --if-present`.
+(`spec-types/` with `strict`, `spec-types/loose/` without). `spec-types/declaration-emit/` is compiled with
+`declaration: true` and `emitDeclarationOnly`, as a project with `declaration` or `composite` would build it: it
+exports check views of substitutes, which must emit without errors (the README, "Typing limitations", says what
+cannot be exported). It writes the declaration files into `node_modules/.cache/substitute-spec-types-declaration-emit`,
+which git ignores. CI runs them with `npm run test:types --if-present`.
 
 ### Oldest supported TypeScript
 
@@ -170,6 +174,9 @@ access to the npm registry. To check other versions after `npm run build`, pass 
 default ones): `node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
 `@ts-expect-error`, for example). If a change makes the typings need a newer TypeScript, that is a breaking change:
 raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the documented minimum together.
+For each of these versions, it also compiles `spec-types/declaration-emit/R13TD-1.T73.check-views.ts` against the
+built typings with `declaration` and `emitDeclarationOnly`, into its temporary directory, which it removes afterwards
+(printed as `ok   typescript@3.6 (declaration emit of check views)`).
 Afterwards the same script runs two more checks with the TypeScript of this repository:
 
 - `spec-types/TD-10.T32.jsdoc.js` checks that the public API in the built typings carries documentation comments
@@ -229,11 +236,11 @@ not against `src/`, and checks two things:
     instances of classes that extend a substitute are ordinary objects in `toEqual()`, `toHaveBeenCalledWith()`,
     inline snapshots, setups and checks, and that jest's asymmetric matchers (`expect.any()`,
     `expect.objectContaining()`, ...) work as matchers in setups and checks, as README "Matchers of test runners"
-    documents.
+    documents. `jest.fn(substitute)` must answer what the substitute answers (README "What counts as a call").
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
     vitest's matchers, snapshots and diffs (including the checks and setups with vitest's asymmetric matchers that the
-    README's vitest example makes), and how vitest and `util.inspect` see printed, frozen and `in`-probed
-    substitutes.
+    README's vitest example makes, and `vi.fn(substitute)`), and how vitest and `util.inspect` see printed, frozen and
+    `in`-probed substitutes.
   - `test-runners/jest-modules/` (`npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel`): a
     substitute that stands in for a whole module (a `jest.mock()` factory), imported by the code under test as a
     namespace, with named imports, with a default and named import together, and as a default export through the
