@@ -3,6 +3,7 @@ import { inspect } from 'util'
 
 import { Substitute } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { DifferenceSearch, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, firstVisibleDifference, formatValue, messageBounds } from '../../../src/internals/utilities/Stringify'
 
 // Round 13: how printouts and failure messages print values (fix spec E74, E78, E79), the findings of round 12
 // R12-ADV-1, R12V-2 and R12-ADV-2.
@@ -65,4 +66,109 @@ test('R12-ADV-1 (E74) an array of more than 1,000 items whose first items print 
   const lines = linesOf(messageOf(() => million.received(1).retry([])))
   t.is(lines.received[0].replace(/\s+/g, ' '), `@Substitute.retry([ ${Array.from({ length: 20 }, (_, index) => `[Error: failed ${index}]`).join(', ')}, ... 999980 more items ])`)
   t.is(inspect(million.retry(errors(3))), "@Substitute.retry([ [Error: failed 0], [Error: failed 1], [Error: failed 2] ])")
+})
+
+// ---- E78 (R12V-2): order that matching ignores, in Maps, Sets, errors and functions ---------------------------------
+
+test('R12V-2 (E78) a Set or a Map built in another order does not keep a difference further down from being printed deeper', t => {
+  // a DTO with a Set of tags built in another order, and a real difference four levels down elsewhere
+  const posts = Substitute.for<any>()
+  posts.publish({ id: 'p1', tags: new Set(['news', 'tech']), author: { profile: { address: { city: 'Oslo' } } } })
+  const set = linesOf(messageOf(() => posts.received(1).publish({ id: 'p1', tags: new Set(['tech', 'news']), author: { profile: { address: { city: 'Bergen' } } } })))
+  // each line in its own order; caec697 and 98a8973 printed both two levels deep (`address: [Object]`)
+  t.is(set.expected, "publish({ id: 'p1', tags: Set(2) { 'tech', 'news' }, author: { profile: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(set.received, ["@Substitute.publish({ id: 'p1', tags: Set(2) { 'news', 'tech' }, author: { profile: { address: { city: 'Oslo' } } } })"])
+  // headers built from Object.entries in another order
+  const http = Substitute.for<any>()
+  http.send(new Map(Object.entries({ accept: 'json', auth: 'x' })), { body: { user: { address: { city: 'Oslo' } } } })
+  const map = linesOf(messageOf(() => http.received(1).send(new Map([['auth', 'x'], ['accept', 'json']]), { body: { user: { address: { city: 'Bergen' } } } })))
+  t.is(map.expected, "send(Map(2) { 'auth' => 'x', 'accept' => 'json' }, { body: { user: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(map.received, ["@Substitute.send(Map(2) { 'accept' => 'json', 'auth' => 'x' }, { body: { user: { address: { city: 'Oslo' } } } })"])
+  // keys that are objects, and members that are objects, in another order
+  const deep = (city: string) => ({ body: { user: { address: { city } } } })
+  const index = Substitute.for<any>()
+  index.put(new Map([[{ id: 1 }, 'a'], [{ id: 2 }, 'b']]), deep('Oslo'))
+  const keys = linesOf(messageOf(() => index.received(1).put(new Map([[{ id: 2 }, 'b'], [{ id: 1 }, 'a']]), deep('Bergen'))))
+  t.is(keys.expected, "put(Map(2) { { id: 2 } => 'b', { id: 1 } => 'a' }, { body: { user: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(keys.received, ["@Substitute.put(Map(2) { { id: 1 } => 'a', { id: 2 } => 'b' }, { body: { user: { address: { city: 'Oslo' } } } })"])
+  const tags = Substitute.for<any>()
+  tags.add(new Set([{ name: 'a' }, { name: 'b' }]), deep('Oslo'))
+  const members = linesOf(messageOf(() => tags.received(1).add(new Set([{ name: 'b' }, { name: 'a' }]), deep('Bergen'))))
+  t.is(members.expected, "add(Set(2) { { name: 'b' }, { name: 'a' } }, { body: { user: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(members.received, ["@Substitute.add(Set(2) { { name: 'a' }, { name: 'b' } }, { body: { user: { address: { city: 'Oslo' } } } })"])
+  // a Set whose members differ stays two levels deep: that shows the difference
+  const other = Substitute.for<any>()
+  other.add(new Set(['news', 'tech']), deep('Oslo'))
+  const differing = linesOf(messageOf(() => other.received(1).add(new Set(['tech', 'sport']), deep('Bergen'))))
+  t.is(differing.expected, "add(Set(2) { 'tech', 'sport' }, { body: { user: { address: [Object] } } })")
+})
+
+test('R12V-2 (E78) errors and functions whose own properties come in another order do not keep a difference further down from being printed deeper', t => {
+  const deep = (city: string) => ({ body: { user: { address: { city } } } })
+  const declined = (codeFirst: boolean) => {
+    const error = new Error('declined')
+    if (codeFirst) Object.assign(error, { code: 'E1', status: 402 })
+    else Object.assign(error, { status: 402, code: 'E1' })
+    return error
+  }
+  const payments = Substitute.for<any>()
+  payments.fail(declined(true), deep('Oslo'))
+  const errors = linesOf(messageOf(() => payments.received(1).fail(declined(false), deep('Bergen'))))
+  t.is(errors.expected, "fail([Error: declined] { status: 402, code: 'E1' }, { body: { user: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(errors.received, ["@Substitute.fail([Error: declined] { code: 'E1', status: 402 }, { body: { user: { address: { city: 'Oslo' } } } })"])
+  const handler = (onceFirst: boolean) => {
+    const onDone = function onDone() { }
+    if (onceFirst) Object.assign(onDone, { once: true, id: 7 })
+    else Object.assign(onDone, { id: 7, once: true })
+    return onDone
+  }
+  const bus = Substitute.for<any>()
+  bus.on(handler(true), deep('Oslo'))
+  const functions = linesOf(messageOf(() => bus.received(1).on(handler(false), deep('Bergen'))))
+  t.is(functions.expected, "on([Function: onDone] { id: 7, once: true }, { body: { user: { address: { city: 'Bergen' } } } })")
+  t.deepEqual(functions.received, ["@Substitute.on([Function: onDone] { once: true, id: 7 }, { body: { user: { address: { city: 'Oslo' } } } })"])
+  // functions with another name print differently: they stay two levels deep
+  const other = Substitute.for<any>()
+  other.on(Object.assign(function onDone() { }, { id: 7 }), deep('Oslo'))
+  const named = linesOf(messageOf(() => other.received(1).on(Object.assign(function onFail() { }, { id: 7 }), deep('Bergen'))))
+  t.is(named.expected, "on([Function: onFail] { id: 7 }, { body: { user: { address: [Object] } } })")
+})
+
+test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, Sets, errors and functions print differently in more than their order', t => {
+  let printed = 0
+  const search = (): DifferenceSearch => ({
+    bounds: MESSAGE_BOUNDS,
+    maxDepth: MAX_MESSAGE_DEPTH,
+    textOf: (value, depth) => {
+      printed++
+      return formatValue(value, false, messageBounds(depth))
+    },
+    keys: new Map(),
+    entries: 100_000
+  })
+  const least = (expected: unknown[], actual: unknown[]) => firstVisibleDifference(search(), expected, actual, -1)
+  // only the order differs: they print alike up to four levels deep
+  t.is(least([new Set(['a', 'b'])], [new Set(['b', 'a'])]), Infinity)
+  t.is(least([new Map<string, unknown>([['a', 1], ['b', { c: 1 }]])], [new Map<string, unknown>([['b', { c: 1 }], ['a', 1]])]), Infinity)
+  t.is(least([new Map([[{ k: 1 }, 1], [{ k: 2 }, 2]])], [new Map([[{ k: 2 }, 2], [{ k: 1 }, 1]])]), Infinity)
+  t.is(least([new Set([{ k: 1 }, { k: 2 }])], [new Set([{ k: 2 }, { k: 1 }])]), Infinity)
+  t.is(least([Object.assign(new Error('m'), { a: 1, b: 2 })], [Object.assign(new Error('m'), { b: 2, a: 1 })]), Infinity)
+  t.is(least([Object.assign(function f() { }, { a: 1, b: { c: 2 } })], [Object.assign(function f() { }, { b: { c: 2 }, a: 1 })]), Infinity)
+  // the entries of the same key, in another order, one level down
+  t.is(least([new Map<string, unknown>([['x', 1], ['a', { b: { c: 2 } }]])], [new Map<string, unknown>([['a', { b: { c: 1 } }], ['x', 1]])]), 2)
+  // members that are objects: the least depth at which their texts differ
+  t.is(least([new Set<unknown>(['x', { a: { b: 1 } }])], [new Set<unknown>([{ a: { b: 2 } }, 'x'])]), 2)
+  t.is(least([new Set<unknown>([{ i: 1 }, { a: { b: 1 } }])], [new Set<unknown>([{ a: { b: 2 } }, { i: 1 }])]), 2)
+  // other differences show where they did
+  t.is(least([new Set(['a', 'b'])], [new Set(['a', 'c'])]), 0)
+  t.is(least([new Map([['a', 1]])], [new Map([['b', 1]])]), 0)
+  t.is(least([new Map<unknown, number>([[1, 1], ['a', 2]])], [new Map<unknown, number>([['a', 2], ['1', 1]])]), 0)
+  t.is(least([Object.assign(new Error('m'), { a: 1 })], [Object.assign(new Error('m'), { a: 2 })]), 0)
+  t.is(least([Object.assign(function f() { }, { a: 1 })], [Object.assign(function g() { }, { a: 1 })]), 0)
+  t.is(least([{ f: Object.assign(function f() { }, { a: { b: 1 } }) }], [{ f: Object.assign(function f() { }, { a: { b: 2 } }) }]), 2)
+  // a Map or a Set in its order is compared without printing, as before (R11V-5)
+  printed = 0
+  t.is(least([new Map([['a', { b: { c: 1 } }]])], [new Map([['a', { b: { c: 2 } }]])]), 2)
+  t.is(least([new Set([{ x: 1 }])], [new Set([{ x: 2 }])]), 1)
+  t.is(printed, 0)
 })
