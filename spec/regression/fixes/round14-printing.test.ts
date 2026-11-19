@@ -1,7 +1,7 @@
 import test from 'ava'
 import { inspect } from 'util'
 
-import { Substitute } from '../../../src'
+import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import {
   DIFFERENCE_ENTRIES, DifferenceSearch, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, firstVisibleDifference, formatValue, messageBounds
@@ -215,3 +215,100 @@ for (const runner of ['jest', 'vitest'] as const) {
     t.notThrows(() => client.received(1).send(expect.objectContaining({ input: expect.objectContaining({ TransactItems: expect.arrayContaining([2]) }) })))
   })
 }
+
+// ---- E87 (R13FE-2): lines that still print alike -------------------------------------------------------------------
+
+const CALLS_NOTE = 'Some calls print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.'
+const ASSIGNMENTS_NOTE = 'Some assignments print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such values with Arg.is(), or assign the same instance.'
+const NUMBERED = 'The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.'
+
+/** How many times `part` is in `text`. */
+const occurrences = (text: string, part: string): number => text.split(part).length - 1
+
+test('R13FE-2 (E87) a failing check whose expected call prints exactly like a received one that it does not match ends with a note', t => {
+  // an AWS SDK v3 style command: its middleware holds closures, which match by identity
+  class Command {
+    middleware: { use: () => void }
+    constructor(public input: Record<string, unknown>) {
+      this.middleware = { use: () => { } }
+    }
+  }
+  const client = Substitute.for<any>()
+  client.send(new Command({ TableName: 'inventory' }))
+  const command = messageOf(() => client.received(1).send(new Command({ TableName: 'inventory' })))
+  t.true(command.endsWith(`\n${CALLS_NOTE}\n`), command)
+  t.is(occurrences(command, CALLS_NOTE), 1)
+  // #private fields, and symbols with the same description
+  class Money {
+    #cents: number
+    constructor(cents: number) {
+      this.#cents = cents
+    }
+    get cents() { return this.#cents }
+  }
+  const bank = Substitute.for<any>()
+  bank.pay(new Money(1), Symbol('x'))
+  bank.pay(new Money(1), Symbol('x'))
+  const money = messageOf(() => bank.received(1).pay(new Money(2), Symbol('x')))
+  t.true(money.includes('matching pay(Money {}, Symbol(x)), but received none.'), money)
+  // once per message, however many lines print alike
+  t.true(money.endsWith(`\n${CALLS_NOTE}\n`), money)
+  t.is(occurrences(money, CALLS_NOTE), 1)
+  // assignments
+  const config = Substitute.for<any>()
+  config.onError = function handler() { }
+  const assignment = messageOf(() => { config.received(1).onError = function handler() { } })
+  t.true(assignment.includes('matching onError = [Function: handler], but received none.'), assignment)
+  t.true(assignment.endsWith(`\n${ASSIGNMENTS_NOTE}\n`), assignment)
+  // with colours too (the texts are compared without them)
+  const colors = process.env.FORCE_COLOR
+  process.env.FORCE_COLOR = '1'
+  try {
+    let colored = ''
+    try {
+      client.received(1).send(new Command({ TableName: 'inventory' }))
+    } catch (error) {
+      colored = (error as Error).message
+    }
+    t.not(colored, plain(colored))
+    t.true(plain(colored).endsWith(`\n${CALLS_NOTE}\n`), colored)
+  } finally {
+    if (colors === undefined) delete process.env.FORCE_COLOR
+    else process.env.FORCE_COLOR = colors
+  }
+})
+
+test('R13FE-2 (E87) no note where the lines print differently', t => {
+  const bank = Substitute.for<any>()
+  bank.pay({ id: 1 }, Symbol('x'))
+  // a visible difference
+  t.false(messageOf(() => bank.received(1).pay({ id: 1 }, Symbol('y'))).includes(CALLS_NOTE))
+  // a difference further down, which the deeper re-print shows (E54)
+  const repo = Substitute.for<any>()
+  repo.find({ where: { user: { address: { city: 'Oslo' } } } })
+  const deeper = messageOf(() => repo.received(1).find({ where: { user: { address: { city: 'Bergen' } } } }))
+  t.true(deeper.includes("city: 'Bergen'"), deeper)
+  t.false(deeper.includes(CALLS_NOTE), deeper)
+  // lines that differ only in which substitute is the argument are numbered, and then print differently (E52)
+  const app = Substitute.for<any>()
+  const plugin = Substitute.for<any>()
+  const bus = Substitute.for<any>()
+  bus.subscribe(plugin.onEvent)
+  const numbered = messageOf(() => bus.received(1).subscribe(app.onEvent))
+  t.true(numbered.endsWith(`\n${NUMBERED}\n`), numbered)
+  t.false(numbered.includes(CALLS_NOTE), numbered)
+  // a check that matched too many calls, and lists no others
+  const shop = Substitute.for<any>()
+  shop.pay({ id: 1 }, Symbol.for('x'))
+  shop.pay({ id: 1 }, Symbol.for('x'))
+  const tooMany = messageOf(() => shop.received(1).pay({ id: 1 }, Symbol.for('x')))
+  t.false(tooMany.includes(CALLS_NOTE), tooMany)
+  // (one that does not match among them prints like the expected call: a symbol with the same description)
+  shop.pay({ id: 1 }, Symbol('x'))
+  t.true(messageOf(() => shop.received(1).pay({ id: 1 }, Symbol.for('x'))).endsWith(`\n${CALLS_NOTE}\n`))
+  // a check with a matcher prints the matcher by its label
+  t.false(messageOf(() => bank.received(3).pay(Arg.any(), Symbol('x'))).includes(CALLS_NOTE))
+  // property checks have no arguments to compare
+  bank.balance
+  t.false(messageOf(() => bank.received(2).balance).includes(CALLS_NOTE))
+})
