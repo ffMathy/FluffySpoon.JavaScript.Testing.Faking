@@ -207,6 +207,12 @@ documented example fails this check, so update the example in the same change. H
 and the directives that mark blocks (`compile-only`, `esm`, `skip`, ...), are described in
 [spec-docs/README.md](spec-docs/README.md).
 
+The examples are type-checked with the `@types/node` of this repository (18.19.x). An example of what only older
+`@types/node` versions declare, such as the README's limitations of Node.js' `EventEmitter<Events>` with
+`@types/node` up to 24, is marked `types-node-below=25`: with a newer `@types/node`, the check says that it did not
+check that block, instead of failing. The examples that need a test runner (jest, vitest) are marked `skip`, and the
+compatibility checks below run the same code.
+
 ### Compatibility checks
 
 `compatibility-checks/` is a separate npm project with its own dependencies. It runs against the packed package,
@@ -221,9 +227,12 @@ not against `src/`, and checks two things:
     (`toMatchSnapshot()` against the committed `__snapshots__/`, and `toMatchInlineSnapshot()`) and failure diffs of
     values that hold substitutes finish quickly, print paths, and do not show substitutes as mock functions, and that
     instances of classes that extend a substitute are ordinary objects in `toEqual()`, `toHaveBeenCalledWith()`,
-    inline snapshots, setups and checks.
+    inline snapshots, setups and checks, and that jest's asymmetric matchers (`expect.any()`,
+    `expect.objectContaining()`, ...) work as matchers in setups and checks, as README "Matchers of test runners"
+    documents.
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
-    vitest's matchers, snapshots and diffs, and how vitest and `util.inspect` see printed, frozen and `in`-probed
+    vitest's matchers, snapshots and diffs (including the checks and setups with vitest's asymmetric matchers that the
+    README's vitest example makes), and how vitest and `util.inspect` see printed, frozen and `in`-probed
     substitutes.
   - `test-runners/jest-modules/` (`npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel`): a
     substitute that stands in for a whole module (a `jest.mock()` factory), imported by the code under test as a
