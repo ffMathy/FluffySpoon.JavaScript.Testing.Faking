@@ -1,4 +1,5 @@
 import { inspect } from 'util'
+import { libraryGuard } from '../internals/utilities/Guard'
 
 /**
  * What an `Arg.is` predicate may return: any value whose truthiness decides the match (`user => user.name`,
@@ -99,6 +100,24 @@ const brandOf = (value: unknown): ArgumentBrand | undefined => {
   }
 }
 
+/**
+ * E96 (R14FE-4): Arg matchers compose with the matchers of test runners. jest's and vitest's equality treats any object
+ * with an `asymmetricMatch` method as an asymmetric matcher, so an Arg matcher in the sample of one of theirs
+ * (`expect.objectContaining({ topic: Arg.any('string') })`, `expect.arrayContaining([{ key: Arg.any() }])`), in a setup
+ * or a check, or in `expect(value).toEqual({ id: Arg.any() })`, matches as the Arg matcher: Arg.any / Arg.is (and their
+ * `.not` forms) as their predicate decides (E95: leaving no trace on substitutes), Arg.all() any value (as an object
+ * value, D27), and never an Arg matcher (D3). A method of the prototype, not enumerable: Arg matchers print as before,
+ * and they have no `$$typeof`, so the library recognises them as Arg matchers first (by their brand), never as matchers
+ * of a test runner (E75). (sinon's matchers only call `test` on matchers of sinon's own, so `sinon.match({ id: Arg.any() })`
+ * compares the Arg matcher as a value.)
+ */
+const asymmetricMatch = function asymmetricMatch(this: unknown, value: unknown): boolean {
+  const kind = brandOf(this)
+  if (kind === 'all') return true
+  return kind === 'single' && brandOf(value) === undefined && evaluateArgument(this as AnyArgument, value).matches
+}
+Object.defineProperty(BaseArgument.prototype, 'asymmetricMatch', { value: asymmetricMatch, writable: true, configurable: true })
+
 /** True for matchers created with Arg.any / Arg.is (including `.not`), by any copy of this package. */
 export const isSingleArgument = (value: unknown): value is Argument<unknown> => brandOf(value) === 'single'
 /** True for matchers created with Arg.all, by any copy of this package. */
@@ -179,13 +198,19 @@ export const matcherKindOf = (value: unknown): MatcherKind | undefined => brandO
  */
 export const isArgumentMatcher = (value: unknown): boolean => matcherKindOf(value) !== undefined
 
-/** Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. */
+/**
+ * Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. E95: what
+ * it does to substitutes leaves no trace (see evaluateArgument).
+ */
 export const evaluateForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown): ArgumentEvaluation => {
   let result: unknown
+  libraryGuard.matching++
   try {
     result = kind === 'asymmetric' ? (matcher as any).asymmetricMatch(value) : (matcher as any).test(value)
   } catch (error) {
     return { matches: false, error, threw: true }
+  } finally {
+    libraryGuard.matching--
   }
   return { matches: !!result, threw: false }
 }
@@ -216,15 +241,23 @@ export const foreignMatcherLabel = (value: unknown): { text: string, sample?: { 
 
 /**
  * Evaluates a matcher against a value. A predicate that throws is treated as a non-match and the error is reported.
+ * E95 (R14FE-1): while it runs (in checks, and when a call is matched against setups), what it does to substitutes
+ * leaves no trace: its reads and calls are not recorded, do not use up the values of a returns() or resolves()
+ * sequence (they see what the next real read or call would get) and create nothing that a check or a printout shows.
+ * They still answer with configured values, and a throws() setup still throws (a non-match). See the record path in
+ * Engine, which consults the counter of the matchers under way (`libraryGuard.matching`, shared by the copies).
  */
 export const evaluateArgument = (argument: AnyArgument, value: unknown): ArgumentEvaluation => {
   const matchingFunction = argument['_matchingFunction'] as PredicateFunction<unknown>
   const inverseMatch = argument['_options']?.inverseMatch ?? false
   let result: unknown
+  libraryGuard.matching++
   try {
     result = matchingFunction(value)
   } catch (error) {
     return { matches: false, error, threw: true }
+  } finally {
+    libraryGuard.matching--
   }
   if (isThenable(result)) throw thenablePredicateError(argument, result)
   return { matches: inverseMatch ? !result : !!result, threw: false }

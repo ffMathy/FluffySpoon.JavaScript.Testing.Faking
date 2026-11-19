@@ -206,3 +206,53 @@ describe('R13FE-5 vi.fn(substitute) answers what the substitute answers', () => 
     api.received(1).getUser(1)
   })
 })
+
+// Round 15 (E96, R14FE-4): an Arg matcher inside the sample of one of vitest's asymmetric matchers matches as the Arg
+// matcher (vitest's equality asks it, through its asymmetricMatch method), in checks and setups, and in vitest's own
+// toEqual. Before, vitest compared it as a plain object: setups with it never answered, received() failed and
+// didNotReceive() passed although a matching call was made.
+describe('E96 Arg matchers inside vitest\'s asymmetric matchers', () => {
+  test('checks and setups', () => {
+    const producer = Substitute.for<any>()
+    producer.send({ topic: 'orders', messages: [{ key: 'o1', value: 1 }] })
+    producer.received(1).send(expect.objectContaining({ topic: Arg.any('string') }))
+    producer.received(1).send({ topic: 'orders', messages: expect.arrayContaining([{ key: Arg.any(), value: Arg.is((v: number) => v > 0) }]) })
+    producer.didNotReceive().send(expect.objectContaining({ topic: Arg.any('number') }))
+    expect(() => producer.didNotReceive().send(expect.objectContaining({ topic: Arg.any('string') }))).toThrow(
+      'Expected to receive 0 method calls matching send(ObjectContaining { topic: Arg.any{string} }), but received 1.'
+    )
+
+    const repo = Substitute.for<any>()
+    repo.save(expect.objectContaining({ id: Arg.any(), name: Arg.is.not((name: string) => name === '') })).returns('saved')
+    expect(repo.save({ id: 7, name: 'ann', extra: true })).toBe('saved')
+    expect(repo.save({ id: 7, name: '' })).not.toBe('saved')
+    repo.received(2).save(Arg.all())
+  })
+
+  test('vitest\'s own equality', () => {
+    expect({ id: 7, name: 'ann' }).toEqual({ id: Arg.any(), name: Arg.any('string') })
+    expect([1, { id: 'x' }]).toEqual([Arg.is((n: number) => n === 1), { id: Arg.all() }])
+    expect({ id: 7 }).not.toEqual({ id: Arg.any('string') })
+    expect({ id: 7 }).not.toEqual({ id: Arg.is.not((n: number) => n === 7) })
+    const fn = vi.fn()
+    fn('a', { id: 1 })
+    expect(fn).toHaveBeenCalledWith(Arg.any('string'), { id: Arg.any() })
+  })
+
+  test('Arg matchers and substitutes print as before (messages, snapshots)', () => {
+    const repo = Substitute.for<any>()
+    repo.find({ id: Arg.any(), tags: [Arg.all()] }, Arg.is.not((x: unknown) => x === null)).returns('found')
+    repo.save(expect.objectContaining({ id: Arg.any('number') })).returns('saved')
+    repo.find({ id: 1, tags: [] }, 2)
+    expect(String(repo)).toBe([
+      '@Substitute {',
+      '  received:',
+      '    find({ id: 1, tags: [] }, 2)',
+      '  configured:',
+      '    find({ id: Arg.any{any}, tags: [ Arg.all{} ] }, Not Arg.is{(x) => x === null}) => returns(\'found\')',
+      '    save(ObjectContaining { id: Arg.any{number} }) => returns(\'saved\')',
+      '}'
+    ].join('\n'))
+    expect({ repo, matchers: [Arg.any(), Arg.all()] }).toMatchSnapshot()
+  })
+})
