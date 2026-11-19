@@ -256,6 +256,17 @@ export class AutoEntry {
     return Array.isArray(args) ? args : (args as RecordedArguments | undefined)?.value
   }
 
+  /**
+   * E81: whether this is the auto-substitute of a nested setup through a call with matchers (see specificationEntry),
+   * which stands for every call matching it, rather than of one call or member.
+   */
+  public get specifiesMatchers(): boolean {
+    const args = this._args
+    if (args === undefined || Array.isArray(args)) return false
+    const argumentsClass = (args as RecordedArguments).argumentsClass
+    return argumentsClass === 'with-predicate' || argumentsClass === 'wildcard'
+  }
+
   /** Whether the arguments of this call entry match a call with these actual arguments. */
   public matchesCall(actualArguments: readonly unknown[]): boolean {
     const args = this._args
@@ -341,6 +352,15 @@ const refile = (byHash: Buckets<AutoEntry>, unchecked: Unchecked): ArgumentHashe
   return hashes
 }
 /**
+ * E81 (R13FE-3): whether a substitution answers calls. An 'auto' registration (the auto-substitute of a nested setup
+ * through a call, `repo.find(Arg.any()).name.returns('x')`) answers only once something below it is configured: a read
+ * or a check through a call with matchers (`repo.find(Arg.any()).name`, `repo.find(Arg.any()).items[received]()`)
+ * registers the auto-substitute that a nested setup would configure, and it must not change what later calls answer.
+ */
+const answers = (substitution: Substitution): boolean =>
+  substitution.method !== 'auto' || substitution.entry!.materializedState?.configured === true
+
+/**
  * The most recent substitution in `list` (kept in configuration order) that matches, if it is more recent than `best`.
  * `sameHash`: `list` holds the substitutions with the structural hash of the actual arguments (E13, see mayEqual).
  */
@@ -348,7 +368,7 @@ const mostRecentMatch = (list: readonly Substitution[], actual: ArgumentHashes, 
   for (let index = list.length - 1; index >= 0; index--) {
     const candidate = list[index]
     if (best !== undefined && candidate.order < best.order) return best
-    if ((!sameHash || actual.mayEqual(candidate.args!.value, list.length)) && candidate.args!.matches(actual.args)) return candidate
+    if ((!sameHash || actual.mayEqual(candidate.args!.value, list.length)) && answers(candidate) && candidate.args!.matches(actual.args)) return candidate
   }
   return best
 }
@@ -459,7 +479,7 @@ class CallSubstitutions {
     for (let index = withMatchers.length - 1; index >= 0; index--) {
       const candidate = withMatchers[index]
       if (best !== undefined && candidate.rank >= best.rank) continue
-      if (candidate.args!.matches(actualArguments)) best = candidate
+      if (answers(candidate) && candidate.args!.matches(actualArguments)) best = candidate
     }
     return best
   }
@@ -535,6 +555,12 @@ export class SubstituteState {
   /** E39: the record of the operation that last answered with this substitute (a configured value), and when. */
   private _handedOutBy?: CallRecord
   private _handedOutAt?: number
+  /**
+   * E81: the received calls answered with a configured value that is a substitute, in order, each run of calls answered
+   * by the same one after it (see noteConfiguredAnswer), and the last of them.
+   */
+  private _configuredAnswers?: Array<CallRecord | AutoEntry | SubstituteState>
+  private _lastConfiguredAnswer?: AutoEntry | SubstituteState
 
   constructor(public readonly owner?: AutoEntry) { }
 
@@ -569,6 +595,11 @@ export class SubstituteState {
    */
   public isConfiguredKey(key: PropertyKey): boolean {
     return this._configuredKeys !== undefined && this._configuredKeys.has(key)
+  }
+
+  /** E81: whether this substitute, or one of its auto-substitutes, has a setup or mimicks an instance (see noteSetup). */
+  public get configured(): boolean {
+    return this._configured === true
   }
 
   /**
@@ -627,6 +658,34 @@ export class SubstituteState {
     return undefined
   }
 
+  /**
+   * E81: notes that a received call of this substitute answered with a configured value that is a substitute (a setup's
+   * value, the auto-substitute of a nested setup through a call with matchers, a mimicked instance's value), so that a
+   * check through a call with matchers can count that substitute's calls. An unconfigured call answers the auto-substitute
+   * of its arguments, which is found again from them (existingCallEntry), so it is not noted.
+   */
+  public noteConfiguredAnswer(record: CallRecord, answer: AutoEntry | SubstituteState): void {
+    // (a run of calls answered by the same substitute, as in a fluent loop, keeps it once, before the run)
+    const answers = this._configuredAnswers
+    if (answers === undefined) this._configuredAnswers = [answer, record]
+    else if (this._lastConfiguredAnswer === answer) answers.push(record)
+    else answers.push(answer, record)
+    this._lastConfiguredAnswer = answer
+  }
+
+  /** E81: what the received calls of one member answered, for those noted by noteConfiguredAnswer. */
+  public configuredAnswers(key: PropertyKey): Map<CallRecord, AutoEntry | SubstituteState> | undefined {
+    const answers = this._configuredAnswers
+    if (answers === undefined) return undefined
+    const byRecord = new Map<CallRecord, AutoEntry | SubstituteState>()
+    let answer: AutoEntry | SubstituteState | undefined
+    for (const item of answers) {
+      if (!(item instanceof CallRecord)) answer = item
+      else if (item.key === key) byRecord.set(item, answer!)
+    }
+    return byRecord
+  }
+
   /** Received calls of one member, in order, without retracted records. */
   public recordsFor(key: PropertyKey): CallRecord[] {
     const records = this._recordsByKey.get(key)
@@ -645,6 +704,7 @@ export class SubstituteState {
       state._records.length = 0
       state._recordsByKey.clear()
       state._pendingReads.clear()
+      if (state._configuredAnswers !== undefined) state._configuredAnswers = state._lastConfiguredAnswer = undefined
       for (const entry of state.entries()) {
         const nested = entry.materializedState
         if (nested !== undefined) pending.push(nested)
@@ -713,6 +773,11 @@ export class SubstituteState {
     return this._propertyEntries.get(key)?.materializedState !== undefined
   }
 
+  /** E81: the auto-substitute behind a member, if it has been created (see propertyEntry). */
+  public existingPropertyEntry(key: PropertyKey): AutoEntry | undefined {
+    return this._propertyEntries.get(key)
+  }
+
   /**
    * The auto-substitute for a call with these actual (literal) arguments (D2), found in O(1) expected time by the
    * structural hash of the arguments (D35). The same objects get the same auto-substitute even when they were
@@ -755,6 +820,22 @@ export class SubstituteState {
     }
     unreadableCall = actual.metUnreadable ? { args: entry.argumentList!, operation: actual.operation, sequence: currentSequence() } : undefined
     return entry
+  }
+
+  /**
+   * E81: the auto-substitute that callEntry gives a call with these actual arguments, if it has been created: the one
+   * that an unconfigured call with them answered. Looked up as callEntry does, without creating one.
+   */
+  public existingCallEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry | undefined {
+    const index = this._callEntries.get(key)
+    if (index === undefined) return undefined
+    const identity = actual.identity
+    if (identity !== undefined && index.byIdentity !== undefined) {
+      const known = bucketItems(index.byIdentity, identity)?.find(entry => entry.matchesCall(actual.args))
+      if (known !== undefined) return known
+    }
+    const entry = findEntry(index.byHash, actual.best, actual, !actual.memoBased)
+    return entry !== undefined || identity === undefined ? entry : this.lookAgain(index, actual)
   }
 
   /**

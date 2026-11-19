@@ -1,15 +1,38 @@
-import { inspect } from 'util'
+import { inspect, types } from 'util'
 
 import { SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
 import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
-import { keyToString } from './Constants'
+import { isStringAssertionKey, keyToString } from './Constants'
+import { isSubstituteProxy } from '../shared'
 import { plural } from './utilities'
 
 /** undefined means "1 or more" */
 export type ExpectedCount = number | undefined
+
+/**
+ * E81 (R13FE-3): what a check through the result of a call with matchers counts the calls of: the substitutes that the
+ * received calls matching it answered (`bus.on('saved', Arg.any())[received](1)()` checks what every `bus.on('saved',
+ * handler)` returned). Its path is that of the call with matchers (`@Substitute.on('saved', Arg.any{any})`), its records
+ * those of all of them, in the order they were received, and each record names the substitute it belongs to.
+ */
+export interface SeveralSubstitutes {
+  readonly path: string
+  /** The substitutes, in the order of the received calls that answered them. */
+  readonly states: readonly SubstituteState[]
+  memberPath(key: PropertyKey): string
+  recordsFor(key: PropertyKey): CallRecord[]
+  /** The substitute that a record of recordsFor belongs to, as messages name it. */
+  ownerOf(record: CallRecord): { readonly path: string } | undefined
+}
+
+/** What a check counts the calls of: a substitute, or several (E81). */
+export type CheckSubject = SubstituteState | SeveralSubstitutes
+
+const ownerOf = (subject: CheckSubject, record: CallRecord): { readonly path: string } | undefined =>
+  subject instanceof SubstituteState ? undefined : subject.ownerOf(record)
 
 /** received(n): n must be omitted or be a non-negative safe integer. received(0) is didNotReceive(). */
 export const validateExpectedCount = (count: unknown, stackStart?: Function): ExpectedCount => {
@@ -32,14 +55,14 @@ const receivedText = (matches: number) => matches === 0 ? 'none' : matches.toStr
 const times = (count: number) => `${count} ${plural('time', count)}`
 
 /** A method assertion found too few calls, and the member was also read without being invoked. */
-const readWithoutCallHint = (state: SubstituteState, key: PropertyKey, reads: number): string =>
+const readWithoutCallHint = (state: CheckSubject, key: PropertyKey, reads: number): string =>
   `${state.memberPath(key)} was read ${times(reads)} without being called; reading a method does not count as calling it.`
 
 /**
  * didNotReceive().m(...) on a member that was only read (A:RT-3). The property-style half of the assertion is
  * decided when the member is read (D9), so the reads fail it even when an invocation follows.
  */
-const onlyReadHint = (state: SubstituteState, key: PropertyKey, reads: number): string => {
+const onlyReadHint = (state: CheckSubject, key: PropertyKey, reads: number): string => {
   const name = keyToString(key)
   return `${state.memberPath(key)} was read ${times(reads)} but never called. ` +
     `If it is a method that was only read, for example passed as a callback, these reads still fail didNotReceive().${name}(...): ` +
@@ -48,7 +71,7 @@ const onlyReadHint = (state: SubstituteState, key: PropertyKey, reads: number): 
 }
 
 /** `sub`, `sub.logger`, `sub.getCalc()`, ...: the substitute as it would be written in a test. */
-const asExpression = (state: SubstituteState): string => state.path.replace(/^@Substitute/, 'sub')
+const asExpression = (state: { readonly path: string }): string => state.path.replace(/^@Substitute/, 'sub')
 
 const memberAccess = (key: PropertyKey): string =>
   typeof key === 'string' && /^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${typeof key === 'symbol' ? keyToString(key) : inspect(key)}]`
@@ -57,12 +80,12 @@ const memberAccess = (key: PropertyKey): string =>
  * The amended D9 case: a property-style assertion on a member that has only ever been invoked, never read as a
  * property, and the assertion was not invoked either. A method assertion was most likely intended.
  */
-const onlyInvokedExplanation = (state: SubstituteState, key: PropertyKey, calls: number, count: number): string =>
+const onlyInvokedExplanation = (state: CheckSubject, key: PropertyKey, calls: number, count: number): string =>
   `${keyToString(key)} was never read as a property; it was called ${times(calls)} as a method. ` +
   `To assert calls, invoke it: ${asExpression(state)}.received(${count})${memberAccess(key)}(...)`
 
 /** Method assertion: counts invocations whose arguments match. Property reads never count. */
-export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[], count: ExpectedCount, stackStart?: Function): void => {
+export const assertCall = (state: CheckSubject, key: PropertyKey, args: any[], count: ExpectedCount, stackStart?: Function): void => {
   const specification = RecordedArguments.forSpecification(args)
   const records = state.recordsFor(key).filter(record => record.kind !== 'set')
   const listed: ListedCall[] = []
@@ -71,12 +94,12 @@ export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[]
   for (const record of records) {
     if (record.kind !== 'call') {
       reads++
-      listed.push({ record, matches: false })
+      listed.push({ record, matches: false, owner: ownerOf(state, record) })
       continue
     }
     const match = specification.matchDetailed(record.args)
     if (match.matches) matches++
-    listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError })
+    listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError, owner: ownerOf(state, record) })
   }
   if (countMatches(count, matches)) return
   const tooFew = matches < (count ?? 1)
@@ -92,7 +115,7 @@ export const assertCall = (state: SubstituteState, key: PropertyKey, args: any[]
 }
 
 /** Property assignment assertion: counts assignments whose value matches (Arg matchers allowed). */
-export const assertSet = (state: SubstituteState, key: PropertyKey, value: unknown, count: ExpectedCount, stackStart?: Function): void => {
+export const assertSet = (state: CheckSubject, key: PropertyKey, value: unknown, count: ExpectedCount, stackStart?: Function): void => {
   const specification = RecordedArguments.forSpecification([value])
   const records = state.recordsFor(key).filter(record => record.kind === 'set')
   const listed: ListedCall[] = []
@@ -100,7 +123,7 @@ export const assertSet = (state: SubstituteState, key: PropertyKey, value: unkno
   for (const record of records) {
     const match = specification.matchDetailed(record.args)
     if (match.matches) matches++
-    listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError })
+    listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError, owner: ownerOf(state, record) })
   }
   if (countMatches(count, matches)) return
   throw SubstituteException.forCallCountMismatch({
@@ -181,7 +204,7 @@ export const settle = (deferred: DeferredAssertion | undefined): void => {
  *   property assertion, but is most likely a method assertion whose parentheses were forgotten. It gets the same
  *   cancellable deferred report.
  */
-export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, count: ExpectedCount, stackStart?: Function): DeferredAssertion | undefined => {
+export const assertPropertyRead = (state: CheckSubject, key: PropertyKey, count: ExpectedCount, stackStart?: Function): DeferredAssertion | undefined => {
   const records = state.recordsFor(key).filter(record => record.kind !== 'set')
   let reads = 0
   let calls = 0
@@ -198,7 +221,7 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
       receivedText: `${calls} ${plural('method call', calls)}`,
       explanation: `${keyToString(key)} was called ${times(calls)} as a method; ` +
         `to assert calls, invoke it: ${asExpression(state)}.didNotReceive()${memberAccess(key)}(...)`,
-      listed: records.map((record: CallRecord) => ({ record, matches: false }))
+      listed: records.map((record: CallRecord) => ({ record, matches: false, owner: ownerOf(state, record) }))
     }))
     return undefined
   }
@@ -210,9 +233,12 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   // names neither kind, and says that the member was read without being called. For a count of 0 the reads are what
   // fails didNotReceive(): they are marked, and the hint points at clearing the received calls after the arrange step.
   const onlyRead = calls === 0 && reads > 0
+  // E85 (R13-ADV-2): unless what the reads answered cannot be called (see answersValues): then the member is no method,
+  // and the reads are what the check counts, as a property check
+  const values = onlyRead && answersValues(state, key)
   // A deferred failure is only thrown when the member was not invoked, so it is a property assertion.
   // An immediate failure fails for both readings; the kind is only named when the records show it.
-  const kind: ExpectedKind = deferrable ? 'property' : 'unknown'
+  const kind: ExpectedKind = deferrable || values ? 'property' : 'unknown'
   const createError = (start?: Function) => SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
@@ -220,8 +246,8 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
     explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
-    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || count === 0) })),
-    hints: reads === 0 ? undefined
+    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || values || count === 0), owner: ownerOf(state, record) })),
+    hints: reads === 0 || values ? undefined
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]
         // read but never invoked, or invoked as well: most likely a method, with fewer calls than expected
         : onlyRead || (calls > 0 && count !== undefined && calls < count) ? [readWithoutCallHint(state, key, reads)]
@@ -345,7 +371,7 @@ export type CheckForm = 'symbol' | 'string'
  * E48: the usage error of a check view that nothing followed (`next.didNotReceive()`, `sub[received](2)` as a
  * statement): it checks nothing. It names the substitute and shows the complete forms.
  */
-const danglingCheckError = (state: SubstituteState, form: CheckForm, count: ExpectedCount): SubstituteException => {
+const danglingCheckError = (state: { readonly path: string }, form: CheckForm, count: ExpectedCount): SubstituteException => {
   const name = count === 0 ? 'didNotReceive' : 'received'
   const call = count === 0 ? '()' : count === undefined ? '()' : `(${count})`
   const view = (subject: string) => form === 'symbol' ? `${subject}[${name}]${call}` : `${subject}.${name}${call}`
@@ -386,7 +412,7 @@ export const checkViewSite = (stackStart: Function): StackHolder => {
  * E56: it is the report scheduled last, too, so that a matcher usage error in the view's own arguments cancels it (see
  * cancelDeferredReportOf).
  */
-export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, count: ExpectedCount, site: StackHolder, applies?: () => boolean): DeferredAssertion => {
+export const deferDanglingCheck = (state: { readonly path: string }, form: CheckForm, count: ExpectedCount, site: StackHolder, applies?: () => boolean): DeferredAssertion => {
   const report: PendingReport = {
     settled: false,
     site,
@@ -401,6 +427,56 @@ export const deferDanglingCheck = (state: SubstituteState, form: CheckForm, coun
   }
   scheduleReport(report)
   return report
+}
+
+/*
+ * E85 (R13-ADV-2): a property check of a member that was only read fails with E77's kind-neutral text and its hint that
+ * reading a method does not call it, because the member may be a method that the code under test looked at without
+ * calling it. Not when what the reads answered cannot be called: a property configured with returns() of values that are
+ * neither functions nor substitutes (every substitute is a function), with resolves() or rejects() (a promise), or with
+ * throws(), or a mimicked instance whose value for the key is not a function (or that does not have the key). Such a
+ * member is a property: the check counts property reads, its reads match, and there is no hint. The records do not keep
+ * what the reads answered, so the member's setups decide, as they are when the check is made. A member that is configured
+ * as a method as well, configured with mimicks(), unconfigured (its reads answer an auto-substitute), or whose mimicked
+ * value comes from a getter (which the check does not run), may be a method.
+ */
+const answersValues = (subject: CheckSubject, key: PropertyKey): boolean => {
+  if (subject instanceof SubstituteState) return stateAnswersValues(subject, key)
+  return subject.states.length > 0 && subject.states.every(state => stateAnswersValues(state, key))
+}
+
+const stateAnswersValues = (state: SubstituteState, key: PropertyKey): boolean => {
+  if (state.hasCallSubstitutions(key)) return false
+  const property = state.propertySubstitution(key)
+  if (property !== undefined) {
+    switch (property.method) {
+      case 'returns': return property.values.every(value => typeof value !== 'function')
+      case 'mimicks': return false
+      default: return true
+    }
+  }
+  const instance = state.mimicked?.instance
+  if (instance === undefined || isSubstituteProxy(instance) || types.isProxy(instance)) return false
+  // (as the read does, see the engine's realGet: a key the instance does not have reads as undefined, unless the
+  // substitute itself needs it)
+  if (!(key in instance)) return !(isStringAssertionKey(key) || state.hasConfiguredPropertyEntry(key))
+  const value = dataValue(instance, key)
+  return value !== GETTER && typeof value !== 'function'
+}
+
+const GETTER: unique symbol = Symbol('getter')
+
+/** The value of an own or inherited data property, without running a getter (GETTER for an accessor or when unreadable). */
+const dataValue = (instance: object, key: PropertyKey): unknown => {
+  try {
+    for (let current: object | null = instance; current !== null; current = Reflect.getPrototypeOf(current)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(current, key)
+      if (descriptor !== undefined) return 'value' in descriptor ? descriptor.value : GETTER
+    }
+  } catch {
+    // (a value that cannot be inspected may be anything)
+  }
+  return GETTER
 }
 
 /** What was received, for a failure that does not know yet whether it is about reads or calls. */
