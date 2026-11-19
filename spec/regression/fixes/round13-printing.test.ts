@@ -155,6 +155,39 @@ test('R12V-2 (E78) a function whose properties differ beyond what an object show
   t.true(lines.received[0].endsWith('w20: 20, w21: 0 } } })'), lines.received[0])
 })
 
+test('R12V-2 (E78) orders inside the members of a Set and the properties of errors and functions do not keep a difference further down from being printed deeper', t => {
+  const deep = (city: string) => ({ body: { user: { address: { city } } } })
+  const DEEP = (city: string) => `{ body: { user: { address: { city: '${city}' } } } }`
+  // an object held by an error, with its keys in another order
+  const payments = Substitute.for<any>()
+  payments.fail(Object.assign(new Error('x'), { info: { a: 1, b: 2 } }), deep('Oslo'))
+  const errors = linesOf(messageOf(() => payments.received(1).fail(Object.assign(new Error('x'), { info: { b: 2, a: 1 } }), deep('Bergen'))))
+  t.is(errors.expected, `fail([Error: x] { info: { b: 2, a: 1 } }, ${DEEP('Bergen')})`)
+  t.deepEqual(errors.received, [`@Substitute.fail([Error: x] { info: { a: 1, b: 2 } }, ${DEEP('Oslo')})`])
+  // and an error held by an error (its cause), with its properties in another order
+  const cause = (codeFirst: boolean) => codeFirst ? Object.assign(new Error('c'), { code: 1, at: 2 }) : Object.assign(new Error('c'), { at: 2, code: 1 })
+  const jobs = Substitute.for<any>()
+  jobs.fail(Object.assign(new Error('x'), { cause: cause(true) }), deep('Oslo'))
+  const causes = linesOf(messageOf(() => jobs.received(1).fail(Object.assign(new Error('x'), { cause: cause(false) }), deep('Bergen'))))
+  t.is(causes.expected, `fail([Error: x] { [cause]: [Error: c] { at: 2, code: 1 } }, ${DEEP('Bergen')})`)
+  // members of a Set in another order, whose keys are in another order, too
+  const tags = Substitute.for<any>()
+  tags.add(new Set([{ a: 1, b: 2 }, { c: 3 }]), deep('Oslo'))
+  const members = linesOf(messageOf(() => tags.received(1).add(new Set([{ c: 3 }, { b: 2, a: 1 }]), deep('Bergen'))))
+  t.is(members.expected, `add(Set(2) { { c: 3 }, { b: 2, a: 1 } }, ${DEEP('Bergen')})`)
+  t.deepEqual(members.received, [`@Substitute.add(Set(2) { { a: 1, b: 2 }, { c: 3 } }, ${DEEP('Oslo')})`])
+  // a Map held by a function, in another order
+  const bus = Substitute.for<any>()
+  bus.on(Object.assign(function h() { }, { m: new Map([['a', 1], ['b', 2]]) }), deep('Oslo'))
+  const functions = linesOf(messageOf(() => bus.received(1).on(Object.assign(function h() { }, { m: new Map([['b', 2], ['a', 1]]) }), deep('Bergen'))))
+  t.is(functions.expected, `on([Function: h] { m: Map(2) { 'b' => 2, 'a' => 1 } }, ${DEEP('Bergen')})`)
+  // members that differ in more than their order stay two levels deep
+  const other = Substitute.for<any>()
+  other.add(new Set([{ a: 1, b: 2 }, { c: 3 }]), deep('Oslo'))
+  const differing = linesOf(messageOf(() => other.received(1).add(new Set([{ c: 3 }, { b: 2, a: 9 }]), deep('Bergen'))))
+  t.is(differing.expected, "add(Set(2) { { c: 3 }, { b: 2, a: 9 } }, { body: { user: { address: [Object] } } })")
+})
+
 test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, Sets, errors and functions print differently in more than their order', t => {
   let printed = 0
   const search = (): DifferenceSearch => ({
