@@ -111,28 +111,24 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   const found: SubstituteState[] = []
   let more = false
   let budget = FLUENT_SEARCH_BUDGET
-  // breadth first, so that the nearest places come first
-  const queue: SubstituteState[] = []
-  for (const root of roots) for (const entry of root.entries()) {
-    if (--budget < 0) break
-    const nested = entry.materializedState
-    if (nested !== undefined) queue.push(nested)
-  }
-  for (let index = 0; index < queue.length && budget > 0; index++) {
-    const state = queue[index]
-    const records = state.recordsFor(key)
-    budget -= records.length
-    if (records.some(record => record.kind === 'call')) {
-      if (found.length === FLUENT_PATHS_SHOWN) {
-        more = true
-        break
-      }
-      found.push(state)
-    }
-    for (const entry of state.entries()) {
-      if (--budget < 0) break
+  // breadth first, so that the nearest places come first; each auto-substitute is looked at when it is reached, so that
+  // the first ones of a substitute with more of them than the budget are looked at, too
+  const queue: SubstituteState[] = [...roots]
+  search: for (let index = 0; index < queue.length; index++) {
+    for (const entry of queue[index].entries()) {
+      if (--budget < 0) break search
       const nested = entry.materializedState
-      if (nested !== undefined) queue.push(nested)
+      if (nested === undefined) continue
+      const records = nested.recordsFor(key)
+      budget -= records.length
+      if (records.some(record => record.kind === 'call')) {
+        if (found.length === FLUENT_PATHS_SHOWN) {
+          more = true
+          break search
+        }
+        found.push(nested)
+      }
+      queue.push(nested)
     }
   }
   if (found.length === 0) return undefined

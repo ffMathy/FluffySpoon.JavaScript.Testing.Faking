@@ -290,6 +290,15 @@ test('R14FE-5 (E97) the search is bounded: a call beyond it is not named, and ne
   root.next(0).end()
   t.true(failureOf(t, () => root.received().end()).includes('but on a substitute further down: @Substitute.next(0).end(...).'))
 
+  // a substitute with far more auto-substitutes than the search looks at: the first ones are looked at
+  const api = Substitute.for<any>()
+  api.get(0).json()
+  for (let index = 1; index < 20_000; index++) api.get(index)
+  const wideMessage = failureOf(t, () => api.received().json())
+  t.true(wideMessage.includes('json was not called on @Substitute itself, but on a substitute further down: @Substitute.get(0).json(...).'), wideMessage)
+  api.get(19_999).json() // beyond the search
+  t.true(failureOf(t, () => api.received().json()).includes('further down: @Substitute.get(0).json(...). '))
+
   // a long path is cut
   const wide = Substitute.for<any>()
   let step = wide
