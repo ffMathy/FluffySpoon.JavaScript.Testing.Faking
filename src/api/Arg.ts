@@ -64,18 +64,20 @@ const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options
 }
 type Is = {
   /**
-   * Matches an argument for which `predicate` returns a truthy value: `calculator.add(Arg.is(x => x > 10), 2)`.
-   * The predicate's parameter type is taken from the parameter the matcher is passed to. A predicate that throws counts
-   * as a non-match.
+   * Matches an argument for which `predicate` returns a truthy value: `calculator.add(Arg.is(x => x > 10), 2)`,
+   * `repository.save(Arg.is(user => user.name))`. The predicate's parameter type is taken from the parameter the matcher
+   * is passed to. It must decide synchronously: a predicate that returns a promise (an `async` one) does not compile. A
+   * predicate that throws counts as a non-match.
    */
   <T>(predicate: PredicateFunction<ExtractFirstArg<T>>): ReturnArg<ExtractFirstArg<T>>
   /**
    * Matches an argument for which `predicate` returns a truthy value: `const negative = Arg.is((x: number) => x < 0)`.
-   * A predicate that throws counts as a non-match.
+   * It must decide synchronously: a predicate that returns a promise does not compile. A predicate that throws counts
+   * as a non-match.
    */
   // Infers the type from an annotated predicate when the matcher is created on its own, which TypeScript 3.6 and 3.7
   // cannot do through `ExtractFirstArg` above (TD-6).
-  <T>(predicate: (arg: T) => boolean): ReturnArg<T>
+  <T>(predicate: PredicateFunction<T>): ReturnArg<T>
   /**
    * The inverse of `Arg.is`: `Arg.is.not(predicate)` matches an argument for which `predicate` returns a falsy value,
    * e.g. `calculator.divide(1, Arg.is.not(x => x === 0))`. A predicate that throws matches in neither form.
@@ -95,7 +97,7 @@ type IsNot = {
    * `Arg.is(predicate)` matches): `const notZero = Arg.is.not((x: number) => x === 0)`. A predicate that throws
    * matches in neither form.
    */
-  <T>(predicate: (arg: T) => boolean): ReturnArg<T>
+  <T>(predicate: PredicateFunction<T>): ReturnArg<T>
 }
 
 // 'function' and 'object' are mostly used for callback and object parameters, so they must be assignable to them (TD-5):

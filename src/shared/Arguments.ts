@@ -1,6 +1,16 @@
 import { inspect } from 'util'
 
-export type PredicateFunction<T> = (arg: T) => boolean
+/**
+ * What an `Arg.is` predicate may return: any value whose truthiness decides the match (`user => user.name`,
+ * `u => u.roles.length`, `u => u.name?.startsWith('a')`), except a promise or another thenable, which the runtime
+ * refuses (E49: an async predicate). An object is any non-primitive without a `then` member: the `any` index signature
+ * makes every object fit (also interfaces and class instances, and without a weak-type check), and `then?: never`
+ * rejects the thenables (R14FE-3, T75). `void` and `unknown` do not fit: a predicate that returns nothing would never
+ * match, and `unknown` may be a promise.
+ */
+export type PredicateResult = boolean | string | number | bigint | symbol | null | undefined | NotThenable
+type NotThenable = { [key: string]: any, then?: never }
+export type PredicateFunction<T> = (arg: T) => PredicateResult
 export type ArgumentOptions = {
   inverseMatch?: boolean
 }
