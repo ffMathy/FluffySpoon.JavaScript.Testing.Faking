@@ -175,13 +175,14 @@ type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemb
 // of them to its declaration in `T`, as in a homomorphic mapping, which declaration emit needs to write the key.
 // (TypeScript 4.8 and newer reported TS4118 "its property '[iterator]' cannot be serialized" for a project built with
 // `declaration: true` that exported a check view of an iterable, a `Map` or an `EventEmitter`.) Such a mapping copies
-// the modifiers of `T`, so `-readonly` and `-?` keep these members writable and callable as in `AssertionMembers`; their
-// types are the same there. The members with names are not mapped this way: copying `?` would make an optional
-// method's check (`sub.received().onDone()`) "possibly undefined", and `-?` would reject `sub.received().note =
-// undefined`. A type without symbol keys gets `unknown` here, so its check view is the same type as before, and in
-// generic code this is left to TypeScript, which decides it when the members are used.
+// the modifiers of `T`; the members are still those of `AssertionMembers`, which has them too, required, writable and
+// of the same types: in the intersection an optional symbol-keyed method is still callable and an optional property
+// still takes `undefined`. (`-readonly` keeps them writable.) The members with names are not mapped this way: copying
+// `?` alone would make an optional method's check (`sub.received().onDone()`) "possibly undefined". A type without
+// symbol keys gets `unknown` here, so its check view is the same type as before, and in generic code this is left to
+// TypeScript, which decides it when the members are used.
 type SymbolAssertionMembers<T, K extends keyof T> =
-  [K] extends [never] ? unknown : { -readonly [P in K]-?: AssertionMemberOf<T, P> }
+  [K] extends [never] ? unknown : { -readonly [P in K]: AssertionMemberOf<T, P> }
 type PlainAssertionMembers<T> = AssertionMembers<T> & SymbolAssertionMembers<T, Extract<keyof T, symbol>>
 
 /**
