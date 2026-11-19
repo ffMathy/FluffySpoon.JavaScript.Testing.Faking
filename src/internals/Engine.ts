@@ -395,6 +395,25 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
   return value
 }
 
+/**
+ * E81 with E82: a call/apply invocation (see dualHelper) is one call, counted under both readings (D26): the member
+ * call/apply, and the direct call of x. Notes what it answered for the record of each reading given, as
+ * handOutConfigured does for other calls, so that a check through a call with matchers under either reading
+ * (`api.getUser(Arg.any())[received](1).save()`, `client.rpc.call('getUser', Arg.any())[received](1).save()`) counts the
+ * calls of that substitute, however the code under test made the call. It hands nothing out (the call/apply path never
+ * did). A value that is not a substitute is not noted. Returns the value.
+ */
+const noteHelperAnswer = <T>(value: T, memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState): T => {
+  if (isFaceProxy(value)) {
+    const face = (value as any)[INTERNAL] as Face | undefined
+    if (face !== undefined) {
+      memberState.noteConfiguredAnswer(memberRecord, face)
+      if (directRecord !== undefined && directRecord.kind === 'call') directState.noteConfiguredAnswer(directRecord, face)
+    }
+  }
+  return value
+}
+
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
  * all of them share one handler, and the target of each one is a function that returns its face. util.inspect looks
@@ -962,16 +981,18 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
 
     const hashes = new ArgumentHashes(rawArgs)
     const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
-    if (answer !== NOT_CONFIGURED) return answer
+    if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state)
     if (directRecord !== undefined) {
       const directHashes = new ArgumentHashes(directArgs!)
       const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
-      if (directAnswer !== NOT_CONFIGURED) return directAnswer
+      if (directAnswer !== NOT_CONFIGURED) return noteHelperAnswer(directAnswer, memberRecord, memberState, directRecord, direct.state)
       // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf)
       if (!isStringAssertionKey(direct.key)) {
         const directEntry = direct.state.callEntry(direct.key, directHashes)
         directEntry.handOut(memberRecord)
         directAnswers.set(memberRecord, memberState)
+        // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
+        memberState.noteConfiguredAnswer(memberRecord, directEntry)
         return entryProxy(directEntry)
       }
     }
