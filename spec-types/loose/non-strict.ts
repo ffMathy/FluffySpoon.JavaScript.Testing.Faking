@@ -1,5 +1,5 @@
 // The typings must also work without `strict` (no strictNullChecks, no strictFunctionTypes), as in spec/tsconfig.json.
-import { Substitute, Arg, received, returns, configure, mimick } from '../../src'
+import { Substitute, SubstituteOf, Arg, received, returns, configure, mimick } from '../../src'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -83,3 +83,10 @@ const keyed = Substitute.for<KeyedStore>()
 keyed.get(Arg.any('string')).returns('x')
 const doc = Substitute.for<Document>()
 doc.querySelector(Arg.any('string')).returns(Substitute.for<Element>())
+// R13TD-4 / T74 without strictNullChecks: in generic code a substitute of `T | undefined` / `T | null` mimicks a `T`.
+export function delegateOptional<T>(sub: SubstituteOf<T | undefined>, instance: T) {
+  sub[mimick](instance)
+}
+export function delegateNullable<T>(sub: SubstituteOf<T | null>, instance: T | null) {
+  sub[mimick](instance)
+}
