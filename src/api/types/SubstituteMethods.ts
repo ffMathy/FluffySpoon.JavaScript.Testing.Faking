@@ -1,6 +1,6 @@
 import { constants } from '../../shared'
 import { ConfigureView, TerminatingObject } from './Substitute'
-import { HasAnyMember, LibraryMemberName } from './Utilities'
+import { GenericKind, HasAnyMember, LibraryMemberName } from './Utilities'
 
 /**
  * Starts an assertion: `sub[received]()` (1 or more times) or `sub[received](n)` (exactly `n` times), followed by the
@@ -16,8 +16,9 @@ export const received: typeof constants.CONTEXT.received.symbol = constants.CONT
 export const didNotReceive: typeof constants.CONTEXT.didNotReceive.symbol = constants.CONTEXT.didNotReceive.symbol
 /**
  * Makes a substitute delegate to a real instance: `sub[mimick](instance)`. Every member access, call or set without a
- * matching substitution goes to `instance`; calls are still recorded for assertions. Symbol-only: a string `mimick` is
- * always an ordinary member of the substituted type.
+ * matching substitution goes to `instance`; calls are still recorded for assertions. For an object type, `instance`
+ * may have only some of the members (`client[mimick]({ baseUrl: '' })`). Symbol-only: a string `mimick` is always an
+ * ordinary member of the substituted type.
  */
 export const mimick: typeof constants.CONTEXT.mimick.symbol = constants.CONTEXT.mimick.symbol
 /**
@@ -45,9 +46,10 @@ type SymbolSubstituteMethods<T> = {
   [didNotReceive](): TerminatingObject<T>
   /**
    * Delegates every member access, call or set without a matching substitution to `instance`. Calls are still
-   * recorded, and explicit substitutions take precedence.
+   * recorded, and explicit substitutions take precedence. For an object type, `instance` may have only some of the
+   * members (`client[mimick]({ baseUrl: '' })`); the others read as `undefined`. For a function type it is a function.
    */
-  [mimick](instance: T): void
+  [mimick](instance: MimickInstance<T>): void
   /** Clears the received calls of this substitute (and its auto-substitutes); configured substitutions are kept. */
   [clearReceivedCalls](): void
   /**
@@ -56,6 +58,23 @@ type SymbolSubstituteMethods<T> = {
    */
   [configure](): ConfigureView<T>
 }
+
+// The instance `[mimick]()` takes (R12FE-5, T72). The runtime delegates to whatever members the instance has, so for an
+// object type a partial instance is enough: `Partial<T>`, which keeps the check of the member types and the
+// excess-property check of an object literal. `T` itself is kept where `Partial<T>` would loosen the check:
+// - for a type with call or construct signatures (assignable to `Function`): `Partial<T>` would drop the signatures,
+//   and any object would fit;
+// - for an array or tuple: `Partial<T>` would allow `undefined` elements;
+// - for a type that has no required members (`{} extends T`: `unknown`, `{}`, `object`, `any`): `Partial<T>` is the
+//   same or looser.
+// A union is handled per variant (`Cat | Dog` takes `Partial<Cat> | Partial<Dog>`). In generic code the instance is a
+// `T`, as before: the choice is an indexed access whose key (`GenericKind`) is `any` for a concrete type, which selects
+// the number index signature, and `'generic'` for a type parameter, as in Utilities.ts. (A distributive conditional
+// type on `T` would not accept a value of type `T` there.)
+type MimickInstance<T> = { generic: T, [concrete: number]: EachMimickInstance<T> }[GenericKind<T>]
+type EachMimickInstance<T> = T extends unknown ?
+  ({} extends T ? T : T extends Function | readonly unknown[] ? T : Partial<T>) :
+  never
 
 type StringSubstituteMethods<T> = {
   /**

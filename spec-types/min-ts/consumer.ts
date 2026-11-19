@@ -384,6 +384,15 @@ pet.received().speak = Arg.any('function')
 control.onClick(function (this: Button, n: number) {}, Arg.all()).returns('b')
 control.received().onClick(function (this: Link, n: number) {}, Arg.all())
 
+// R12FE-5 / T72: a partial instance of an object type; a whole `T` in generic code
+calculator[mimick]({ add: (a, b) => a + b })
+pet[mimick]({ kind: 'cat' })
+listener[mimick](event => event)
+function delegateTo<T>(sub: SubstituteOf<T>, instance: T) {
+  sub[mimick](instance)
+}
+delegateTo(calculator, asCalculator)
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {

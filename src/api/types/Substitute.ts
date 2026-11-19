@@ -138,15 +138,20 @@ type AssertionMember<TValue> = {
 // it in a check (`pet.received().speak = () => {}`) does not compile, as for any other callable member, whose call
 // signatures that take `Arg.all()` reject a function with parameters, and as TypeScript rejects a function that does
 // not fit the union (R9TD-5, T62). A call signature would have done that as well, but made calls of such members
-// costlier to type-check; a construct signature is not looked at for calls. It returns `unknown`, so that the function
-// matcher `Arg.any('function')`, which is typed as any function or constructor, still fits (R11TD-2, T67).
+// costlier to type-check; a construct signature is not looked at for calls. It returns a branded type that only `any`
+// is assignable to, so that the function matcher `Arg.any('function')`, which is typed as any function or constructor
+// (constructing `any`), still fits (R11TD-2, T67), while a real constructor does not: `String`, `Boolean`, `Date` or a
+// class construct instances that lack the brand, and are rejected as TypeScript rejects them for the union (R12TD-2,
+// T71). (`unknown` would accept every constructor, `never` would reject `Arg.any('function')`.)
 type AssertionCallMember<TValue> = {
   single: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
   [union: number]: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & UnionAssertionRest<TValue>
 }[VariantsKind<NonNullable<TValue>>]
 type UnionAssertionRest<TValue> =
   [keyof NonNullable<TValue>] extends [never] ? ([Extract<TValue, null | undefined>] extends [never] ? NotAssignable : TValue) : TValue
-type NotAssignable = new (...args: never[]) => unknown
+type NotAssignable = new (...args: never[]) => NotAssignableInstance
+declare const notAssignable: unique symbol
+interface NotAssignableInstance { readonly [notAssignable]: true }
 
 // For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
 type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
