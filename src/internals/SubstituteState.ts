@@ -686,7 +686,21 @@ export class SubstituteState {
    */
   public noteConfiguredAnswer(record: CallRecord, answer: ConfiguredAnswer): void {
     const key = record.key
-    const answers = this._configuredAnswers ?? (this._configuredAnswers = [])
+    // the run noted last goes on when the call comes right after its last call among all the records (a loop)
+    const top = this._configuredAnswers
+    if (top !== undefined && top[top.length - 2] === answer) {
+      const records = this._records
+      const length = records.length
+      const run = top[top.length - 1] as CallRecord | AnswerRun
+      const last = run instanceof AnswerRun ? run.last : run
+      if (last === record) return // (noted already)
+      if (length > 1 && records[length - 1] === record && records[length - 2] === last && last.key === key) {
+        if (run instanceof AnswerRun) run.last = record
+        else top[top.length - 1] = new AnswerRun(run, record)
+        return
+      }
+    }
+    const answers = top ?? (this._configuredAnswers = [])
     const latest = this._latestAnswers ?? (this._latestAnswers = new Map())
     const at = latest.get(key)
     if (at !== undefined && answers[at] === answer) {
