@@ -220,6 +220,8 @@ for (const runner of ['jest', 'vitest'] as const) {
 
 const CALLS_NOTE = 'Some calls print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.'
 const ASSIGNMENTS_NOTE = 'Some assignments print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such values with Arg.is(), or assign the same instance.'
+const CUT_CALLS_NOTE = 'Some calls print the same but do not match: they can differ in what the message leaves out ([Object], more keys, items or characters), functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.'
+const CUT_ASSIGNMENTS_NOTE = 'Some assignments print the same but do not match: they can differ in what the message leaves out ([Object], more keys, items or characters), functions and symbols match by identity, and #private fields and other internal state are not printed. Match such values with Arg.is(), or assign the same instance.'
 const NUMBERED = 'The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.'
 
 /** How many times `part` is in `text`. */
@@ -260,6 +262,19 @@ test('R13FE-2 (E87) a failing check whose expected call prints exactly like a re
   const assignment = messageOf(() => { config.received(1).onError = function handler() { } })
   t.true(assignment.includes('matching onError = [Function: handler], but received none.'), assignment)
   t.true(assignment.endsWith(`\n${ASSIGNMENTS_NOTE}\n`), assignment)
+  // lines that print alike because the message leaves out where they differ: more than four levels down, or past the
+  // keys it shows (the note says so)
+  const far = Substitute.for<any>()
+  far.find({ a: { b: { c: { d: { e: { f: 1 } } } } } })
+  const deep = messageOf(() => far.received(1).find({ a: { b: { c: { d: { e: { f: 2 } } } } } }))
+  t.true(deep.endsWith(`\n${CUT_CALLS_NOTE}\n`), deep)
+  const wide = (last: number) => Object.fromEntries(Array.from({ length: 21 }, (_, index) => [`k${index}`, index === 20 ? last : index]))
+  far.update(wide(1))
+  const cut = messageOf(() => far.received(1).update(wide(2)))
+  t.true(cut.includes('... 1 more key'), cut)
+  t.true(cut.endsWith(`\n${CUT_CALLS_NOTE}\n`), cut)
+  config.limits = wide(1)
+  t.true(messageOf(() => { config.received(1).limits = wide(2) }).endsWith(`\n${CUT_ASSIGNMENTS_NOTE}\n`))
   // with colours too (the texts are compared without them)
   const colors = process.env.FORCE_COLOR
   process.env.FORCE_COLOR = '1'
