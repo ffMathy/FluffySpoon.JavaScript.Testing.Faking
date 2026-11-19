@@ -170,13 +170,27 @@ type IndexedAssertionMembers<T> = { [P in keyof T]-?: AssertionMemberOf<T, P> }
 // all members are required, and an optional property keeps `undefined` in its type, which `-?` would remove.
 type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemberOf<T, P> }
 
+// Members with a symbol key (`[Symbol.iterator]`, `[Symbol.asyncDispose]`, Node's `[EventEmitter.captureRejectionSymbol]`)
+// are mapped once more, over a type parameter whose constraint is `keyof T` (R14TD-2, T77): TypeScript then links each
+// of them to its declaration in `T`, as in a homomorphic mapping, which declaration emit needs to write the key.
+// (TypeScript 4.8 and newer reported TS4118 "its property '[iterator]' cannot be serialized" for a project built with
+// `declaration: true` that exported a check view of an iterable, a `Map` or an `EventEmitter`.) Such a mapping copies
+// the modifiers of `T`, so `-readonly` and `-?` keep these members writable and callable as in `AssertionMembers`; their
+// types are the same there. The members with names are not mapped this way: copying `?` would make an optional
+// method's check (`sub.received().onDone()`) "possibly undefined", and `-?` would reject `sub.received().note =
+// undefined`. A type without symbol keys gets `unknown` here, so its check view is the same type as before, and in
+// generic code this is left to TypeScript, which decides it when the members are used.
+type SymbolAssertionMembers<T, K extends keyof T> =
+  [K] extends [never] ? unknown : { -readonly [P in K]-?: AssertionMemberOf<T, P> }
+type PlainAssertionMembers<T> = AssertionMembers<T> & SymbolAssertionMembers<T, Extract<keyof T, symbol>>
+
 /**
  * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
  * member type (`sub.received().isEnabled = true`). A substitute of a function type is callable here as well
  * (`listener.received(1)('saved')`, T37).
  */
 export type TerminatingObject<T> =
-  { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> }[IndexKind<T>] &
+  { indexed: IndexedAssertionMembers<T>, plain: PlainAssertionMembers<T> }[IndexKind<T>] &
   FunctionSubstitute<NonNullable<T>, 'assertion'>
 
 type ConfigurationMember<TValue> =
