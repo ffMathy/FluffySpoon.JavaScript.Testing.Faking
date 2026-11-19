@@ -369,9 +369,9 @@ const withoutColors = (text: string): string => text.replace(/\x1b\[\d+m/g, '')
 /**
  * E87 (R13FE-2): the text (without colours) of a listed call's arguments or assignment's value, when the call or
  * assignment does not match the expected one and prints exactly like it, as the message prints them (`print` has
- * printed both: an exact comparison of their texts).
+ * printed both: an exact comparison of their texts). `colors`: whether `print` prints with colours.
  */
-const printedAlike = (mismatch: CallCountMismatch, listed: ListedCall, print: Printer, deeper: Deeper | undefined): string | undefined => {
+const printedAlike = (mismatch: CallCountMismatch, listed: ListedCall, print: Printer, colors: boolean, deeper: Deeper | undefined): string | undefined => {
   const { expected } = mismatch
   const { record } = listed
   if (listed.matches) return undefined
@@ -381,6 +381,7 @@ const printedAlike = (mismatch: CallCountMismatch, listed: ListedCall, print: Pr
   else if (expected.kind === 'set' && record.kind === 'set')
     texts = [print.value(record.args?.[0], recordBounds(record, deeper)), print.value(expected.specification?.value?.[0], expectedBounds(deeper))]
   if (texts === undefined) return undefined
+  if (!colors) return texts[0] === texts[1] ? texts[0] : undefined
   const text = withoutColors(texts[0])
   return text === withoutColors(texts[1]) ? text : undefined
 }
@@ -448,7 +449,7 @@ export class SubstituteException extends Error {
     const substitutePath = mismatch.subject?.path ?? mismatch.substitutePath
     const memberPath = key === SELF ? substitutePath : `${substitutePath}.${keyToString(key)}`
 
-    /** E87: the text of listed lines that print exactly like the expected one, without matching it (one that leaves something out, if any). */
+    /** E87: the text of the listed lines that print exactly like the expected one without matching it (they all print so). */
     let alike: string | undefined
     const textBuilder = new TextBuilder()
       .add('Call count mismatch in ')
@@ -480,7 +481,7 @@ export class SubstituteException extends Error {
         if (listedCharacters >= MAX_LISTED_CHARACTERS) break
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         const call = describeRecord(listed.record, print, colors, deeper)
-        if (alike === undefined || !LEFT_OUT.test(alike)) alike = printedAlike(mismatch, listed, print, deeper) ?? alike
+        if (alike === undefined) alike = printedAlike(mismatch, listed, print, colors, deeper)
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
           .add(listed.record.constructed === true ? `new ${memberPath}` : memberPath, style)
