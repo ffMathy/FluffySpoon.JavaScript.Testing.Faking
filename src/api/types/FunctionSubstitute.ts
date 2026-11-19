@@ -282,12 +282,33 @@ type PositionalSignatureOf<A extends any[], R, V extends SubstituteView, F> = (.
 //   nesting stops at the first position the overload does not have. (`A extends [any?]` would be shorter, but
 //   TypeScript 4.0 and 4.1 consider `[string, number?]` assignable to `[any?]`.)
 // (The return types are written inside each signature, where TypeScript only computes them when the signature is used.)
-type AllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
+// Only the last overload has the signature for a single `Arg.all()`, whose result is that of all the overloads
+// (`TOverloads`, see `AllArgumentsResult`): a call with a single `Arg.all()` matches the calls of every overload. The
+// earlier overloads only have the signatures with leading arguments. (Their own signatures for a single `Arg.all()`
+// came first before, so such a call resolved to the first overload.)
+type TrailingAllArgumentsSignaturesOf<TOverload, TView extends SubstituteView, TFunction> =
   TOverload extends Overload<any[], any> ?
-  AllArgumentsSignaturesFor<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
   unknown
-type AllArgumentsSignaturesFor<A extends any[], R, V extends SubstituteView, F> =
-  ((allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & TrailingAllArgumentsSignatures<A, R, V, F>
+// (Written out without a type alias for the signatures: a substitute of all lib.dom element types needs fewer type
+// instantiations then, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
+// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away.)
+// A generic method has a single signature (see `IsGenericSignature`): its `Arg.all()` signatures are only those of that
+// signature, without the other overloads, whose types TypeScript would then instantiate anew for each use of the
+// method (they made a substitute of Node's `EventEmitter<Events>` 12% costlier to check).
+type SingleOverloadAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
+  TOverload extends Overload<any[], any> ?
+  ((allArguments: AllArguments<TOverload['arguments']>) =>
+    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction>) &
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
+  unknown
+type LastAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction, TOverloads extends any[]> =
+  TOverload extends Overload<any[], any> ?
+  ((allArguments: AllArguments<TOverload['arguments']>) => TOverloads[6] extends NoOverload ?
+    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction> :
+    AllArgumentsResult<TView, TOverloads>) &
+  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
+  unknown
 
 type TrailingAllArgumentsSignatures<A extends any[], R, V extends SubstituteView, F> = [Exclude<A['length'], 0 | 1>] extends [never] ? unknown :
   ((arg0: A[0], allArguments: AllArguments<A>) => CallResult<V, A, R, F>) & ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? unknown :
@@ -304,15 +325,41 @@ type PositionalSignatures<TOverloads extends any[], TView extends SubstituteView
   PositionalSignature<TOverloads[4], TView, TFunction> & PositionalSignature<TOverloads[5], TView, TFunction> &
   PositionalSignature<TOverloads[6], TView, TFunction> & PositionalSignature<TOverloads[7], TView, TFunction>
 type AllArgumentsSignaturesOf<TOverloads extends any[], TView extends SubstituteView, TFunction> =
-  AllArgumentsSignatures<TOverloads[0], TView, TFunction> & AllArgumentsSignatures<TOverloads[1], TView, TFunction> &
-  AllArgumentsSignatures<TOverloads[2], TView, TFunction> & AllArgumentsSignatures<TOverloads[3], TView, TFunction> &
-  AllArgumentsSignatures<TOverloads[4], TView, TFunction> & AllArgumentsSignatures<TOverloads[5], TView, TFunction> &
-  AllArgumentsSignatures<TOverloads[6], TView, TFunction> & AllArgumentsSignatures<TOverloads[7], TView, TFunction>
+  TrailingAllArgumentsSignaturesOf<TOverloads[0], TView, TFunction> & TrailingAllArgumentsSignaturesOf<TOverloads[1], TView, TFunction> &
+  TrailingAllArgumentsSignaturesOf<TOverloads[2], TView, TFunction> & TrailingAllArgumentsSignaturesOf<TOverloads[3], TView, TFunction> &
+  TrailingAllArgumentsSignaturesOf<TOverloads[4], TView, TFunction> & TrailingAllArgumentsSignaturesOf<TOverloads[5], TView, TFunction> &
+  TrailingAllArgumentsSignaturesOf<TOverloads[6], TView, TFunction> & LastAllArgumentsSignatures<TOverloads[7], TView, TFunction, TOverloads>
 
 // All positional signatures come before the `Arg.all()` signatures, so a call with a single matcher
 // (`Arg.any()`, `Arg.is(...)`) resolves against the real parameter lists first (T:TY-10).
 type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, TFunction> =
   PositionalSignatures<TOverloads, TView, TFunction> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction>
+
+// A single `Arg.all()` matches every call of the member, whichever overload it calls (R14FE-2, T76). It resolves to the
+// last overload's signature for it (see `TrailingAllArgumentsSignaturesOf`), whose result is this one. When the overloads return different types,
+// it takes what any overload returns (`.returns()`, `.resolves()`), and `.mimicks()` an implementation that takes the
+// parameter list of every overload (`(...args: A1 | A2 | ...)`) and returns what any overload returns. Before, it was
+// the result of that first overload only: `pool.query(Arg.all())` of @types/pg took the `Submittable` stream overload,
+// so `.resolves(result)` did not compile. When all overloads return the same type (a member with one signature
+// included), it is still the first overload's result (`.mimicks()` takes its parameters). Being part of the result
+// type, it is only computed for a call that resolves to the signature: comparing the return types of every overload
+// of every member whenever a substitute's members are compared made large types slower to check. (A union of members
+// goes through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
+type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
+  false extends EachOverloadReturnsAll<TOverloads[number], OverloadReturnTypes<TOverloads[number]>> ?
+  CallResult<V, OverloadArgumentLists<TOverloads[number]>, OverloadReturnTypes<TOverloads[number]>, never> :
+  OverloadCallResult<V, FirstOverload<TOverloads>>
+type OverloadArgumentLists<TOverload> = TOverload extends Overload<infer A, any> ? A : never
+type OverloadReturnTypes<TOverload> = TOverload extends Overload<any[], infer R> ? R : never
+type EachOverloadReturnsAll<TOverload, TAll> = TOverload extends Overload<any[], infer R> ? ([TAll] extends [R] ? true : false) : never
+type OverloadCallResult<V extends SubstituteView, TOverload> =
+  TOverload extends Overload<any[], any> ? CallResult<V, TOverload['arguments'], TOverload['returnType'], never> : never
+// The overload of the first `Arg.all()` signature in `AllArgumentsSignaturesOf`.
+type FirstOverload<T extends any[]> =
+  T[0] extends Overload<any[], any> ? T[0] : T[1] extends Overload<any[], any> ? T[1] :
+  T[2] extends Overload<any[], any> ? T[2] : T[3] extends Overload<any[], any> ? T[3] :
+  T[4] extends Overload<any[], any> ? T[4] : T[5] extends Overload<any[], any> ? T[5] :
+  T[6] extends Overload<any[], any> ? T[6] : T[7]
 
 // The signatures of `TVariant`, one non-primitive variant of the member type `TFunction`. (Not
 // `[TVariant] extends [(...args: any) => any]`: in its true branch TypeScript would add that signature to TVariant.)
@@ -320,7 +367,7 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
   SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
 type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
   TGeneric extends true ?
-  GenericPositionalSignature<F, TOverloads[7], TView> & AllArgumentsSignaturesOf<TOverloads, TView, TFunction> &
+  GenericPositionalSignature<F, TOverloads[7], TView> & SingleOverloadAllArgumentsSignatures<TOverloads[7], TView, TFunction> &
   GenericCallSignatureFor<F, TOverloads[7], TView> & GenericTrailingAllArgumentsSignatures<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
 

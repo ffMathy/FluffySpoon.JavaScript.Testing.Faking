@@ -170,13 +170,30 @@ type IndexedAssertionMembers<T> = { [P in keyof T]-?: AssertionMemberOf<T, P> }
 // all members are required, and an optional property keeps `undefined` in its type, which `-?` would remove.
 type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemberOf<T, P> }
 
+// Members with a symbol key (`[Symbol.iterator]`, `[Symbol.asyncDispose]`, Node's `[EventEmitter.captureRejectionSymbol]`)
+// are mapped once more, over a type parameter whose constraint is `keyof T` (R14TD-2, T77): TypeScript then links each
+// of them to its declaration in `T`, as in a homomorphic mapping, which declaration emit needs to write the key.
+// (TypeScript 4.8 and newer reported TS4118 "its property '[iterator]' cannot be serialized" for a project built with
+// `declaration: true` that exported a check view of an iterable, a `Map` or an `EventEmitter`.) Such a mapping copies
+// the modifiers of `T`; the members are still those of `AssertionMembers`, which has them too, required, writable and
+// of the same types: in the intersection an optional symbol-keyed method is still callable and an optional property
+// still takes `undefined`. (`-readonly` keeps them writable.) The members with names are not mapped this way: copying
+// `?` alone would make an optional method's check (`sub.received().onDone()`) "possibly undefined". A type without
+// symbol keys gets `unknown` here, so its check view is the same type as before, and in generic code this is left to
+// TypeScript, which decides it when the members are used.
+// (The symbol keys are `keyof T & symbol`, not an `Extract`, which TypeScript would instantiate for every key; and the
+// intersection with `AssertionMembers` is written out in `TerminatingObject`: both cost fewer type instantiations for a
+// substitute of all lib.dom element types, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
+type SymbolAssertionMembers<T, K extends keyof T> =
+  [K] extends [never] ? unknown : { -readonly [P in K]: AssertionMemberOf<T, P> }
+
 /**
  * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
  * member type (`sub.received().isEnabled = true`). A substitute of a function type is callable here as well
  * (`listener.received(1)('saved')`, T37).
  */
 export type TerminatingObject<T> =
-  { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> }[IndexKind<T>] &
+  { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> & SymbolAssertionMembers<T, keyof T & symbol> }[IndexKind<T>] &
   FunctionSubstitute<NonNullable<T>, 'assertion'>
 
 type ConfigurationMember<TValue> =

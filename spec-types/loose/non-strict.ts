@@ -90,3 +90,14 @@ export function delegateOptional<T>(sub: SubstituteOf<T | undefined>, instance: 
 export function delegateNullable<T>(sub: SubstituteOf<T | null>, instance: T | null) {
   sub[mimick](instance)
 }
+// R14FE-3 / T75 without strictNullChecks: an Arg.is() predicate may return any truthy value, but not a promise.
+interface Member { name?: string; roles: string[] }
+interface Members { save(member: Member): string }
+const members = Substitute.for<Members>()
+members.save(Arg.is(member => member.name)).returns('named')
+members.save(Arg.is(member => member.roles.length)).returns('with roles')
+members.received(1).save(Arg.is(member => member.name?.startsWith('a')))
+// @ts-expect-error an async predicate
+members.save(Arg.is(async member => member.name === 'ann')).returns('x')
+// @ts-expect-error a thenable
+members.received(1).save(Arg.is(member => ({ then(resolve: (matches: boolean) => void) { resolve(true) } })))

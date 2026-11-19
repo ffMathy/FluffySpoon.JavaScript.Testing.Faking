@@ -405,6 +405,38 @@ delegateToOptional(Substitute.for<Calculator | undefined>(), asCalculator)
 delegateToNullable(Substitute.for<Calculator | null>(), null)
 Substitute.for<Calculator | undefined>()[mimick]({ add: (a, b) => a + b })
 
+// R14FE-3 / T75: an Arg.is() predicate may return any truthy value, not only a boolean (no optional chaining here:
+// TypeScript 3.6 cannot parse it)
+interface Member { name?: string; roles: string[] }
+interface Members { save(member: Member): string; get<T>(key: string): T }
+const members = Substitute.for<Members>()
+members.save(Arg.is(member => member.name)).returns('named')
+members.save(Arg.is(member => member.roles.length)).returns('with roles')
+members.save(Arg.is.not(member => member.name)).returns('anonymous')
+members.received(1).save(Arg.is(member => member.name && member.name.length))
+members[didNotReceive]().save(Arg.is(member => member.roles.find(role => role === 'admin')))
+members[configure]().save(Arg.is(member => member.name)).returns('configured')
+members.get(Arg.is(key => key.length)).returns(1)
+const namedMember = Arg.is((member: Member) => member.name)
+const anonymousMember = Arg.is.not((member: Member) => member.name)
+members.save(namedMember).returns('named')
+members.save(anonymousMember).returns('anonymous')
+
+// R14FE-2 / T76: a single Arg.all() on a member whose overloads return different types takes the value of any overload
+interface PgSubmittable { submit: (connection: unknown) => void }
+interface PgResult { rows: unknown[]; rowCount: number | null }
+interface PgPool {
+  query<T extends PgSubmittable>(queryStream: T): T
+  query(text: string, values?: unknown[]): Promise<PgResult>
+  query(text: string, callback: (err: Error, result: PgResult) => void): void
+}
+const pgPool = Substitute.for<PgPool>()
+const pgResult: PgResult = { rows: [], rowCount: 0 }
+pgPool.query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.all()).mimicks(async () => pgResult)
+pgPool[configure]().query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.any('string'), Arg.all()).resolves(pgResult)
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
