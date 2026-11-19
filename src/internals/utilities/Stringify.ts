@@ -202,9 +202,9 @@ const errorText = (error: Error): string => {
 
 /**
  * E78: the compact form of an error with its own properties in a fixed order (sorted by their texts), so that two
- * errors whose compact forms differ only in the order of their properties give the same text.
+ * errors whose compact forms differ only in the order of their properties give the same text. (For sortedText.)
  */
-const sortedErrorText = (error: Error): string => {
+const sortedErrorText = (_search: DifferenceSearch, error: Error): string => {
   try {
     return compactError(error, true)
   } catch {
@@ -366,6 +366,8 @@ export type DifferenceSearch = {
    * comparison, or a value could not be read; it then gives what it found up to there).
    */
   complete?: boolean
+  /** E78: the texts of errors and functions with their properties sorted, made so far, by depth (see sortedText). */
+  sortedTexts?: Map<object, Map<number, string | undefined>>
 }
 
 /**
@@ -483,8 +485,8 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
       return inAnyOrder(comparison,
         inOrder => compareTexts(search, inOrder, expected, actual, level),
         anyOrder => compareAtDepths(search, anyOrder, level > 0 ? level - 1 : 0, depth => {
-          const text = sortedFunctionText(search, expected, depth - level)
-          return text === undefined || text !== sortedFunctionText(search, actual, depth - level)
+          const text = sortedText(search, expected, depth - level, sortedFunctionText)
+          return text === undefined || text !== sortedText(search, actual, depth - level, sortedFunctionText)
         }))
     return compareTexts(search, comparison, expected, actual, level)
   }
@@ -496,7 +498,8 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
       return inAnyOrder(comparison,
         inOrder => compareTexts(search, inOrder, expected, actual, level),
         anyOrder => {
-          if (sortedErrorText(expected) !== sortedErrorText(actual)) differs(anyOrder, shows)
+          // (an error prints so at any depth)
+          if (sortedText(search, expected, 0, sortedErrorText) !== sortedText(search, actual, 0, sortedErrorText)) differs(anyOrder, shows)
         })
     return compareTexts(search, comparison, expected, actual, level)
   }
@@ -576,6 +579,7 @@ const inAnyOrder = (
  */
 const sortedFunctionText = (search: DifferenceSearch, value: Function, depth: number): string | undefined => {
   const { bounds } = search
+  // (Node.js 10.0 to 10.11 do not know the option: they print in their order, as above)
   const options: InspectOptions = { depth, maxArrayLength: bounds.maxArrayLength, maxStringLength: bounds.maxStringLength, colors: false, sorted: true }
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
   try {
@@ -584,6 +588,22 @@ const sortedFunctionText = (search: DifferenceSearch, value: Function, depth: nu
   } catch {
     return undefined
   }
+}
+
+/**
+ * E78: the sorted text of an error or a function (see sortedErrorText, sortedFunctionText), made once per value and
+ * depth for the lines compared with one search: the expected call is compared with each of them.
+ */
+const sortedText = <Value extends object>(
+  search: DifferenceSearch, value: Value, depth: number, make: (search: DifferenceSearch, value: Value, depth: number) => string | undefined
+): string | undefined => {
+  const texts = search.sortedTexts ??= new Map()
+  let byDepth = texts.get(value)
+  if (byDepth === undefined) texts.set(value, byDepth = new Map())
+  if (byDepth.has(depth)) return byDepth.get(depth)
+  const text = make(search, value, depth)
+  byDepth.set(depth, text)
+  return text
 }
 
 /** E72: whether the first `count` keys of two lists are the same keys, in any order. */
