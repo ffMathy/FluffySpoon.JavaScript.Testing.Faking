@@ -282,6 +282,100 @@ for (const mode of typeScriptModes) {
   })
 }
 
+// P34: a project that exports a member of a check view (`export const addView = bag.received().add`) or an Arg matcher
+// and emits declarations with `moduleResolution: node` gets `import("@fluffy-spoon/substitute/dist/shared")` in its
+// .d.ts: TypeScript names the directory, whose index re-exports the type. Projects that use those declarations with
+// node16, nodenext or bundler resolution resolve such specifiers through "exports" only, where "./dist/*" maps a
+// directory to a file that does not exist (`dist/shared.js`): TS2307, or silently `any` with skipLibCheck.
+const declarationProducer = [
+  "import { Substitute, Arg, received } from '@fluffy-spoon/substitute'",
+  'export interface Bag { add(x: number): void; total: number }',
+  'const bag = Substitute.for<Bag>()',
+  'export const bagView = bag.received()',
+  'export const addView = bag.received().add',
+  'export const symbolAddView = bag[received](1).add',
+  'export const isPositive = Arg.is((x: number) => x > 0)',
+  'export const all = Arg.all()',
+  ''
+].join('\n')
+const declarationConsumer = [
+  "import { addView, bagView, symbolAddView, isPositive, all } from './declarations/index.js'",
+  'addView(1)',
+  'bagView.add(1)',
+  'symbolAddView(Arg.any())',
+  'const positive: number = isPositive',
+  '// @ts-expect-error add takes a number (the emitted types resolved)',
+  "addView('x')",
+  '// @ts-expect-error the matcher has the type of AllArguments (the emitted types resolved)',
+  'const text: string = all',
+  "import { Arg } from '@fluffy-spoon/substitute'",
+  'export { positive, text }',
+  ''
+].join('\n')
+const declarationConsumerModes = [
+  { name: 'node16', file: 'consumer.mts', options: ['--module', 'node16', '--moduleResolution', 'node16'] },
+  { name: 'nodenext (ESM)', file: 'consumer.mts', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] },
+  { name: 'nodenext (CommonJS)', file: 'consumer.cts', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] },
+  { name: 'bundler', file: 'consumer.ts', options: ['--module', 'esnext', '--moduleResolution', 'bundler'] }
+]
+
+test('P34 declarations emitted with moduleResolution node for check views and matchers resolve under node16, nodenext and bundler', async t => {
+  t.timeout(minutes(3))
+  const tsc = require.resolve('typescript/bin/tsc', { paths: [root] })
+  const directory = path.join(state.consumer, 'p34-declarations')
+  fs.mkdirSync(path.join(directory, 'producer'), { recursive: true })
+  fs.writeFileSync(path.join(directory, 'producer', 'index.ts'), declarationProducer)
+  const emitted = await run(process.execPath, [
+    tsc, '--declaration', '--emitDeclarationOnly', '--strict', '--target', 'es2019',
+    '--module', 'commonjs', '--moduleResolution', 'node', '--outDir', 'declarations', path.join('producer', 'index.ts')
+  ], directory)
+  t.is(emitted.status, 0, emitted.output)
+  // (The consumers import the emitted declarations, not the producer's source, which is in another directory.)
+  const declarations = fs.readFileSync(path.join(directory, 'declarations', 'index.d.ts'), 'utf8')
+  t.regex(declarations, /import\("@fluffy-spoon\/substitute\/dist\/shared"\)/, 'the emitted declarations name the dist/shared directory')
+  for (const mode of declarationConsumerModes) {
+    fs.writeFileSync(path.join(directory, mode.file), declarationConsumer)
+    // Without skipLibCheck, so that an unresolved import in the emitted .d.ts is an error.
+    const result = await run(process.execPath, [
+      tsc, '--noEmit', '--strict', '--target', 'es2019', ...mode.options, mode.file
+    ], directory)
+    t.is(result.status, 0, `${mode.name}: ${result.output}`)
+  }
+})
+
+test('P34 exports maps every directory that the published declarations import to its index', t => {
+  const dist = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist')
+  // The directories with an index.d.ts that a published .d.ts imports (`from '../shared'`, `from './types'`, ...).
+  const imported = new Set()
+  const visit = directory => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const file = path.join(directory, entry.name)
+      if (entry.isDirectory()) visit(file)
+      else if (/\.d\.m?ts$/.test(entry.name)) {
+        for (const [, specifier] of fs.readFileSync(file, 'utf8').matchAll(/(?:from |import\()'(\.[^']*)'/g)) {
+          const target = path.resolve(directory, specifier)
+          if (fs.existsSync(path.join(target, 'index.d.ts'))) imported.add(path.relative(path.dirname(dist), target).split(path.sep).join('/'))
+        }
+      }
+    }
+  }
+  visit(dist)
+  t.deepEqual([...imported].sort(), ['dist/api', 'dist/api/types', 'dist/shared'])
+  for (const directory of imported) {
+    t.deepEqual(packageJson.exports[`./${directory}`], [
+      { types: `./${directory}/index.d.ts`, default: `./${directory}/index.js` },
+      `./${directory}/index.js`
+    ], `exports["./${directory}"] maps the directory to its index, with the array fallback of exports["."]`)
+    const resolved = runNode(state.consumer, ['-p', `require.resolve('@fluffy-spoon/substitute/${directory}')`]).trim()
+    t.is(resolved, path.join(dist, ...directory.split('/').slice(1), 'index.js'))
+  }
+  // The other specifiers resolve as before.
+  const resolve = specifier => runNode(state.consumer, ['-p', `require.resolve('@fluffy-spoon/substitute/${specifier}')`]).trim()
+  t.is(resolve('dist/shared/index'), path.join(dist, 'shared', 'index.js'))
+  t.is(resolve('dist/api/Arg'), path.join(dist, 'api', 'Arg.js'))
+  t.is(resolve('dist/api/types/Substitute.js'), path.join(dist, 'api', 'types', 'Substitute.js'))
+})
+
 test('G:PK-4 package-lock.json has the same version as package.json', t => {
   const lock = readJson('package-lock.json')
   t.is(lock.version, packageJson.version)
