@@ -1,5 +1,5 @@
 import { AllArguments, Argument } from '../../shared'
-import { ConfigurationResult, SubstitutionResult } from './SubstitutionLevel'
+import { ConfigurationResult, OverloadsImplementation, SubstitutionResult } from './SubstitutionLevel'
 import { Equals, GenericKind, IsAny, ObjectKind, Primitive, UnionToIntersection } from './Utilities'
 
 /**
@@ -416,8 +416,8 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 
 // A single `Arg.all()` matches every call of the member, whichever overload it calls (R14FE-2, T76). It resolves to the
 // last overload's signature for it (see `TrailingAllArgumentsSignaturesOf`), whose result is this one. When the overloads return different types,
-// it takes what any overload returns (`.returns()`, `.resolves()`), and `.mimicks()` an implementation that takes the
-// parameter list of every overload (`(...args: A1 | A2 | ...)`) and returns what any overload returns. Before, it was
+// it takes what any overload returns (`.returns()`, `.resolves()`), and `.mimicks()` an implementation that can be
+// called with the arguments of every overload and returns what any overload returns. Before, it was
 // the result of that first overload only: `pool.query(Arg.all())` of @types/pg took the `Submittable` stream overload,
 // so `.resolves(result)` did not compile. When all overloads return the same type (a member with one signature
 // included), it is still the first overload's result (`.mimicks()` takes its parameters). Being part of the result
@@ -426,8 +426,46 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // goes through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
 type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
   false extends EachOverloadReturnsAll<TOverloads[number], OverloadReturnTypes<TOverloads[number]>> ?
-  CallResult<V, OverloadArgumentLists<TOverloads[number]>, OverloadReturnTypes<TOverloads[number]>, never> :
+  AllOverloadsCallResult<V, TOverloads, OverloadReturnTypes<TOverloads[number]>> :
   OverloadCallResult<V, FirstOverload<TOverloads>>
+// The implementation `.mimicks()` takes fits each overload as a function assigned to the member does (R16FE-1, T80):
+// it may leave out trailing parameters (`entity => ...` for `remove(entities: Row[], options?)` and `remove(entity:
+// Row, options?)`), but not have a parameter that some overload does not pass (`(key: string) => ...` for `get():
+// string[]` and `get(key: string): string`). (`(...args: A1 | A2) => R`, as in T76, compares the parameter lists as
+// whole tuples, so that an implementation that leaves out a trailing parameter did not fit.) Untyped parameters take
+// their types from `OverloadsContextualImplementation`.
+type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], R> =
+  V extends 'assertion' ? void :
+  V extends 'configure' ? ConfigurationResult<R, AllOverloadsImplementation<TOverloads, R>> :
+  SubstitutionResult<R, AllOverloadsImplementation<TOverloads, R>>
+type AllOverloadsImplementation<TOverloads extends any[], R> = OverloadsImplementation<
+  OverloadsContextualImplementation<OverloadArgumentLists<TOverloads[number]>, R>,
+  OverloadImplementation<TOverloads[0], R> & OverloadImplementation<TOverloads[1], R> &
+  OverloadImplementation<TOverloads[2], R> & OverloadImplementation<TOverloads[3], R> &
+  OverloadImplementation<TOverloads[4], R> & OverloadImplementation<TOverloads[5], R> &
+  OverloadImplementation<TOverloads[6], R> & OverloadImplementation<TOverloads[7], R>>
+type OverloadImplementation<TOverload, R> =
+  TOverload extends Overload<infer A, any> ? ([A] extends [never] ? unknown : (...args: A) => R) : unknown
+// One signature that every implementation of the overloads fits (see `OverloadsImplementation`), with the parameter
+// types of all overloads at each position (`(args_0: Row[] | Row, args_1?: { chunk?: number })`), and as many
+// required parameters as the overload that requires the fewest. It is a method's signature, whose parameters
+// TypeScript compares both ways even with `strictFunctionTypes`: an overloaded function (`real.remove`), which fits
+// each overload, fits it as well. Overloads with a rest parameter or more than 6 parameters give `any[]`.
+type OverloadsContextualImplementation<TLists extends any[], R> = {
+  implementation(...args: OverloadsContextualArguments<TLists, MaximumArguments<TLists>>): R
+}['implementation']
+type OverloadsContextualArguments<TLists extends any[], TMaximum> = TMaximum extends 7 ? any[] :
+  UnnamedArgumentsOf<[
+    ParameterAt0<TLists>, ParameterAt1<TLists>, ParameterAt2<TLists>, ParameterAt3<TLists>, ParameterAt4<TLists>,
+    ParameterAt5<TLists>
+  ], MinimumArguments<TLists>, TMaximum>
+// The types of the parameter at a position in each of the lists that has one.
+type ParameterAt0<A> = A extends any[] ? ([Exclude<A['length'], 0>] extends [never] ? never : A[0]) : never
+type ParameterAt1<A> = A extends any[] ? ([Exclude<A['length'], 0 | 1>] extends [never] ? never : A[1]) : never
+type ParameterAt2<A> = A extends any[] ? ([Exclude<A['length'], 0 | 1 | 2>] extends [never] ? never : A[2]) : never
+type ParameterAt3<A> = A extends any[] ? ([Exclude<A['length'], 0 | 1 | 2 | 3>] extends [never] ? never : A[3]) : never
+type ParameterAt4<A> = A extends any[] ? ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4>] extends [never] ? never : A[4]) : never
+type ParameterAt5<A> = A extends any[] ? ([Exclude<A['length'], 0 | 1 | 2 | 3 | 4 | 5>] extends [never] ? never : A[5]) : never
 type OverloadArgumentLists<TOverload> = TOverload extends Overload<infer A, any> ? A : never
 type OverloadReturnTypes<TOverload> = TOverload extends Overload<any[], infer R> ? R : never
 type EachOverloadReturnsAll<TOverload, TAll> = TOverload extends Overload<any[], infer R> ? ([TAll] extends [R] ? true : false) : never

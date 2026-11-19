@@ -26,7 +26,28 @@ type ValueFunction<TValue> = undefined extends TValue ?
 
 type ReturnsFunction<TReturnType> = ValueFunction<TReturnType>
 type ThrowsFunction = OneArgumentRequiredFunction<any, never>
-type MimicksFunction<TImplementation> = OneArgumentRequiredFunction<TImplementation, void>
+// (A function type is never an `OverloadsImplementation`, so for every other setup this is the plain form.)
+type MimicksFunction<TImplementation> = TImplementation extends OverloadsImplementation<infer TContextual, infer TEach> ?
+  OverloadsMimicksFunction<TContextual, TEach> :
+  OneArgumentRequiredFunction<TImplementation, void>
+/**
+ * In place of the implementation's function type: the implementation of a setup that takes several parameter lists
+ * (a single `Arg.all()` on an overloaded member whose overloads return different types, R16FE-1, T80). It fits when it
+ * can stand in for each of them (`TEach`, an intersection of one function type per parameter list), as a function
+ * assigned to the overloaded member itself does, so it may leave out trailing parameters (`entity => ...` for
+ * `remove(entities: Row[], options?)` and `remove(entity: Row, options?)`). `TContextual` is one signature that every
+ * such implementation fits, which types its parameters from the context on every TypeScript version (TypeScript 4.2
+ * and older give a function passed for an intersection of function types no contextual type: an untyped parameter
+ * would be implicitly `any`).
+ */
+export type OverloadsImplementation<TContextual, TEach> = {
+  readonly '@fluffy-spoon/substitute:overloads-implementation': [TContextual, TEach]
+}
+type OverloadsMimicksFunction<TContextual, TEach> =
+  <TImplementation extends TContextual, TMore extends TContextual[]>(
+    implementation: TImplementation & ImplementationFits<TImplementation, TEach>,
+    ...implementations: TMore & ImplementationFits<TMore, TEach[]>) => void
+type ImplementationFits<TImplementation, TEach> = TImplementation extends TEach ? unknown : TEach
 type ResolvesFunction<TResolved> = ValueFunction<TResolved>
 type RejectsFunction = OneArgumentRequiredFunction<any, void>
 
@@ -130,7 +151,8 @@ type CheckedStringSetupMethods<TReturnType, TImplementation> =
 /**
  * The setup API offered on the result of a member access or call of a substitute: the symbol forms, plus each string
  * form unless the value has a member with that name.
- * `TReturnType` is the member's value (or return) type, `TImplementation` the function type `mimicks` accepts.
+ * `TReturnType` is the member's value (or return) type, `TImplementation` the function type `mimicks` accepts (or an
+ * `OverloadsImplementation`).
  * `TReturnType` must not be `never`, `null` or `undefined` (see `SubstitutionResult`).
  */
 export type SetupMethods<TReturnType, TImplementation> =
