@@ -304,6 +304,18 @@ test('R14FE-1 what the predicate does leaves nothing behind: assignments, a mimi
   t.is(await service.load(), 'one')
   await t.throwsAsync(service.fail(), { message: 'failed' })
   t.notThrows(() => service.received(1).load())
+
+  // a member configured both as a property and as a method (D32)
+  const sizes = Substitute.for<any>()
+  sizes.size(Arg.any()).returns(10, 11)
+  sizes.size.returns(3, 4)
+  const measure = Substitute.for<any>()
+  measure.of(sizes)
+  t.notThrows(() => measure.received(1).of(Arg.is(s => s.size.toFixed(1) === '3.0' && s.size(1) === 10 && s.size.call(null, 1) === 10)))
+  t.notThrows(() => sizes.didNotReceive().size)
+  t.notThrows(() => sizes.didNotReceive().size(Arg.all()))
+  t.is(sizes.size(1), 10)
+  t.is(sizes.size.toFixed(1), '3.0')
 })
 
 test('R14FE-1 the property-style half of a check (D9) is still deferred, and later checks are unaffected', t => {

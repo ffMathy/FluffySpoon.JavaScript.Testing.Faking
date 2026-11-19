@@ -1252,7 +1252,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
  */
 const peekGet = (state: SubstituteState, key: PropertyKey): any => {
   const substitution = state.propertySubstitution(key)
-  if (substitution !== undefined) return peekExecute(substitution)
+  if (substitution !== undefined) return state.hasCallSubstitutions(key) ? peekDeferredRead(state, key, substitution) : peekExecute(substitution)
   const mimicked = state.mimicked
   if (mimicked !== undefined) {
     // (as realGet)
@@ -1262,6 +1262,26 @@ const peekGet = (state: SubstituteState, key: PropertyKey): any => {
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) return fromMimicked(value, mimicked.instance, state)
   }
   return entryProxy(state.propertyEntry(key))
+}
+
+/**
+ * E95: deferredRead for a matcher's look (see peekGet): a member configured both as a property and as a method answers
+ * an invocation with its call setups and other uses with its property value (D32), leaving no trace.
+ */
+const peekDeferredRead = (state: SubstituteState, key: PropertyKey, substitution: Substitution): any => {
+  const print: Printer = () => state.memberPath(key)
+  return createView(print, {
+    get: (_target: unknown, property: PropertyKey) => {
+      if (isSpecialProperty(property)) return special(property, print, undefined)
+      if (isFunctionHelperKey(property)) return functionHelper(property, args => peekCall(state, key, args, NO_SELF))
+      const value = peekExecute(substitution)
+      const member = value[property]
+      return typeof member === 'function' && !isSubstituteProxy(value) ? member.bind(value) : member
+    },
+    set: () => true,
+    apply: (_target: unknown, _thisArg: unknown, args: any[]) => peekCall(state, key, args, NO_SELF),
+    construct: (_target: unknown, args: any[], newTarget: Function) => constructed(peekCall(state, key, args, constructing(newTarget)))
+  })
 }
 
 /** E95: an invocation made while a matcher looks at a value (see peekGet), answered as resolveCall would. */
