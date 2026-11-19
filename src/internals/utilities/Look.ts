@@ -17,8 +17,9 @@ import { ArgumentLook, libraryGuard } from './Guard'
  * The pass that matches a real call against the setups of its member opens one look for all of its matchers (see
  * CallSubstitutions.match), and the record path asks it whether the substitute an operation is made on is among the
  * values looked at (see isLooked). Which substitutes those are is found out only when an operation on a substitute
- * happens during the look, by walking the values once (each object once, within bounds like those of the search for
- * matchers): a call whose matchers touch no substitute costs one look object and nothing else.
+ * happens during the look, by walking the values (each object once, within bounds like those of the search for
+ * matchers), and only as far as needed: the walk stops at the substitute asked about, and goes on from there when
+ * another one is asked about. A call whose matchers touch no substitute costs one look object and nothing else.
  */
 
 /** How deep the walk goes into an argument, how many items of one object it lists at most, and in all. */
@@ -30,7 +31,9 @@ const PROTOTYPE_DEPTH = 8
 
 /** Opens the look of a real call with these arguments (the arguments are not changed), and returns it (see closeLook). */
 export const openLook = (args: readonly unknown[]): ArgumentLook => {
-  const look: ArgumentLook = { args, answers: undefined, walked: 0, reached: undefined, seen: undefined, budget: LOOK_ITEMS, outer: libraryGuard.looking }
+  const look: ArgumentLook = {
+    args, answers: undefined, taken: 0, pending: undefined, reached: undefined, seen: undefined, budget: LOOK_ITEMS, outer: libraryGuard.looking
+  }
   libraryGuard.looking = look
   return look
 }
@@ -48,8 +51,8 @@ export const closeLook = (look: ArgumentLook): void => {
 export const isLooked = (proxy: unknown): boolean => {
   if (typeof proxy !== 'function') return false
   for (let look = libraryGuard.looking; look !== undefined; look = look.outer) {
-    if (look.walked < look.args.length + (look.answers?.length ?? 0)) walkRest(look)
     if (look.reached !== undefined && look.reached.has(proxy)) return true
+    if (walkUntil(look, proxy)) return true
   }
   return false
 }
@@ -78,69 +81,95 @@ export const lookedPeek = <T>(peek: () => T): T => {
   return answer
 }
 
-/** Walks the values of a look not walked yet. Each one is counted before it is walked, so a walk that comes back (a trap of a proxy among the values touching a substitute) goes on with the next one. */
-const walkRest = (look: ArgumentLook): void => {
-  if (look.reached === undefined) look.reached = new Set()
-  if (look.seen === undefined) look.seen = new Set()
-  for (;;) {
-    const index = look.walked
-    const argumentCount = look.args.length
-    const answers = look.answers
-    if (index >= argumentCount + (answers?.length ?? 0)) return
-    look.walked = index + 1
-    walk(look, index < argumentCount ? look.args[index] : answers![index - argumentCount], 0)
-  }
-}
-
 // Annex B, in every supported runtime (as in RecordedArguments)
 const lookupGetter: (this: object, key: PropertyKey) => Function | undefined = (Object.prototype as any).__lookupGetter__
 
 /**
- * Finds the substitutes in a value: the value itself, the items of arrays, Maps and Sets, the own enumerable data
- * properties of other objects (no getter is run), and a substitute in the prototype chain of an object. A substitute is
- * never looked into (that would be an operation on it). Every object is walked once; LOOK_DEPTH, LOOK_WIDTH and the
- * look's budget bound the walk; an object that cannot be listed (a revoked proxy, a throwing trap) is left out.
+ * Walks the values of a look (the arguments, then the answers, each one to its end before the next one) until it finds
+ * `proxy`, and tells whether it did. It finds the substitutes in a value: the value itself, the items of arrays, Maps
+ * and Sets, the own enumerable data properties of other objects (no getter is run), and a substitute in the prototype
+ * chain of an object. A substitute is never looked into (that would be an operation on it). Every object is walked
+ * once; LOOK_DEPTH, LOOK_WIDTH and the look's budget bound the walk; an object that cannot be listed (a revoked proxy, a
+ * throwing trap) is left out. The values still to walk are kept on the look (`pending`, with their depths), so that the
+ * next question goes on from where this one stopped, and a walk that comes back (a trap of a proxy among the values
+ * touching a substitute) goes on with what is left.
  */
-const walk = (look: ArgumentLook, value: unknown, depth: number): void => {
-  if (typeof value === 'function') {
-    if (isSubstituteProxy(value)) look.reached!.add(value)
-    return
-  }
-  if (typeof value !== 'object' || value === null || look.seen!.has(value)) return
-  look.seen!.add(value)
-  try {
-    let prototype = Object.getPrototypeOf(value)
-    for (let level = 0; level < PROTOTYPE_DEPTH && prototype !== null && prototype !== Object.prototype && prototype !== Array.prototype; level++) {
-      if (isSubstituteProxy(prototype)) {
-        look.reached!.add(prototype)
-        break
-      }
-      prototype = Object.getPrototypeOf(prototype)
+const walkUntil = (look: ArgumentLook, proxy: object): boolean => {
+  const reached = look.reached ?? (look.reached = new Set())
+  const seen = look.seen ?? (look.seen = new Set())
+  const pending = look.pending ?? (look.pending = [])
+  for (;;) {
+    if (pending.length === 0) {
+      const index = look.taken
+      const argumentCount = look.args.length
+      const answers = look.answers
+      if (index >= argumentCount + (answers === undefined ? 0 : answers.length)) return false
+      look.taken = index + 1
+      pending.push(index < argumentCount ? look.args[index] : answers![index - argumentCount], 0)
     }
-    if (depth >= LOOK_DEPTH || ArrayBuffer.isView(value)) return
-    const items = itemsOf(value)
-    if (items === undefined || items.length > LOOK_WIDTH || items.length > look.budget) return
-    look.budget -= items.length
-    for (let index = 0; index < items.length; index++) walk(look, items[index], depth + 1)
-  } catch {
-    // (left out)
+    const depth = pending.pop() as number
+    const value = pending.pop()
+    if (typeof value === 'function') {
+      if (isSubstituteProxy(value)) {
+        reached.add(value)
+        if (value === proxy) return true
+      }
+      continue
+    }
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue
+    seen.add(value)
+    try {
+      let prototype = Object.getPrototypeOf(value)
+      for (let level = 0; level < PROTOTYPE_DEPTH && prototype !== null && prototype !== Object.prototype && prototype !== Array.prototype; level++) {
+        if (isSubstituteProxy(prototype)) {
+          reached.add(prototype)
+          if (prototype === proxy) return true
+          break
+        }
+        prototype = Object.getPrototypeOf(prototype)
+      }
+      if (depth >= LOOK_DEPTH || ArrayBuffer.isView(value)) continue
+      pushItems(look, pending, value, depth + 1)
+    } catch {
+      // (left out)
+    }
   }
 }
 
-/** What a value holds, for the walk (see above). */
-const itemsOf = (value: object): readonly unknown[] | undefined => {
-  if (Array.isArray(value)) return value.length > LOOK_WIDTH ? undefined : value
-  if (types.isMap(value)) return (value as Map<unknown, unknown>).size > LOOK_WIDTH / 2 ? undefined : [...(value as Map<unknown, unknown>).keys(), ...(value as Map<unknown, unknown>).values()]
-  if (types.isSet(value)) return (value as Set<unknown>).size > LOOK_WIDTH ? undefined : [...(value as Set<unknown>).values()]
-  const keys: PropertyKey[] = Object.keys(value)
-  if (keys.length > LOOK_WIDTH) return undefined
-  for (const symbol of Object.getOwnPropertySymbols(value)) if (Object.prototype.propertyIsEnumerable.call(value, symbol)) keys.push(symbol)
+/** Puts what a value holds (see walkUntil) on the pending values, with their depth, within the look's bounds. */
+const pushItems = (look: ArgumentLook, pending: unknown[], value: object, depth: number): void => {
+  if (Array.isArray(value)) {
+    const length = value.length
+    if (length > LOOK_WIDTH || length > look.budget) return
+    look.budget -= length
+    for (let index = 0; index < length; index++) pending.push(value[index], depth)
+    return
+  }
+  if (types.isMap(value) || types.isSet(value)) {
+    const collection = value as Map<unknown, unknown> | Set<unknown>
+    const size = types.isMap(value) ? collection.size * 2 : collection.size
+    if (size > LOOK_WIDTH || size > look.budget) return
+    look.budget -= size
+    if (types.isMap(value)) for (const [key, item] of value as Map<unknown, unknown>) pending.push(key, depth, item, depth)
+    else for (const item of value as Set<unknown>) pending.push(item, depth)
+    return
+  }
+  const keys = Object.keys(value)
+  const symbols = Object.getOwnPropertySymbols(value)
+  const count = keys.length + symbols.length
+  if (count > LOOK_WIDTH || count > look.budget) return
+  look.budget -= count
   const proxy = types.isProxy(value)
-  return keys.map(key => {
-    if (proxy) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)
-      return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
-    }
-    return lookupGetter.call(value, key) === undefined ? (value as any)[key] : undefined
-  })
+  for (let index = 0; index < keys.length; index++) pending.push(dataValue(value, keys[index], proxy), depth)
+  for (let index = 0; index < symbols.length; index++)
+    if (Object.prototype.propertyIsEnumerable.call(value, symbols[index])) pending.push(dataValue(value, symbols[index], proxy), depth)
+}
+
+/** The value of an own property, without running a getter (or a get trap of a proxy). */
+const dataValue = (object: object, key: PropertyKey, proxy: boolean): unknown => {
+  if (proxy) {
+    const descriptor = Object.getOwnPropertyDescriptor(object, key)
+    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
+  }
+  return lookupGetter.call(object, key) === undefined ? (object as any)[key] : undefined
 }

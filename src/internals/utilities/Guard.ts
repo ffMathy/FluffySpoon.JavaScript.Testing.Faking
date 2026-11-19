@@ -45,9 +45,11 @@ export type ArgumentLook = {
   args: readonly unknown[]
   /** The values that looked substitutes answered, in that order (created by the first). */
   answers: unknown[] | undefined
-  /** How many of the arguments, then of the answers, were walked so far. */
-  walked: number
-  /** The substitutes (proxies, of any copy) found in the walked values (created by the first walk). */
+  /** How many of the arguments, then of the answers, the walk has taken so far. */
+  taken: number
+  /** The values that the walk has still to look at, each followed by its depth (created by the first walk). */
+  pending: unknown[] | undefined
+  /** The substitutes (proxies, of any copy) that the walk found so far (created by the first walk). */
   reached: Set<object> | undefined
   /** The objects walked so far, each one once (created by the first walk). */
   seen: Set<object> | undefined
