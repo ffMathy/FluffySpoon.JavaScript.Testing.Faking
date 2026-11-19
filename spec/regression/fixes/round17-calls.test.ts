@@ -1,6 +1,6 @@
 import test, { ExecutionContext } from 'ava'
 
-import { Substitute, Arg, received, didNotReceive } from '../../../src'
+import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
 
@@ -248,4 +248,40 @@ test('R16-ADV-8 (E117) a nested predicate that throws is still a non-match, and 
   other.load({ id: Arg.any() }).returns('loaded')
   t.not(other.load(value), 'loaded')
   t.is(reads, 2, 'as at d417925 and 8be3a70: once by the comparison with the setup, once by the hash (E102)')
+})
+
+// ---- E118 (R16V-1): a revoked function proxy is not one of the library's proxies -----------------------------------
+
+test('R16V-1 (E118) a revoked function proxy as a configured answer, an argument or a member value never crashes', t => {
+  const { proxy: connection, revoke } = Proxy.revocable(function connection() { }, {})
+  const pool = Substitute.for<any>()
+  pool.acquire().returns(connection)
+  t.is(pool.acquire(), connection)
+  revoke()
+  t.is(pool.acquire(), connection, 'a configured answer is handed back as it is')
+  const loader = Substitute.for<any>()
+  loader.load(Arg.any()).returns(connection)
+  t.is(loader.load(1), connection)
+  loader.find(1).returns(connection)
+  t.is(loader.find(1), connection)
+  loader.current.returns(connection)
+  t.is(loader.current, connection)
+  loader.make(Arg.any()).mimicks(() => connection)
+  t.is(loader.make(1), connection)
+  const instance = Substitute.for<any>()
+  instance[mimick]({ connection })
+  t.notThrows(() => instance.connection)
+  t.notThrows(() => instance.received(1).connection)
+  // as an argument: recorded and matched by identity (E14)
+  const sink = Substitute.for<any>()
+  sink.release(connection)
+  t.notThrows(() => sink.received(1).release(connection))
+  t.notThrows(() => sink.didNotReceive().release(function connection() { }))
+  sink.close(connection).returns('closed')
+  t.is(sink.close(connection), 'closed')
+  // checks through a call with matchers and printing
+  t.notThrows(() => loader.received(1).load(1))
+  t.notThrows(() => String(pool))
+  t.notThrows(() => String(sink))
+  t.true(failureOf(t, () => sink.received(2).release(connection)).includes('release'))
 })

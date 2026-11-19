@@ -550,10 +550,21 @@ const rootProxies = new WeakMap<SubstituteState, object>()
 
 const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? face.proxy : rootProxies.get(face)
 
-/** Whether the value is a substitute or an auto-substitute of this copy of the library (see above). */
-const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' &&
-  ((Object.getPrototypeOf(value) === faceTargetPrototype && types.isProxy(value)) ||
-    (reprototypedCount > 0 && reprototyped.has(value)))
+/**
+ * Whether the value is a substitute or an auto-substitute of this copy of the library (see above). E118 (R16V-1): only a
+ * proxy can be one, and its prototype is read in a guard: a revoked proxy (a pooled connection revoked on release, as a
+ * configured answer, an argument or a member's value) throws for it, and is simply not one (E14: matched by identity).
+ */
+const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' && types.isProxy(value) &&
+  (hasFacePrototype(value) || (reprototypedCount > 0 && reprototyped.has(value)))
+
+const hasFacePrototype = (value: Function): boolean => {
+  try {
+    return Object.getPrototypeOf(value) === faceTargetPrototype
+  } catch {
+    return false
+  }
+}
 
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
