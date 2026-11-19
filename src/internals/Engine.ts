@@ -898,14 +898,34 @@ const applyArguments = (list: unknown): any[] | undefined => {
 }
 
 /**
+ * E82 (R13FE-5): the member records of call/apply invocations that answered with the auto-substitute of the direct call
+ * (see dualHelper), with the substitute whose member call/apply they are (the member reading's).
+ */
+const directAnswers = new WeakMap<CallRecord, SubstituteState>()
+
+/**
+ * E82: the entry that a setup method (`.returns`, ...) read on an auto-substitute configures. Right after a call/apply
+ * invocation that answered with the direct call's auto-substitute, in the same expression (`chainHead`: the
+ * invocation's member record), that is the member reading's entry, as D26 says: `x.apply(t, [1]).returns(u)` configures
+ * x's member apply for (t, [1]), not x(1). Otherwise the entry itself.
+ */
+const setupEntryOf = (entry: AutoEntry, chainHead: CallRecord | undefined): AutoEntry => {
+  const memberState = chainHead === undefined ? undefined : directAnswers.get(chainHead)
+  return memberState === undefined ? entry : memberState.callEntry(chainHead!.key, new ArgumentHashes(chainHead!.args!))
+}
+
+/**
  * `x.call` / `x.apply` / `x.bind` on any function-like substitute value (D26). Invoking the helper:
  * (a) answers with a substitution configured on x's member of that name, when one matches the raw arguments;
- * (b) otherwise behaves like Function.prototype.call/apply/bind on x: the configured value of x(...arguments) (a
- *     mimicked function or mimicks() receives the thisArg).
+ * (b) otherwise behaves like Function.prototype.call/apply/bind on x: it answers what x(...arguments) answers, the
+ *     configured value (a mimicked function or mimicks() receives the thisArg) or, E82 (R13FE-5), the same
+ *     auto-substitute as x(...arguments) (D2), so that what a wrapper calling `fn.apply(this, args)` gets has the
+ *     nested setups made on `x(...arguments)` and its calls are checked there. (Not for a member called received or
+ *     didNotReceive, whose direct call would be a check, D11: the member reading's auto-substitute.)
  * The invocation is recorded once, with both readings (see CallRecord.twin), so that `x.received().call(t, 1)` and
- * `x.received()(1)` both count it. Setups written through the helper (`.returns` on its result, or arguments with
- * matchers) configure the member reading. For bind, the bind call is only a call of the member `bind`; invoking the
- * bound function is a direct call of x with the bound arguments first.
+ * `x.received()(1)` both count it. Setups written through the helper (`.returns` on its result, see setupEntryOf, or
+ * arguments with matchers) configure the member reading. For bind, the bind call is only a call of the member `bind`;
+ * invoking the bound function is a direct call of x with the bound arguments first.
  */
 const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord | undefined): Function => {
   const invokeHelper = (rawArgs: any[], thisArg: unknown, directArgs: any[] | undefined, site: StackHolder): any => {
@@ -939,8 +959,16 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
     if (answer !== NOT_CONFIGURED) return answer
     if (directRecord !== undefined) {
-      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, new ArgumentHashes(directArgs!), directRecord, { thisArg, explicit: true })
+      const directHashes = new ArgumentHashes(directArgs!)
+      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
       if (directAnswer !== NOT_CONFIGURED) return directAnswer
+      // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf)
+      if (!isStringAssertionKey(direct.key)) {
+        const directEntry = direct.state.callEntry(direct.key, directHashes)
+        directEntry.handOut(memberRecord)
+        directAnswers.set(memberRecord, memberState)
+        return entryProxy(directEntry)
+      }
     }
     const entry = memberState.callEntry(helper, hashes)
     entry.handOut(memberRecord)
@@ -1332,6 +1360,7 @@ const describeCall = (state: SubstituteState, key: PropertyKey, args: readonly u
 
 /** `.returns(...)` and friends on a handle: configures the member read or the call that produced the handle. */
 const setupFunction = (entry: AutoEntry, method: SubstitutionMethod, chainHead: CallRecord | undefined, stackStart: Function): Function => {
+  entry = setupEntryOf(entry, chainHead) // E82
   const specification = entry.kind === 'call' && entry.args!.argumentsClass !== 'plain'
     ? RecordedArguments.from(actualArgumentsOf(entry, chainHead)) // handed out by a matcher setup: configure the actual call
     : entry.args
