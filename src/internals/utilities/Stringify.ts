@@ -546,12 +546,15 @@ const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from:
  * E78: two values compared in their order (`inOrder`, as they print) and, where that finds a difference, in any order
  * that matching ignores (`anyOrder`). Each of the two finds a depth at which the values print differently, at most the
  * least depth at which they print differently in more than such an order; the greater of the two counts. (A comparison
- * in any order that the budget cuts short does not count: the one in their order does then.)
+ * in any order that the budget cuts short does not count: the one in their order does then.) `reordered`: whether the
+ * comparison in any order can find something else at all (it is made only then).
  */
-const inAnyOrder = (comparison: Comparison, inOrder: (comparison: Comparison) => void, anyOrder: (comparison: Comparison) => void): void => {
+const inAnyOrder = (
+  comparison: Comparison, inOrder: (comparison: Comparison) => void, anyOrder: (comparison: Comparison) => void, reordered?: () => boolean
+): void => {
   const first: Comparison = { ...comparison }
   inOrder(first)
-  if (first.best < comparison.best && !first.stopped) {
+  if (first.best < comparison.best && !first.stopped && (reordered === undefined || reordered())) {
     const second: Comparison = { ...comparison }
     anyOrder(second)
     if (!second.stopped) {
@@ -655,12 +658,51 @@ const compareCollections = (
   if (size !== actualSize) return differs(comparison, level)
   const count = Math.min(size, search.bounds.maxArrayLength)
   search.entries -= count
-  const expectedEntries = firstEntries(expected, isMap, count)
-  const actualEntries = firstEntries(actual, isMap, count)
+  let entries: [unknown[], unknown[]] | undefined
   inAnyOrder(comparison,
-    inOrder => compareEntries(search, inOrder, expectedEntries, actualEntries, isMap, level),
-    anyOrder => compareEntriesInAnyOrder(search, anyOrder, expectedEntries, actualEntries, isMap, level))
+    inOrder => compareEntriesInOrder(search, inOrder, expected, actual, isMap, count, level),
+    anyOrder => {
+      entries ??= [firstEntries(expected, isMap, count), firstEntries(actual, isMap, count)]
+      compareEntriesInAnyOrder(search, anyOrder, entries[0], entries[1], isMap, level)
+    },
+    // entries whose keys (members) are the same values at the same positions, all but one at most, compare in any order
+    // as they do in their order (the one left cannot be paired with another)
+    () => {
+      entries = [firstEntries(expected, isMap, count), firstEntries(actual, isMap, count)]
+      return otherPositions(entries[0], entries[1], isMap) > 1
+    })
   compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, Infinity, level, true)
+}
+
+/** The first `count` entries of two Maps (keys and values) or two Sets (members) at `level`, in their order. */
+const compareEntriesInOrder = (
+  search: DifferenceSearch, comparison: Comparison, expected: Map<unknown, unknown> | Set<unknown>, actual: Map<unknown, unknown> | Set<unknown>,
+  isMap: boolean, count: number, level: number
+): void => {
+  const expectedEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(expected)
+  const actualEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(actual)
+  for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
+    const expectedStep = expectedEntries.next()
+    const actualStep = actualEntries.next()
+    if (expectedStep.done === true || actualStep.done === true) break
+    if (isMap) {
+      const [expectedKey, expectedValue] = expectedStep.value as [unknown, unknown]
+      const [actualKey, actualValue] = actualStep.value as [unknown, unknown]
+      compareValues(search, comparison, expectedKey, actualKey, level + 1, true)
+      compareValues(search, comparison, expectedValue, actualValue, level + 1, true)
+    } else compareValues(search, comparison, expectedStep.value, actualStep.value, level + 1, true)
+  }
+}
+
+/** The key of an entry of a Map (`[key, value]`), or a member of a Set. */
+const entryKey = (entry: unknown, isMap: boolean): unknown => isMap ? (entry as [unknown, unknown])[0] : entry
+
+/** At how many positions the first entries of two Maps or two Sets have keys (members) that are not the same value. */
+const otherPositions = (expected: readonly unknown[], actual: readonly unknown[], isMap: boolean): number => {
+  let count = 0
+  for (let index = 0; index < expected.length; index++)
+    if (index >= actual.length || !Object.is(entryKey(expected[index], isMap), entryKey(actual[index], isMap))) count++
+  return count
 }
 
 /** Entries of two Maps (`[key, value]`) or two Sets (members) at `level`, in their order. */
