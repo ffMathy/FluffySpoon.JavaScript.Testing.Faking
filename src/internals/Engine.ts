@@ -2082,11 +2082,14 @@ const boundMemberCheck = (face: Face): string => {
  */
 const notSubstituteError = (through: string, state: SubstituteState, record: CallRecord, answer: object, start: Function | undefined) => {
   let how: string
+  // E104: what to check instead of a function bound from a substitute's member
+  let instead = 'Check that value directly instead (for example user.received(1).save(), for a substitute user that it holds or resolves to)'
   if (answer instanceof Substitution) {
     const values = answer.values.map(value => formatValue(value, false)).join(', ')
     const bound = answer.method === 'returns' && answer.values.length === 1 ? boundProxies.get(answer.values[0]) : undefined
+    if (bound !== undefined) instead = `Check the calls of the member it is bound from instead (for example ${boundMemberCheck(bound)})`
     const why = bound !== undefined
-      ? `, a bound function, which is not a substitute: check the calls of the member it is bound from instead (for example ${boundMemberCheck(bound)})`
+      ? ', a bound function, which is not a substitute'
       : answer.method === 'returns' && answer.values.length > 1
         ? ', and the value it answered is not a substitute' // (a sequence: the call got one of them)
         : configuredAnswerText[answer.method as SubstitutionMethod] ?? ''
@@ -2101,8 +2104,7 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
   return SubstituteException.generic(
     `Cannot check through ${through}: ${what} ${how}. ` +
     `A check through a call with matchers counts the calls of the substitutes that the matching calls answered, and the calls ` +
-    `made on that value are not recorded there. Check that value directly instead (for example user.received(1).save(), ` +
-    `for a substitute user that it holds or resolves to), or check a concrete call.`,
+    `made on that value are not recorded there. ${instead}, or check a concrete call.`,
     start
   )
 }

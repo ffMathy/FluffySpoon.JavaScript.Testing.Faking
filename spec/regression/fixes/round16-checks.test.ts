@@ -373,8 +373,8 @@ test('R15-ADV-8 (E104) the finding: a configured answer made by .bind() on a sub
 
   const message = expectUsageError(t, 'bound member', "Cannot check through @Substitute.handler(Arg.any{any}): the received call @Substitute.handler('a'), which it matches, ",
     (form, count) => api.handler(Arg.any())[form.key](...form.args(count))(1))
-  t.true(message.includes('is configured with returns(@Substitute.process.bind(@Substitute)), a bound function, which is not a substitute: ' +
-    'check the calls of the member it is bound from instead (for example sub.received(1).process(...))'), message)
+  t.true(message.includes('is configured with returns(@Substitute.process.bind(@Substitute)), a bound function, which is not a substitute. '), message)
+  t.true(message.endsWith('Check the calls of the member it is bound from instead (for example sub.received(1).process(...)), or check a concrete call.'), message)
 
   // a function substitute bound with arguments
   const app = Substitute.for<any>()
@@ -384,8 +384,8 @@ test('R15-ADV-8 (E104) the finding: a configured answer made by .bind() on a sub
   t.notThrows(() => fn[received](1)('pre', 1))
   const second = expectUsageError(t, 'bound function', "Cannot check through @Substitute.handler(Arg.any{any}): ",
     (form, count) => app.handler(Arg.any())[form.key](...form.args(count))(1))
-  t.true(second.includes("is configured with returns(@Substitute.bind(null, 'pre')), a bound function, which is not a substitute: " +
-    'check the calls of the member it is bound from instead (for example sub.received(1)(...))'), second)
+  t.true(second.includes("is configured with returns(@Substitute.bind(null, 'pre')), a bound function, which is not a substitute. "), second)
+  t.true(second.endsWith('Check the calls of the member it is bound from instead (for example sub.received(1)(...)), or check a concrete call.'), second)
 })
 
 test('R15-ADV-8 (E104) another copy\'s substitutes are still counted, and a bound function as the answer of a member read too', t => {
