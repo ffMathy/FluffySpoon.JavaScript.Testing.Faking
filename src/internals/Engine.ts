@@ -897,10 +897,7 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
 
     // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
-    if (stringCheck) {
-      const assertion = resolveStringAssertion(entry, chainHead(), stackStart)
-      return assertion.other !== undefined ? assertion.other[property] : assertionMember(useOf(assertion.state), property, assertion.count, stackStart)
-    }
+    if (stringCheck) return stringCheckMember(entry, property, chainHead(), stackStart)
   }
 
   // D26: call/apply/bind, unless the member with that name is configured as a property, or the substitute mimicks
@@ -913,17 +910,27 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
   }
 
   const context = contextMethodOf(property)
-  if (context !== undefined) {
-    const head = chainHead()
-    // E99: a check through a concrete call that a setup with matchers answered (see concreteRoute)
-    const subject = (context === 'received' || context === 'didNotReceive') && head !== undefined && sharedHandOutCount > 0
-      ? () => concreteSubject(faceState(face), head) : undefined
-    return contextFunction(context, () => faceState(face), head, subject)
-  }
+  if (context !== undefined) return faceContextFunction(face, context, chainHead())
 
   // D28: an unconfigured protocol key reads as undefined, and is not recorded
   if (isProtocolKey(property) && !answersProtocolKey(faceState(face), property)) return undefined
   return REAL_READ
+}
+
+/** `sub.received(n).member` (see faceGet; a function of its own, which keeps faceGet small for the hot path). */
+const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: CallRecord | undefined, stackStart: Function): any => {
+  const assertion = resolveStringAssertion(entry, chainHead, stackStart)
+  return assertion.other !== undefined ? assertion.other[property] : assertionMember(useOf(assertion.state), property, assertion.count, stackStart)
+}
+
+/**
+ * The function behind a symbol of the library read on a substitute (see contextFunction). E99: a check through a concrete
+ * call that a setup with matchers answered counts along its expression (see concreteRoute).
+ */
+const faceContextFunction = (face: Face, context: ContextMethod, head: CallRecord | undefined): Function => {
+  const subject = (context === 'received' || context === 'didNotReceive') && head !== undefined && sharedHandOutCount > 0
+    ? () => concreteSubject(faceState(face), head) : undefined
+  return contextFunction(context, () => faceState(face), head, subject)
 }
 
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
