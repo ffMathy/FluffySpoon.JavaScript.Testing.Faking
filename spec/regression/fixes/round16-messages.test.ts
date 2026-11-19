@@ -1,8 +1,10 @@
 import test, { ExecutionContext } from 'ava'
 import * as path from 'path'
+import { inspect } from 'util'
 
-import { Substitute, Arg, mimick, received } from '../../../src'
+import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 16, engine (messages): the round-15 findings R15-ADV-6 and R15FE-5 (its labels), decided in the fix spec as
 // E108 and E99-labels.
@@ -253,4 +255,164 @@ test('R15-ADV-6 (E108) the remedy of one step is worded as before', t => {
   const twice = Substitute.for<any>()
   twice.where(1).where(2).first()
   t.deepEqual(suggestedSetups(hintOf(failureOf(t, () => twice.received(1).first()))), ['sub.where(Arg.all()).returns(sub)'])
+})
+
+// ---- E99-labels (R15FE-5): records on a substitute shared by a setup with matchers ----------------------------------
+
+/** The listed records of a message (its lines starting with `› `). */
+const listedLines = (message: string) => withoutSites(message).split('\n').filter(line => line.startsWith('› '))
+
+/** A Socket.IO-style server whose broadcasts are configured for every room: one substitute answers every io.to(room). */
+const broadcasting = () => {
+  const io = Substitute.for<any>()
+  io.to(Arg.any()).emit(Arg.all()).returns(true)
+  return io
+}
+
+test('R15FE-5 (E99-labels) the finding: the records of a substitute that one call was handed out to are shown with that call', t => {
+  const io = broadcasting()
+  io.to('room-a').emit('message', { text: 'hi' }) // the code under test
+
+  // a check through the call with matchers: the substitute keeps its path, and its records show the room
+  t.is(withoutSites(failureOf(t, () => io.to(Arg.any()).received(2).emit('message', Arg.any()))), [
+    'Call count mismatch in @Substitute.to(Arg.any{any}).emit:',
+    "Expected to receive 2 method calls matching emit('message', Arg.any{any}), but received 1.",
+    'All property or method calls to @Substitute.to(Arg.any{any}).emit received so far:',
+    "› ✔ @Substitute.to('room-a').emit('message', { text: 'hi' })",
+    ''
+  ].join('\n'))
+  // every form of check
+  const expected = ["› ✔ @Substitute.to('room-a').emit('message', { text: 'hi' })"]
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any())[received](3).emit(Arg.all()))), expected)
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any()).didNotReceive().emit('message', Arg.any()))), expected)
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any())[didNotReceive]().emit(Arg.all()))), expected)
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any()).received(1).emit('message', { text: 'bye' }))),
+    ["› ✘ @Substitute.to('room-a').emit('message', { text: 'hi' })"])
+
+  // the printout: the received call shows the room, the setup keeps the matchers
+  t.is(String(io), [
+    '@Substitute {',
+    '  received:',
+    "    to('room-a')",
+    "    to('room-a').emit('message', { text: 'hi' })",
+    '  configured:',
+    '    to(Arg.any{any}).emit(Arg.all{}) => returns(true)',
+    '}'
+  ].join('\n'))
+  t.is(inspect(io), String(io))
+
+  // the fluent-chain hint names it with the room, and its remedy checks it there (E108: a call with matchers on the way)
+  const hint = hintOf(failureOf(t, () => io.received(1).emit('message', Arg.any())))
+  t.is(hint, "emit was not called on @Substitute itself, but on a substitute further down: @Substitute.to('room-a').emit(...). " +
+    "To check calls there, check that substitute: sub.to('room-a').received(1).emit(...)")
+  t.notThrows(() => suggestedCheck(hint, io, ['message', { text: 'hi' }]))
+})
+
+test('R15FE-5 (E99-labels) equal calls count as one; calls with other arguments keep the matchers and get a line under the listing', t => {
+  const io = broadcasting()
+  io.to('room-a').emit('message', 1)
+  io.to('room-a').emit('message', 2)
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any()).received(1).emit(Arg.all()))), [
+    "› ✔ @Substitute.to('room-a').emit('message', 1)",
+    "› ✔ @Substitute.to('room-a').emit('message', 2)"
+  ])
+
+  io.to('room-b').emit('message', 3)
+  const two = withoutSites(failureOf(t, () => io.to(Arg.any()).received(1).emit(Arg.all())))
+  t.deepEqual(listedLines(two), [
+    "› ✔ @Substitute.to(Arg.any{any}).emit('message', 1)",
+    "› ✔ @Substitute.to(Arg.any{any}).emit('message', 2)",
+    "› ✔ @Substitute.to(Arg.any{any}).emit('message', 3)"
+  ])
+  t.true(two.endsWith("\n@Substitute.to(Arg.any{any}) is shared by every call matching it; it was returned to @Substitute.to('room-a') and @Substitute.to('room-b').\n"), two)
+  t.true(String(io).includes("    to(Arg.any{any}).emit('message', 3)"), String(io))
+
+  // up to three, then how many more (calls with other arguments than those named: room-d and room-e, not room-a again)
+  io.to('room-c').emit('message', 4)
+  io.to('room-d').emit('message', 5)
+  io.to('room-e').emit('message', 6)
+  io.to('room-a').emit('message', 7)
+  const many = failureOf(t, () => io.to(Arg.any()).received(1).emit(Arg.all()))
+  t.is(many.split('\n').filter(line => line.includes('is shared by')).join('\n'),
+    "@Substitute.to(Arg.any{any}) is shared by every call matching it; it was returned to @Substitute.to('room-a'), @Substitute.to('room-b'), " +
+    "@Substitute.to('room-c') and 2 more.")
+  // nothing listed: no line
+  t.false(failureOf(t, () => io.to(Arg.any()).received(1).leave(Arg.all())).includes('is shared by'))
+})
+
+test('R15FE-5 (E99-labels) a knex-style function substitute: each shared step is shown with its own call, or named in a line', t => {
+  const db = Substitute.for<any>()
+  db(Arg.any()).where(Arg.all()).first().resolves({ id: 1 })
+  void db('orders').where('id', 1).first() // the code under test
+  t.deepEqual(listedLines(failureOf(t, () => db(Arg.any()).where(Arg.all()).received(2).first())), ["› ✔ @Substitute('orders').where('id', 1).first()"])
+  t.deepEqual(listedLines(failureOf(t, () => db(Arg.any()).received(2).where(Arg.all()))), ["› ✔ @Substitute('orders').where('id', 1)"])
+  t.true(String(db).includes("    ('orders').where('id', 1).first()"), String(db))
+  t.true(String(db).includes('    (Arg.any{any}).where(Arg.all{}).first() => resolves({ id: 1 })'), String(db))
+
+  void db('users').where('id', 1).first()
+  const message = withoutSites(failureOf(t, () => db(Arg.any()).where(Arg.all()).received(1).first()))
+  t.deepEqual(listedLines(message), [
+    "› ✔ @Substitute(Arg.any{any}).where('id', 1).first()",
+    "› ✔ @Substitute(Arg.any{any}).where('id', 1).first()"
+  ])
+  t.true(message.includes("\n@Substitute(Arg.any{any}) is shared by every call matching it; it was returned to @Substitute('orders') and @Substitute('users').\n"), message)
+  t.is(message.split('\n').filter(line => line.includes('is shared by')).length, 1, message)
+})
+
+test('R15FE-5 (E99-labels) handed out through call, apply, bind, stored references, inheriting receivers and new', t => {
+  const forms: Array<[string, (io: any) => void]> = [
+    ['call', io => io.to.call(null, 'room-a').emit('m')],
+    ['apply', io => io.to.apply(undefined, ['room-a']).emit('m')],
+    ['bind', io => io.to.bind(io, 'room-a')().emit('m')],
+    ['Reflect.apply', io => (Reflect.apply(io.to, io, ['room-a']) as any).emit('m')],
+    ['stored reference', io => { const to = io.to; to('room-a').emit('m') }],
+    ['inheriting receiver', io => Object.create(io).to('room-a').emit('m')],
+    ['new', io => new io.to('room-a').emit('m')]
+  ]
+  for (const [form, act] of forms) {
+    const io = broadcasting()
+    act(io)
+    t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any()).received(2).emit('m'), form)), ["› ✔ @Substitute.to('room-a').emit('m')"], form)
+    t.true(String(io).includes("    to('room-a').emit('m')"), `${form}: ${String(io)}`)
+  }
+})
+
+test('R15FE-5 (E99-labels) the calls of the test\'s own checks are no hand-outs, and other substitutes keep their paths', t => {
+  const io = broadcasting()
+  io.to('room-a').emit('m')
+  // a check through another concrete call hands the substitute out to a call that is retracted (D25): it does not count
+  try { io.to('room-b').received(3).emit('m') } catch { /* (whatever it counts) */ }
+  try { io.to('room-c')[received](3).emit('m') } catch { /* (whatever it counts) */ }
+  t.deepEqual(listedLines(failureOf(t, () => io.to(Arg.any()).received(2).emit('m'))), ["› ✔ @Substitute.to('room-a').emit('m')"])
+
+  // unconfigured calls, literal nested setups and configured substitutes are shown as before
+  const api = Substitute.for<any>()
+  api.users('a').list()
+  api.users('b').list()
+  api.repo('x').find(Arg.all()).returns(1)
+  api.repo('x').find(1)
+  const own = Substitute.for<any>()
+  api.client(Arg.any()).returns(own)
+  api.client('y').get(1)
+  t.deepEqual(listedLines(failureOf(t, () => api.users('a').received(2).list())), ["› ✔ @Substitute.users('a').list()"])
+  t.deepEqual(listedLines(failureOf(t, () => api.repo('x').received(2).find(1))), ["› ✔ @Substitute.repo('x').find(1)"])
+  t.deepEqual(listedLines(failureOf(t, () => own.received(2).get(1))), ['› ✔ @Substitute.get(1)'])
+
+  // a setup with matchers that no call has used yet: its substitute has no records to show
+  const idle = broadcasting()
+  t.deepEqual(listedLines(failureOf(t, () => idle.to(Arg.any()).received(1).emit('m'))), [])
+})
+
+test('R15FE-5 (E99-labels) a report that is thrown later shows the room as well', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const io = broadcasting()
+    io.to('room-a').emit('m')
+    void io.to(Arg.any())[received](2).emit // a property-style check of a member that was only called: deferred (D9)
+    const reports = clock.run().map(error => plain((error as Error).message))
+    t.is(reports.length, 1)
+    t.deepEqual(listedLines(reports[0]), ["› ✘ @Substitute.to('room-a').emit('m')"])
+  } finally {
+    clock.uninstall()
+  }
 })

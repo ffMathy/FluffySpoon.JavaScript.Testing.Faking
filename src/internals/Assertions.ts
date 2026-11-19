@@ -2,7 +2,8 @@ import { inspect, types } from 'util'
 
 import { AutoEntry, SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
-import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
+import { SubstituteException, ListedCall, ExpectedKind, RecordLabels } from './SubstituteException'
+import { RecordLabelContext, SameArguments, recordLabelContext, recordPath, sharedNotes } from './Paths'
 import { CallRecord } from './CallRecord'
 import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
@@ -33,6 +34,31 @@ export type CheckSubject = SubstituteState | SeveralSubstitutes
 
 const ownerOf = (subject: CheckSubject, record: CallRecord): { readonly path: string } | undefined =>
   subject instanceof SubstituteState ? undefined : subject.ownerOf(record)
+
+/** E99: whether two received calls were made with equal arguments (see Paths.handOuts). */
+const sameArguments: SameArguments = (a, b) => RecordedArguments.literalsEqual(a, b)
+
+/** E99: the entry of an auto-substitute (its own, or its state's), undefined for a root or anything else. */
+const entryOf = (substitute: { readonly path: string } | undefined): AutoEntry | undefined =>
+  substitute instanceof AutoEntry ? substitute : substitute instanceof SubstituteState ? substitute.owner : undefined
+
+/**
+ * E99 (R15FE-5): the path of a substitute as its received calls are shown: with the call that a substitute shared by a
+ * nested setup through a call with matchers was handed out to, when there is one (see Paths.recordPath).
+ */
+const recordPathOf = (substitute: { readonly path: string }, context: RecordLabelContext): string => {
+  const entry = entryOf(substitute)
+  return entry === undefined ? substitute.path : recordPath(entry, context)
+}
+
+/** E99: how a failure message shows the substitutes of the records it lists (see SubstituteException.RecordLabels). */
+const recordLabels = (subject: CheckSubject): RecordLabels => {
+  const context = recordLabelContext(sameArguments)
+  return {
+    path: owner => recordPathOf(owner ?? subject, context),
+    notes: owners => sharedNotes(owners.map(owner => entryOf(owner ?? subject)), context)
+  }
+}
 
 /** received(n): n must be omitted or be a non-negative safe integer. received(0) is didNotReceive(). */
 export const validateExpectedCount = (count: unknown, stackStart?: Function): ExpectedCount => {
@@ -141,7 +167,9 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
     }
   }
   if (found.length === 0) return undefined
-  const paths = found.map(state => `${truncateText(state.memberPath(key), FLUENT_PATH_CHARACTERS)}(...)`)
+  // (E99: as their records are shown, with the call that a substitute shared by a setup with matchers was handed out to)
+  const context = recordLabelContext(sameArguments)
+  const paths = found.map(state => `${truncateText(`${recordPathOf(state, context)}.${keyToString(key)}`, FLUENT_PATH_CHARACTERS)}(...)`)
   if (more) paths.push('more')
   const lead = `${keyToString(key)} was not called on ${subject.path} itself, but on ${paths.length === 1 ? 'a substitute' : 'substitutes'} further down: ${andList(paths)}.`
   // E108: the steps from the checked substitute (one of the roots) down to the first place named
@@ -153,9 +181,11 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
     steps.push(state.owner!)
     state = state.owner!.parent
   } while (!rootSet.has(state))
-  if (steps.some(step => step.kind !== 'call')) {
+  // (a call with matchers on the way is a nested setup that every matching call answers with one substitute: a setup of
+  // that method with Arg.all() would not answer them, as the one with matchers is more specific, D4)
+  if (steps.some(step => step.kind !== 'call' || step.specifiesMatchers)) {
     return `${lead} To check calls there, check that substitute: ` +
-      `${truncateText(asExpression(place), FLUENT_PATH_CHARACTERS)}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
+      `${truncateText(asExpression({ path: recordPathOf(place, context) }), FLUENT_PATH_CHARACTERS)}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
   }
   // every step is a call: each of those methods (once each, from the top) returns the checked substitute
   const parent = asExpression(state)
@@ -206,6 +236,7 @@ export const assertCall = (state: CheckSubject, key: PropertyKey, args: any[], c
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
+    recordLabels: recordLabels(state),
     key,
     expected: { count, kind: 'method', specification },
     receivedText: receivedText(matches),
@@ -234,6 +265,7 @@ export const assertSet = (state: CheckSubject, key: PropertyKey, value: unknown,
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
+    recordLabels: recordLabels(state),
     key,
     expected: { count, kind: 'set', specification },
     receivedText: receivedText(matches),
@@ -321,6 +353,7 @@ export const assertPropertyRead = (state: CheckSubject, key: PropertyKey, count:
     if (count === 0 && reads === 0 && calls > 0) return defer(stackStart, () => SubstituteException.forCallCountMismatch({
       substitutePath: state.path,
       subject: state,
+      recordLabels: recordLabels(state),
       key,
       expected: { count, kind: 'unknown' },
       receivedText: `${calls} ${plural('method call', calls)}`,
@@ -347,6 +380,7 @@ export const assertPropertyRead = (state: CheckSubject, key: PropertyKey, count:
   const createError = (start?: Function) => SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
+    recordLabels: recordLabels(state),
     key,
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
