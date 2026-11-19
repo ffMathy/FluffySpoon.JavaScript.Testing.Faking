@@ -2156,6 +2156,10 @@ const nestedOfRealValueError = (path: string, member: string, reason: string, st
   start
 )
 
+/** Whether a nested setup through a member or a call that answers so is forwarded (see forwardNestedSetup). */
+const forwards = (substitution: Substitution | undefined, mimicked: { value: unknown } | undefined): boolean =>
+  (substitution !== undefined && substitution.method !== 'auto') || mimicked !== undefined
+
 /** The configure view to forward a nested setup to, or undefined when the member or call does not answer yet. */
 const forwardNestedSetup = (
   path: string, member: string, substitution: Substitution | undefined, mimicked: { value: unknown } | undefined, start: Function,
@@ -2196,8 +2200,13 @@ const configureMember = (state: SubstituteState, key: PropertyKey, configuring =
       // a real method of a mimicked instance reads as a handle (see realGet), so nested setups configure that handle
       const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || isSubstituteProxy(mimickedValue))
         ? { value: mimickedValue } : undefined
-      const forwarded = forwardNestedSetup(`${state.memberPath(key)}.${keyToString(property)}`, keyToString(key), substitution, mimicked, get, configuring)
-      if (forwarded !== undefined) return forwarded[property]
+      if (forwards(substitution, mimicked)) {
+        const forward = (start: Function) =>
+          forwardNestedSetup(`${state.memberPath(key)}.${keyToString(property)}`, keyToString(key), substitution, mimicked, start, configuring)
+        // E90: below a call with matchers, only nested setups are forwarded; checks count along the route
+        const route = routeOf(state)
+        return route === undefined ? forward(get)[property] : routedView(forward, extendRoute(route, memberStep(key)), configuring)[property]
+      }
       // D26: call/apply/bind are members here like any other: setups through them configure the member reading
       return configureMember(state.propertyEntry(key).state, property, configuring)
     },
@@ -2241,8 +2250,63 @@ const nestedSetupTarget = (
     : state.callSubstitutionFor(key, specification)
   const call = `${memberLabel(key)}${formatArguments(specification.value, false)}`
   const path = `${state.memberPath(key)}${formatArguments(specification.value, false)}${property === undefined ? '(...)' : `.${keyToString(property)}`}`
-  const forwarded = forwardNestedSetup(path, call, answering, undefined, start, configuring)
-  return forwarded !== undefined ? forwarded : createConfigureProxy(nestedEntry(state, key, specification).state, configuring)
+  if (!forwards(answering, undefined)) return createConfigureProxy(nestedEntry(state, key, specification).state, configuring)
+  const forward = (stackStart: Function) => forwardNestedSetup(path, call, answering, undefined, stackStart, configuring)
+  // E90: through a call with matchers (or below one), only nested setups are forwarded; checks count along the route
+  const route = routeThroughCall(state, key, specification)
+  return route === undefined ? forward(start) : routedView(forward, route, configuring)
+}
+
+/**
+ * E90 (R14-ADV-1): a point of a nested setup below a call with matchers that D31 forwards to a configured value (or
+ * further down from one). Nested setups go on in the configure view that they are forwarded to (`target(start)`, which
+ * throws D31's usage error when the value is not a substitute, see forwardNestedSetup); a check opened here or further
+ * down counts the substitutes along `route` (see MatchedSubstitutes), as one at the first step does, never the configured
+ * value alone, and it evaluates nothing of the forwarded views. `member`: a member of the point, read but not known yet
+ * to be read or called. The string forms are checks here as below any call with matchers (outside an explicit configure
+ * view, `configuring`).
+ */
+const routedView = (target: (start: Function) => any, route: CheckRoute, configuring: boolean, member?: PropertyKey): any => {
+  const own = member === undefined ? target : (start: Function) => target(start)[member]
+  const here = member === undefined ? route : extendRoute(route, memberStep(member))
+  const print: Printer = () => `${routePath(here)} (configure)`
+  const invoked = (args: any[], construct: boolean): { target: (start: Function) => any, route: CheckRoute } => {
+    const specification = RecordedArguments.forSpecification(args)
+    return {
+      target: start => {
+        if (member === undefined) {
+          const callee = target(start)
+          return construct ? new callee(...args) : callee(...args)
+        }
+        const parent = target(start)
+        return construct ? new parent[member](...args) : parent[member](...args)
+      },
+      route: extendRoute(route, callStep(member ?? SELF, specification))
+    }
+  }
+  return createView(print, {
+    get: function get(_target: unknown, property: PropertyKey) {
+      if (isSpecialProperty(property)) return special(property, print, undefined)
+      const context = contextMethodOf(property)
+      if (context === 'received' || context === 'didNotReceive') return contextFunction(context, () => route.origin, undefined, () => new MatchedSubstitutes(here))
+      if (context !== undefined || substitutionMethodOf(property) !== undefined) return own(get)[property]
+      if (!configuring && isStringAssertionKey(property))
+        return stringCheckOn(start => own(start)[property], () => `${routePath(here)}.${property}`, property, () => new MatchedSubstitutes(here), () => false)
+      return routedView(own, here, configuring, property)
+    },
+    set: function set(_target: unknown, property: PropertyKey, value: unknown) {
+      own(set)[property] = value
+      return true
+    },
+    apply: function apply(_target: unknown, _thisArg: unknown, args: any[]) {
+      const next = invoked(args, false)
+      return routedView(next.target, next.route, configuring)
+    },
+    construct: function construct(_target: unknown, args: any[]) {
+      const next = invoked(args, true)
+      return routedView(next.target, next.route, configuring)
+    }
+  })
 }
 
 /**

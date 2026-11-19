@@ -1,5 +1,6 @@
 import test, { ExecutionContext } from 'ava'
 import * as path from 'path'
+import { inspect } from 'util'
 
 import * as library from '../../../src'
 import { Substitute, Arg, configure, mimick, received, didNotReceive } from '../../../src'
@@ -288,4 +289,168 @@ test('R14-ADV-6 (E92) the same holds for the string forms and further down a cal
   } finally {
     clock.uninstall()
   }
+})
+
+// ---- E90 (R14-ADV-1): checks two or more steps below a call with matchers -------------------------------------------
+
+/** Whether a check passes (a deferred report of a property-style check does not count here). */
+const passesWithoutThrowing = (check: () => unknown): boolean => {
+  const clock = interceptDeferredReports()
+  try {
+    check()
+    return true
+  } catch (error) {
+    if (error instanceof SubstituteException) return false
+    throw error
+  } finally {
+    clock.run()
+    clock.uninstall()
+  }
+}
+
+const printed = (value: unknown): string => plain(inspect(value))
+
+test('R14-ADV-1 (E90) the finding: below a call with matchers whose setup returns a substitute, a check counts what the matching calls answered, not that substitute alone', t => {
+  const api = Substitute.for<any>()
+  const client = Substitute.for<any>()
+  api.client(Arg.any()).returns(client)
+  client.items.clear() // the code under test uses client from elsewhere; api.client() is never called
+
+  t.true(failureOf(t, () => api.client(Arg.any())[received](1).items).includes('but received none.'))
+  for (const form of checkForms) {
+    for (const count of [0, 1]) {
+      const check = () => form.open(api.client(Arg.any()).items, count).clear()
+      if (form.passes(count, 0)) t.notThrows(check, `${form.name} n=${count}`)
+      else t.true(failureOf(t, check, `${form.name} n=${count}`).includes('Call count mismatch in @Substitute.client(Arg.any{any}).items.clear:'), form.name)
+    }
+  }
+
+  // once a received api.client(...) call returned client, its calls count
+  api.client('users').items.clear()
+  for (const form of checkForms) {
+    for (const count of [0, 1, 2]) {
+      const check = () => form.open(api.client(Arg.any()).items, count).clear()
+      if (form.passes(count, 2)) t.notThrows(check, `${form.name} n=${count}`)
+      else t.throws(check, { instanceOf: SubstituteException }, `${form.name} n=${count}`)
+    }
+  }
+  // depth 1 and depth 2 agree: a matching call answered client, whose items were read twice (and cleared twice)
+  for (const form of checkForms) {
+    for (const count of [0, 1, 2, 3]) {
+      t.is(passesWithoutThrowing(() => form.open(api.client(Arg.any()), count).items), form.passes(count, 2), `depth 1 ${form.name} n=${count}`)
+    }
+  }
+  const message = failureOf(t, () => api.client(Arg.any()).items[received](3).clear())
+  t.true(message.includes('All property or method calls to @Substitute.client(Arg.any{any}).items.clear received so far:'), message)
+  t.is(withoutSites(message).split('\n').filter(line => line.startsWith('› ')).length, 2, message)
+
+  // the setup keeps answering, and the check configured nothing on client
+  t.is(api.client('orders'), client)
+  t.false('items' in client)
+  t.notThrows(() => client.received(2).items)
+})
+
+test('R14-ADV-1 (E90) a matcher setup, a literal one through the configure view, and calls made before the setup are counted step by step', t => {
+  // A: a matcher setup and a literal one (the most specific answers); the code under test calls with 'users'
+  const app = Substitute.for<any>()
+  const defaultRepo = Substitute.for<any>()
+  const usersRepo = Substitute.for<any>()
+  app.repo(Arg.any()).returns(defaultRepo)
+  app[configure]().repo('users').returns(usersRepo)
+  app.repo('users').items.clear() // the code under test
+  t.notThrows(() => app.repo(Arg.any())[received](1).items)
+  t.true(failureOf(t, () => app.repo(Arg.any()).items[didNotReceive]().clear()).includes('› ✔ @Substitute.items.clear()'))
+  t.throws(() => app.repo(Arg.any()).items.didNotReceive().clear(), { instanceOf: SubstituteException })
+  t.notThrows(() => app.repo(Arg.any()).items[received](1).clear())
+  t.notThrows(() => app.repo(Arg.any()).items.received(1).clear())
+
+  // B: a call made before the setup answered its auto-substitute, which is counted
+  const later = Substitute.for<any>()
+  const app2 = Substitute.for<any>()
+  app2.repo('users').items.clear() // the code under test
+  app2.repo(Arg.any()).returns(later)
+  t.true(failureOf(t, () => app2.repo(Arg.any()).items[didNotReceive]().clear()).includes("› ✔ @Substitute.repo('users').items.clear()"))
+  t.notThrows(() => app2.repo(Arg.any()).items[received](1).clear())
+
+  // C: a nested property setup through the call with matchers, with calls before and after it
+  const app3 = Substitute.for<any>()
+  const db = Substitute.for<any>()
+  app3.repo('users').db.query('a') // the auto-substitute, before the nested setup
+  app3.repo(Arg.any()).db.returns(db)
+  app3.repo('orders').db.query('b') // db
+  t.notThrows(() => app3.repo(Arg.any()).db[received](2).query(Arg.any()))
+  t.notThrows(() => app3.repo(Arg.any()).db.received(2).query(Arg.any()))
+  t.true(failureOf(t, () => app3.repo(Arg.any()).db[received](1).query(Arg.any())).includes('but received 2.'))
+  t.notThrows(() => app3.repo(Arg.is((name: string) => name === 'orders')).db[received](1).query('b'))
+  t.notThrows(() => db.received(1).query('b'))
+})
+
+test('R14-ADV-1 (E90) three steps down, through forwarded calls and members, in the configure view too', t => {
+  const app = Substitute.for<any>()
+  const tenant = Substitute.for<any>()
+  const users = Substitute.for<any>()
+  app.tenant(Arg.any()).returns(tenant) // a call forwarded to a substitute ...
+  tenant.table('users').returns(users) // ... whose call is configured to return another one
+  app.tenant('acme').table('users').insert(1) // the code under test
+  app.tenant('beta').table('logs').insert(2)
+  users.insert(3) // from elsewhere: counted too, since a received table('users') call returned users
+
+  t.notThrows(() => app.tenant(Arg.any()).table(Arg.any())[received](3).insert(Arg.any()))
+  t.notThrows(() => app.tenant(Arg.any()).table('users')[received](2).insert(Arg.any()))
+  t.notThrows(() => app.tenant(Arg.any()).table('users').received(1).insert(1))
+  t.true(failureOf(t, () => app.tenant(Arg.any()).table('users')[didNotReceive]().insert(1)).includes('› ✔ @Substitute.insert(1)'))
+  t.notThrows(() => app.tenant(Arg.any()).table('logs')[received](1).insert(2))
+  t.notThrows(() => app[configure]().tenant(Arg.any()).table('users')[received](1).insert(1))
+  t.notThrows(() => app[configure]().tenant(Arg.any()).table(Arg.any())[received](3).insert(Arg.any()))
+  // a tenant that no received call returned has nothing to count
+  const idle = Substitute.for<any>()
+  idle.tenant(Arg.any()).returns(tenant)
+  t.notThrows(() => idle.tenant(Arg.any()).table('users')[didNotReceive]().insert(Arg.any()))
+
+  // a member forwarded below a call with matchers (D31), three steps down
+  const store = Substitute.for<any>()
+  const cache = Substitute.for<any>()
+  store.open(Arg.any()).cache.returns(cache)
+  store.open('a').cache.entries.clear() // the code under test
+  cache.entries.clear() // from elsewhere
+  t.notThrows(() => store.open(Arg.any()).cache.entries[received](2).clear())
+  t.true(failureOf(t, () => store.open(Arg.any()).cache.entries.received(3).clear()).includes('but received 2.'))
+  t.notThrows(() => store.open(Arg.is((name: string) => name === 'b')).cache.entries[didNotReceive]().clear())
+})
+
+test('R14-ADV-1 (E90) nested setups through a forwarded call still go to the configured substitute, and checks configure nothing', t => {
+  const api = Substitute.for<any>()
+  const client = Substitute.for<any>()
+  api.client(Arg.any()).returns(client)
+  api.client(Arg.any()).items.add('x').returns(true) // D31: forwarded to client
+  api.client(Arg.any()).name.returns('main')
+  t.true(client.items.add('x'))
+  t.is(client.name, 'main')
+  t.is(api.client(1).name, 'main')
+  // the string forms followed by a setup method, or in the configure view, configure a member called received (D11, D5)
+  api.client(Arg.any()).inbox.received(1).returns(['mail'])
+  t.deepEqual(client.inbox.received(1), ['mail'])
+  api[configure]().client(Arg.any()).outbox.received(2).returns('two')
+  t.is(client.outbox.received(2), 'two')
+
+  // checks through it configure nothing
+  const fresh = Substitute.for<any>()
+  const freshClient = Substitute.for<any>()
+  fresh.client(Arg.any()).returns(freshClient)
+  t.notThrows(() => fresh.client(Arg.any()).items[didNotReceive]().clear())
+  t.notThrows(() => fresh.client(Arg.any()).items.didNotReceive().clear())
+  t.notThrows(() => fresh.client(Arg.any()).a.b(1).c[didNotReceive]().d())
+  t.false('items' in freshClient)
+  t.false('a' in freshClient)
+  t.is(printed(freshClient), '@Substitute {\n}')
+
+  // a forwarded setup whose value is not a substitute: nested setups are D31's usage error, checks E88's
+  const loader = Substitute.for<any>()
+  const user = Substitute.for<any>()
+  loader.load(Arg.any()).resolves(user)
+  t.throws(() => loader.load(Arg.any()).user.returns(1), { instanceOf: SubstituteException, message: /Cannot configure @Substitute\.load\(Arg\.any\{any\}\)\.user: load\(Arg\.any\{any\}\) is configured with resolves\(\)/ })
+  t.notThrows(() => loader.load(Arg.any()).user[didNotReceive]().save(), 'no matching call: nothing to count')
+  void loader.load(1) // the code under test
+  t.true(failureOf(t, () => loader.load(Arg.any()).user[didNotReceive]().save())
+    .includes('Cannot check through @Substitute.load(Arg.any{any}): the received call @Substitute.load(1), which it matches, is configured with resolves(@Substitute)'))
 })
