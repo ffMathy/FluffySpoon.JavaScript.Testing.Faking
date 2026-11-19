@@ -1427,15 +1427,9 @@ const invoke = (
   if (RecordedArguments.containsMatchers(args)) {
     // (retracted first: a usage error in the arguments, E49, leaves no record of the expression behind)
     const chained = continuedChain(chainCandidate, frameAt(stackStart))
-    // E99: the record that handed out the substitute invoked here, when this call continues an expression
-    const head = read !== undefined ? read.chainPrevious : chained
     retract(read)
     retract(chained)
-    const specification = RecordedArguments.forSpecification(args)
-    // E99: further down a concrete call that a setup with matchers answered, checks follow the expression from there
-    const route = sharedHandOutCount > 0 && !isStringAssertionKey(key) ? concreteRoute(head) : undefined
-    if (route !== undefined) return routedView(() => configureCall(state, key, specification), extendRoute(route, callStep(key, specification)), false)
-    return configureCall(state, key, specification, isStringAssertionKey(key))
+    return callWithMatchers(state, key, RecordedArguments.forSpecification(args), read !== undefined ? read.chainPrevious : chained)
   }
 
   // the trap captured the call site (E11), unless the invocation comes through a helper of a deferred read
@@ -1449,6 +1443,18 @@ const invoke = (
   if (self.construct === true) record.constructed = true
 
   return resolveCall(state, key, args, record, self)
+}
+
+/**
+ * An invocation with Arg matchers among its arguments (see invoke): a setup or a check (D3), see configureCall. E99: when it
+ * continues an expression that went through a concrete call that a setup with matchers answered (`head`: the record that
+ * handed out the substitute invoked), a check further down follows that expression (see concreteRoute).
+ */
+const callWithMatchers = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, head: CallRecord | undefined): any => {
+  const stringAssertion = isStringAssertionKey(key)
+  const route = sharedHandOutCount > 0 && !stringAssertion ? concreteRoute(head) : undefined
+  if (route !== undefined) return routedView(() => configureCall(state, key, specification), extendRoute(route, callStep(key, specification)), false)
+  return configureCall(state, key, specification, stringAssertion)
 }
 
 /**
