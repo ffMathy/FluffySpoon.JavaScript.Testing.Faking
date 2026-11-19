@@ -5,7 +5,9 @@
 //   npm run test:types:min-ts                     # builds dist/, then checks the minimum supported version and 4.3
 //   node spec-types/min-ts/check.js 3.9 4.0 4.4   # after `npm run build`: check other versions
 //
-// The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on.
+// The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on. The declaration-emit
+// fixture spec-types/declaration-emit/R13TD-1.T73.check-views.ts (importing the package instead of ../../src) is compiled
+// with `declaration: true` and `emitDeclarationOnly` too, into the temporary directory (R13TD-1, T73).
 //
 // Afterwards it runs spec-types/TD-10.T32.jsdoc.js, which checks (with the project's own TypeScript) that the public
 // API in the same built typings carries documentation comments, and spec-types/R6V-5.R6TD-2.T44.check-cost.js, which
@@ -42,6 +44,11 @@ const copyDirectory = (from, to) => {
   }
 }
 
+const removeDirectory = directory => {
+  if (fs.rmSync) fs.rmSync(directory, { recursive: true, force: true })
+  else if (fs.existsSync(directory)) fs.rmdirSync(directory, { recursive: true })
+}
+
 const workDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'substitute-min-ts-'))
 let failed = false
 try {
@@ -50,6 +57,11 @@ try {
   fs.copyFileSync(path.join(root, 'package.json'), path.join(packageDirectory, 'package.json'))
   copyDirectory(path.join(root, 'dist'), path.join(packageDirectory, 'dist'))
   fs.copyFileSync(path.join(__dirname, 'consumer.ts'), path.join(workDirectory, 'consumer.ts'))
+  const declarationFixture = path.join(__dirname, '..', 'declaration-emit', 'R13TD-1.T73.check-views.ts')
+  fs.writeFileSync(
+    path.join(workDirectory, 'declaration-emit.ts'),
+    fs.readFileSync(declarationFixture, 'utf8').replace(/from '\.\.\/\.\.\/src'/g, "from '@fluffy-spoon/substitute'")
+  )
 
   for (const skipLibCheck of [false, true]) {
     const compilerOptions = {
@@ -67,6 +79,22 @@ try {
       JSON.stringify({ compilerOptions, files: ['consumer.ts'] }, null, 2)
     )
   }
+  const declarationOptions = {
+    module: 'commonjs',
+    moduleResolution: 'node',
+    target: 'es2018',
+    lib: ['es2018'],
+    strict: true,
+    declaration: true,
+    emitDeclarationOnly: true,
+    outDir: 'declarations',
+    skipLibCheck: true,
+    types: []
+  }
+  fs.writeFileSync(
+    path.join(workDirectory, 'tsconfig.declaration.json'),
+    JSON.stringify({ compilerOptions: declarationOptions, files: ['declaration-emit.ts'] }, null, 2)
+  )
 
   for (const version of versions) {
     for (const skipLibCheck of [false, true]) {
@@ -77,10 +105,17 @@ try {
       console.log(`${ok ? 'ok  ' : 'FAIL'} typescript@${version} (skipLibCheck: ${skipLibCheck})`)
       if (!ok) console.log(`${result.stdout || ''}${result.stderr || ''}`.trim().replace(/^/gm, '     '))
     }
+    const args = ['--yes', '-p', `typescript@${version}`, 'tsc', '-p', path.join(workDirectory, 'tsconfig.declaration.json')]
+    const result = spawnSync(npx, args, { cwd: workDirectory, encoding: 'utf8' })
+    const emitted = fs.existsSync(path.join(workDirectory, 'declarations', 'declaration-emit.d.ts'))
+    const ok = result.status === 0 && emitted
+    failed = failed || !ok
+    console.log(`${ok ? 'ok  ' : 'FAIL'} typescript@${version} (declaration emit of check views)`)
+    if (!ok) console.log(`${result.stdout || ''}${result.stderr || ''}`.trim().replace(/^/gm, '     '))
+    removeDirectory(path.join(workDirectory, 'declarations'))
   }
 } finally {
-  if (fs.rmSync) fs.rmSync(workDirectory, { recursive: true, force: true })
-  else fs.rmdirSync(workDirectory, { recursive: true })
+  removeDirectory(workDirectory)
 }
 
 const documentation = spawnSync(process.execPath, [path.join(__dirname, '..', 'TD-10.T32.jsdoc.js')], { cwd: root, encoding: 'utf8' })
