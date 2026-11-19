@@ -1108,8 +1108,10 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
 /**
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
  * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
+ * `sorted`: E78, with keys and entries in a fixed order and errors with their properties sorted (only to compare
+ * values, see sortedText; messages and printouts show them in their order).
  */
-export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false): string => {
+export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
