@@ -345,7 +345,9 @@ const DIFFERS: Evaluation = { matches: false }
  * A pair of containers that is already being compared further up matches (cycles end).
  */
 const matchNested = (expected: unknown, actual: unknown, matcherContainers: ReadonlySet<object>, comparing: Array<[unknown, unknown]>): Evaluation => {
-  const kind = matcherKindOf(expected)
+  // (a container that holds matchers is never a matcher itself: no need to look for one)
+  const holder = matcherContainers.has(expected as object)
+  const kind = holder ? undefined : matcherKindOf(expected)
   if (kind === 'all') return MATCHES
   if (kind !== undefined) {
     // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3)
@@ -353,7 +355,7 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     const evaluation = evaluateMatcher(expected, kind, actual)
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
-  if (!matcherContainers.has(expected as object)) return literalEquals(expected, actual) ? MATCHES : DIFFERS
+  if (!holder) return literalEquals(expected, actual) ? MATCHES : DIFFERS
   if (comparing.some(([e, a]) => e === expected && a === actual)) return MATCHES
 
   const container = expected as object
