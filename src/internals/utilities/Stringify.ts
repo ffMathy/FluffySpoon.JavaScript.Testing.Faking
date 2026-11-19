@@ -325,8 +325,10 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  * - E78: nor does any other order that matching ignores: the entries of a Map or a Set that print in another order
  *   (a Set of tags or a Map of headers built in another order) are compared by key (the values of the same key of a
  *   Map, one level down) and, where the keys are not the same values (objects), as a multiset of their texts at each
- *   depth; the own properties of errors and functions are compared by key, too. (Each line prints in its own order.)
- *   Where the entries in their order already print alike, they are not compared again;
+ *   depth; errors and functions whose own properties print in another order are compared by their texts with the
+ *   properties sorted (a function by util.inspect's own sorted text, as util.inspect prints a function and what its
+ *   properties hold as they are). (Each line prints in its own order.) Where the entries in their order already print
+ *   alike, they are not compared again;
  * - two strings longer than util.inspect shows of them print alike if what shows is the same, and so do two symbols with
  *   the same description;
  * - a matcher stands for the received value only where matching takes it as a matcher, in plain objects and arrays
@@ -480,7 +482,10 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
     if (typeof expected === 'function' && typeof actual === 'function' && !types.isProxy(expected) && !types.isProxy(actual))
       return inAnyOrder(comparison,
         inOrder => compareTexts(search, inOrder, expected, actual, level),
-        anyOrder => compareFunctions(search, anyOrder, expected, actual, level))
+        anyOrder => compareAtDepths(search, anyOrder, level > 0 ? level - 1 : 0, depth => {
+          const text = sortedFunctionText(search, expected, depth - level)
+          return text === undefined || text !== sortedFunctionText(search, actual, depth - level)
+        }))
     return compareTexts(search, comparison, expected, actual, level)
   }
   const prototype = Object.getPrototypeOf(expected)
@@ -558,25 +563,24 @@ const inAnyOrder = (comparison: Comparison, inOrder: (comparison: Comparison) =>
   comparison.stopped = first.stopped
 }
 
-const functionToString = Function.prototype.toString
-
 /**
- * E78: two functions (not proxies) by their own properties, compared by key as the keys of an object, if they print
- * alike apart from them (`[Function: name]`, `[class Name]`: the same prototype, name and source); otherwise they
- * differ where they show.
+ * E78: the text of a function (not a proxy) printed `depth` levels deep, as a message prints it (a function is printed
+ * by util.inspect as it is, with all of its properties and what they hold, see prepared), with util.inspect's `sorted`
+ * option: the keys of its properties and of the objects in them, and the entries of Maps and Sets, are sorted. So two
+ * functions whose texts are the same print alike but for an order that matching ignores. Undefined when the text would
+ * be cut (then the order decides what shows) or cannot be made. (Node.js 10.0 to 10.11 do not sort: their texts are
+ * in the order in which the functions print.)
  */
-const compareFunctions = (search: DifferenceSearch, comparison: Comparison, expected: Function, actual: Function, level: number): void => {
-  const shows = level > 0 ? level - 1 : 0
-  const expectedName = Object.getOwnPropertyDescriptor(expected, 'name')
-  const actualName = Object.getOwnPropertyDescriptor(actual, 'name')
-  // (a name that is not a data property is not read: getters are not run)
-  if (Object.getPrototypeOf(expected) !== Object.getPrototypeOf(actual) || expectedName === undefined || actualName === undefined ||
-    !('value' in expectedName) || !('value' in actualName) || !Object.is(expectedName.value, actualName.value) ||
-    functionToString.call(expected) !== functionToString.call(actual)) return differs(comparison, shows)
-  // a function with properties shows as `[Function]` where they do not show
-  if (hasNoKeys(search, expected) !== hasNoKeys(search, actual)) return differs(comparison, shows)
-  if (level > search.maxDepth) return
-  compareKeys(search, comparison, expected, actual, keysOf(search, expected), keysOf(search, actual), Infinity, level, true)
+const sortedFunctionText = (search: DifferenceSearch, value: Function, depth: number): string | undefined => {
+  const { bounds } = search
+  const options: InspectOptions = { depth, maxArrayLength: bounds.maxArrayLength, maxStringLength: bounds.maxStringLength, colors: false, sorted: true }
+  if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
+  try {
+    const text = withPrintGuard(() => inspect(value, options))
+    return text.length > bounds.characters ? undefined : text
+  } catch {
+    return undefined
+  }
 }
 
 /** E72: whether the first `count` keys of two lists are the same keys, in any order. */

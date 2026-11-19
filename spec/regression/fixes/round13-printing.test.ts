@@ -134,6 +134,27 @@ test('R12V-2 (E78) errors and functions whose own properties come in another ord
   t.is(named.expected, "on([Function: onFail] { id: 7 }, { body: { user: { address: [Object] } } })")
 })
 
+test('R12V-2 (E78) a function whose properties differ beyond what an object shows of its keys is printed at the least depth that shows it', t => {
+  // util.inspect prints a function with all of its properties and all the keys of the objects in them (an object
+  // argument shows its first 20 keys): here the 22nd key differs two levels deep, and another key four levels deep
+  const handler = (last: number, deep: number) => {
+    const meta: Record<string, unknown> = {}
+    for (let index = 0; index < 22; index++) meta[`w${index}`] = index
+    meta.w21 = last
+    meta.w5 = { a: { b: deep } }
+    return Object.assign(function handler() { }, { meta })
+  }
+  const bus = Substitute.for<any>()
+  bus.on({ v: handler(0, 1) })
+  const lines = linesOf(messageOf(() => bus.received(1).on({ v: handler(1, 2) })))
+  // as 98a8973 and 325a37b printed it: two levels deep, where w21 shows (the fuzzer of round 13 found it printed four
+  // levels deep at first)
+  t.true(lines.expected!.includes('w5: [Object],'), lines.expected)
+  t.true(lines.expected!.endsWith('w20: 20, w21: 1 } } })'), lines.expected)
+  t.true(lines.received[0].includes('w5: [Object],'), lines.received[0])
+  t.true(lines.received[0].endsWith('w20: 20, w21: 0 } } })'), lines.received[0])
+})
+
 test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, Sets, errors and functions print differently in more than their order', t => {
   let printed = 0
   const search = (): DifferenceSearch => ({
