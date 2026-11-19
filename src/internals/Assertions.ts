@@ -5,9 +5,9 @@ import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
 import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
-import { isStringAssertionKey, keyToString } from './Constants'
+import { SELF, isStringAssertionKey, keyToString } from './Constants'
 import { isSubstituteProxy } from '../shared'
-import { plural } from './utilities'
+import { plural, truncateText } from './utilities'
 
 /** undefined means "1 or more" */
 export type ExpectedCount = number | undefined
@@ -86,6 +86,75 @@ const memberAccess = (key: PropertyKey): string =>
   typeof key === 'string' && /^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${typeof key === 'symbol' ? keyToString(key) : inspect(key)}]`
 
 /**
+ * E97: how many auto-substitutes (and received calls on them) the search of fluentChainHint looks at, at most, and how
+ * many places it names. Like a printout of a substitute (E35), it walks the auto-substitutes without recursion and
+ * builds only the paths it shows (bounded, see Paths), so a deep or wide tree of them costs little; it runs only when
+ * a check fails.
+ */
+const asHints = (hint: string | undefined): string[] | undefined => hint === undefined ? undefined : [hint]
+
+const FLUENT_SEARCH_BUDGET = 10000
+const FLUENT_PATHS_SHOWN = 3
+/** E97: and the characters of each path it names, at most (each argument in a path is bounded, but a path has many). */
+const FLUENT_PATH_CHARACTERS = 1000
+
+/**
+ * E97 (R14FE-5): a check that found no record of the member on the checked substitute, while a member of that name was
+ * called on auto-substitutes further down (the code under test made an unconfigured fluent call, as in
+ * `reply.code(404).send(...)` or `span.setAttribute(...).setStatus(...)`, whose result is a new substitute): a hint that
+ * names up to FLUENT_PATHS_SHOWN of them, nearest first, and the remedy. Undefined when there are none (within the
+ * search's bounds).
+ */
+const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: ExpectedCount): string | undefined => {
+  if (key === SELF) return undefined
+  const roots: readonly SubstituteState[] = subject instanceof SubstituteState ? [subject] : subject.states
+  const found: SubstituteState[] = []
+  let more = false
+  let budget = FLUENT_SEARCH_BUDGET
+  // breadth first, so that the nearest places come first
+  const queue: SubstituteState[] = []
+  for (const root of roots) for (const entry of root.entries()) {
+    if (--budget < 0) break
+    const nested = entry.materializedState
+    if (nested !== undefined) queue.push(nested)
+  }
+  for (let index = 0; index < queue.length && budget > 0; index++) {
+    const state = queue[index]
+    const records = state.recordsFor(key)
+    budget -= records.length
+    if (records.some(record => record.kind === 'call')) {
+      if (found.length === FLUENT_PATHS_SHOWN) {
+        more = true
+        break
+      }
+      found.push(state)
+    }
+    for (const entry of state.entries()) {
+      if (--budget < 0) break
+      const nested = entry.materializedState
+      if (nested !== undefined) queue.push(nested)
+    }
+  }
+  if (found.length === 0) return undefined
+  // the step below the checked substitute that the first of them was reached through: the method to configure
+  const rootSet = new Set(roots)
+  let step = found[0].owner!
+  while (!rootSet.has(step.parent)) step = step.parent.owner!
+  const paths = found.map(state => `${truncateText(state.memberPath(key), FLUENT_PATH_CHARACTERS)}(...)`)
+  if (more) paths.push('more')
+  const listed = paths.length === 1 ? paths[0] : `${paths.slice(0, -1).join(', ')} and ${paths[paths.length - 1]}`
+  const lead = `${keyToString(key)} was not called on ${subject.path} itself, but on ${paths.length === 1 ? 'a substitute' : 'substitutes'} further down: ${listed}.`
+  const parent = asExpression(step.parent)
+  const access = step.key === SELF ? '' : memberAccess(step.key)
+  if (step.kind === 'call') {
+    return `${lead} A call that is not configured answers a new substitute. For a fluent API, make the method return the ` +
+      `substitute (${parent}${access}(Arg.all()).returns(${parent})) or mimick an instance whose methods return this.`
+  }
+  return `${lead} To check calls there, check that substitute: ` +
+    `${parent}${access}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
+}
+
+/**
  * The amended D9 case: a property-style assertion on a member that has only ever been invoked, never read as a
  * property, and the assertion was not invoked either. A method assertion was most likely intended.
  */
@@ -122,7 +191,9 @@ export const assertCall = (state: CheckSubject, key: PropertyKey, args: any[], c
     // E98: no method hint for a member that is no method (decided as E85 decides it)
     hints: tooFew && reads > 0
       ? [answersValues(state, key) ? readValuesHint(state, key, reads, count) : readWithoutCallHint(state, key, reads)]
-      : undefined
+      // E97: no record of the member at all (a direct-call check of a member, `sub.m[received]()(1)`), but calls of it
+      // further down a fluent chain
+      : tooFew && records.length === 0 ? asHints(fluentChainHint(state, key, count)) : undefined
   }, stackStart)
 }
 
@@ -259,7 +330,8 @@ export const assertPropertyRead = (state: CheckSubject, key: PropertyKey, count:
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
     explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
     listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || values || count === 0), owner: ownerOf(state, record) })),
-    hints: reads === 0 || values ? undefined
+    // E97: no record of the member at all (the check fails at once), but calls of it further down a fluent chain
+    hints: reads === 0 || values ? (records.length === 0 && count !== 0 ? asHints(fluentChainHint(state, key, count)) : undefined)
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]
         // read but never invoked, or invoked as well: most likely a method, with fewer calls than expected
         : onlyRead || (calls > 0 && count !== undefined && calls < count) ? [readWithoutCallHint(state, key, reads)]
