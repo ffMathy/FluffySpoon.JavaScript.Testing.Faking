@@ -75,6 +75,16 @@ subpaths, but they are not public API. Both forms, with and without `.js`, work 
 same. `packaging/smoke/deep-import-support.js` holds this table, and `packaging/smoke/deep-imports.js` checks it
 on the Node.js version it runs on.
 
+Three directories have entries of their own in `exports`: `./dist/shared`, `./dist/api` and `./dist/api/types`, each
+mapped to its `index` (`types` and `default`, with the plain CommonJS file as the array fallback, as for `"."`). These
+are the directories that the published declarations import, and TypeScript 5.9 and older write such a directory
+(`import("@fluffy-spoon/substitute/dist/shared")`) into the declaration files of a project that emits with
+`moduleResolution: node` and exports a member of a check view or a matcher. `packaging/smoke/deep-imports.js`
+requires these three directories on every Node.js version (and `deep-imports.mjs` imports them where it runs), and
+`packaging/package.test.js` emits such declarations with `moduleResolution: node` and type-checks a project that
+uses them with `node16`, `nodenext` (ES modules and CommonJS) and `bundler` resolution, without `skipLibCheck`. Other
+directories, such as `dist/internals`, do not resolve where `exports` is read; no public declaration imports them.
+
 ## Test
 
 ```sh
@@ -187,7 +197,7 @@ Afterwards the same script runs two more checks with the TypeScript of this repo
 - `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
   compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
   against the built typings and fails when that needs more type instantiations than its budget,
-  `INSTANTIATION_BUDGET` in the script: 470,000 (469,735 with TypeScript 5.9.2 now, so 265 to spare: a change to the
+  `INSTANTIATION_BUDGET` in the script: 470,000 (469,928 with TypeScript 5.9.2 now, so 72 to spare: a change to the
   typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change
   to the typings that needs more must make them cheaper, or raise the budget in the same change with a reason in the
   script's header. To run it alone: `npm run build && node spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
@@ -230,7 +240,10 @@ not against `src/`, and checks two things:
 
 - `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
   inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
-  after the test function has returned. It also runs these suites, which must pass:
+  after the test function has returned, and checks what each runner then does with the tests around it, as README
+  "Assertions that fail later" describes. For mocha, it does so with a synchronous test (`test-runners/mocha/`) and
+  with an `async` test (`test-runners/mocha-async/`), which mocha reports twice, the second time as "done() called
+  multiple times". It also runs these suites, which must pass:
   - `test-runners/jest-matchers/` (`npm run validate:jest-matchers`): substitutes used inside jest matchers compare
     by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
     `expect(42).toEqual(substitute)` fails with jest's normal assertion error. It also checks that snapshots
@@ -297,7 +310,8 @@ nor `package-lock.json` of the compatibility checks changes. From the repository
 does the same once the compatibility check dependencies are installed.
 
 To try a single runner by hand after `npm run install:local`, use `npm run validate:<runner>` (`ava`, `jest`,
-`mocha`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one failing test.
+`mocha`, `mocha-async`, `nodejs`, `vitest` or `vitest-inline`). Each of them is expected to fail with exactly one
+failing test (`mocha-async` lists it twice, as "2 failing").
 `npm run validate:jest-matchers`, `npm run validate:jest-modules-ts`, `npm run validate:jest-modules-babel`,
 `npm run validate:jest-modules-esm`, `npm run validate:nodejs-modules` and `npm run validate:vitest-modules` are the
 exceptions: they are expected to pass, as is the vitest-matchers suite.
