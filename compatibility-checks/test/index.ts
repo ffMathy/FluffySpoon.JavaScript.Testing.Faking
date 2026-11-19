@@ -17,6 +17,8 @@ type TestRunner = {
   mapsCallSites?: boolean
   /** Further checks of the runner's output. */
   verify?: (output: string) => void
+  /** The title of the check, when it is not the generic one. */
+  title?: string
 }
 
 const nodeMajorVersion = Number(process.versions.node.split('.')[0])
@@ -65,6 +67,26 @@ const verifyMocha = (output: string) => {
   assert.ok(output.includes('mocha loaded later.ts'), `mocha did not load the later file: ${output}`)
   assert.ok(!output.includes('passes after the failing test') && !output.includes('runs in a later file'),
     `mocha now runs the tests after the failure: update README "Assertions that fail later" and this check: ${output}`)
+}
+
+/**
+ * R15FE-4: an async (promise-returning) test whose check fails later, while the test's promise is still pending
+ * (test-runners/mocha-async). mocha reports the SubstituteException as that test's failure ("1) can substitute callable
+ * interfaces in an async test", "Uncaught SubstituteException: Call count mismatch ..."), then reports the same test a
+ * second time when its promise resolves ("2) ...", "Error: done() called multiple times in test <...>"), and the run goes
+ * on: the tests after it, in the same file and in later files, run and pass ("3 passing", "2 failing"). (mocha 11 does
+ * the same; it words the first failure "Uncaught Call count mismatch ..." and prints the SubstituteException below it.)
+ */
+const verifyMochaAsync = (output: string) => {
+  const test = 'can substitute callable interfaces in an async test'
+  assert.ok(output.includes('✔ passes before the failing test'), `mocha did not report the test before the failing one: ${output}`)
+  assert.ok(output.includes(`1) ${test}`) && output.includes('Uncaught SubstituteException: Call count mismatch'),
+    `mocha did not report the failure as the async test's own: ${output}`)
+  assert.ok(output.includes(`2) ${test}`) && output.includes(`done() called multiple times in test <${test}>`),
+    `mocha no longer reports the async test a second time ("done() called multiple times"): update README "Assertions that fail later" and this check: ${output}`)
+  assert.ok(output.includes('✔ passes after the failing test') && output.includes('✔ runs in a later file'),
+    `mocha no longer runs the tests after the failing async test: update README "Assertions that fail later" and this check: ${output}`)
+  assert.ok(/3 passing/.test(output) && /2 failing/.test(output), `mocha's summary changed: ${output}`)
 }
 
 /**
@@ -117,6 +139,14 @@ test.describe('Verifies test runner compatibility', () => {
       verify: verifyJest
     },
     { name: 'mocha', failureAcknowledgementTexts: ['1 failing'], failureLocationText: 'can substitute callable interfaces:', verify: verifyMocha },
+    // R15FE-4: the same in an async test
+    {
+      name: 'mocha-async',
+      title: 'R15FE-4 reports the Substitute exception of an async test as its failure, then "done() called multiple times", and the run goes on',
+      failureAcknowledgementTexts: ['2 failing'],
+      failureLocationText: 'can substitute callable interfaces in an async test:',
+      verify: verifyMochaAsync
+    },
     // G:CI-2: this check used to pass vacuously or fail, because the nested `node --test` inherited NODE_TEST_CONTEXT.
     { name: 'nodejs', failureAcknowledgementTexts: ['fail 1'], failureLocationText: 'test-runners/nodejs/index.ts', verify: verifyNodeTest },
     { name: 'vitest', failureAcknowledgementTexts: ['1 error', '1 failed'], failureLocationText: 'test-runners/vitest/index.spec.ts', mapsCallSites: true, verify: verifyVitest },
@@ -187,7 +217,7 @@ test.describe('Verifies test runner compatibility', () => {
 
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
-      test.it('reports the Substitute exception', () => {
+      test.it(testRunner.title ?? 'reports the Substitute exception', () => {
         const result = failingExec(`npm run validate:${testRunner.name}`)
         assert.ok(
           testRunner.failureAcknowledgementTexts.some(text => result.includes(text)),
