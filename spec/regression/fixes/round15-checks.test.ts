@@ -162,8 +162,17 @@ test('R14-ADV-5 (E88) noting what calls answered changes nothing else: setups, s
   t.deepEqual([api.load('a'), api.load('b'), api.load('c'), api.load('d')], [1, 2, 3, 3])
   t.notThrows(() => api.received(4).load(Arg.any()))
   t.notThrows(() => api.received(1).load('b'))
-  t.throws(() => api.load(Arg.any())[received](4).save(), { instanceOf: SubstituteException, message: /is configured with returns\(1, 2, 3\)/ })
+  t.throws(() => api.load(Arg.any())[received](4).save(), { instanceOf: SubstituteException, message: /is configured with returns\(1, 2, 3\), and the value it answered is not a substitute\./ })
   t.is(api.load('e'), 3)
+
+  // a sequence of a substitute and a plain value: the call that got the substitute is counted, the other one is not
+  const bus = Substitute.for<any>()
+  const first = Substitute.for<any>()
+  bus.on(Arg.any(), Arg.any()).returns(first, 5)
+  bus.on('x', 1)()
+  void bus.on('y', 2)
+  t.notThrows(() => bus.on('x', Arg.any())[received](1)())
+  t.true(failureOf(t, () => bus.on(Arg.any(), Arg.any())[received](1)()).includes("the received call @Substitute.on('y', 2), which it matches, is configured with returns(@Substitute, 5)"))
 
   // a long run of calls answered by the same setup is noted once (runs), and calls of other members in between are fine
   const logger = Substitute.for<any>()

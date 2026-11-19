@@ -1786,7 +1786,10 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
   let how: string
   if (answer instanceof Substitution) {
     const values = answer.values.map(value => formatValue(value, false)).join(', ')
-    how = `is configured with ${answer.method}(${values})${configuredAnswerText[answer.method as SubstitutionMethod] ?? ''}`
+    const why = answer.method === 'returns' && answer.values.length > 1
+      ? ', and the value it answered is not a substitute' // (a sequence: the call got one of them)
+      : configuredAnswerText[answer.method as SubstitutionMethod] ?? ''
+    how = `is configured with ${answer.method}(${values})${why}`
   } else if (answer === MIMICKED) how = 'is answered by the mimicked instance with a value that is not a substitute'
   else if (answer === THREW) how = 'threw an error instead of answering a substitute'
   else if (answer === CONFIGURED) how = 'is answered by a configured value that is not a substitute'
