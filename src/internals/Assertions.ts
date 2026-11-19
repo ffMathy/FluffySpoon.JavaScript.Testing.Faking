@@ -85,14 +85,14 @@ const asExpression = (state: { readonly path: string }): string => state.path.re
 const memberAccess = (key: PropertyKey): string =>
   typeof key === 'string' && /^[A-Za-z_$][\w$]*$/.test(key) ? `.${key}` : `[${typeof key === 'symbol' ? keyToString(key) : inspect(key)}]`
 
+const asHints = (hint: string | undefined): string[] | undefined => hint === undefined ? undefined : [hint]
+
 /**
  * E97: how many auto-substitutes (and received calls on them) the search of fluentChainHint looks at, at most, and how
  * many places it names. Like a printout of a substitute (E35), it walks the auto-substitutes without recursion and
  * builds only the paths it shows (bounded, see Paths), so a deep or wide tree of them costs little; it runs only when
  * a check fails.
  */
-const asHints = (hint: string | undefined): string[] | undefined => hint === undefined ? undefined : [hint]
-
 const FLUENT_SEARCH_BUDGET = 10000
 const FLUENT_PATHS_SHOWN = 3
 /** E97: and the characters of each path it names, at most (each argument in a path is bounded, but a path has many). */
