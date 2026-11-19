@@ -1,7 +1,7 @@
-import test from 'ava'
+import test, { ExecutionContext } from 'ava'
 
 import { Substitute, Arg, configure } from '../../../src'
-import { assertWithin, timeLimit } from '../../helpers/timing'
+import { assertFast, assertRatiosWithin, assertWithin, timeLimit } from '../../helpers/timing'
 
 interface Logger { log(message: string): void, level: number }
 interface Calculator { add(a: number, b: number): number }
@@ -81,25 +81,97 @@ const literalSetupsAndCalls = (count: number) => {
   for (let i = 0; i < count; i++) if (calculator.add(i, 1) !== i) throw new Error(`add(${i}, 1) did not return ${i}`)
 }
 
-test('R:RT-8 / D19 8000 literal setups and 8000 matching calls finish in under 1s (literal substitutions are indexed)', t => {
-  literalSetupsAndCalls(1_000) // warm up
-  const elapsedLimit = timeLimit(1000)
-  const elapsed = bestOfThree(() => literalSetupsAndCalls(8_000))
-  assertWithin(t, elapsed, elapsedLimit, '8,000 literal setups and 8,000 matching calls')
-
-  // the same through configure(), on a substitute that also has matcher setups
+/** The same through configure(), on a fresh substitute that also has matcher setups (returned, to check those). */
+const configuredSetupsAndCalls = (count: number): any => {
   const calculator = Substitute.for<any>()
   calculator.add(Arg.all()).returns(-1)
   calculator.add(Arg.any(), 0).returns(-2)
-  const configuredLimit = timeLimit(1000)
-  const configured = millisecondsOf(() => {
-    for (let i = 0; i < 8_000; i++) calculator[configure]().add(i, 1).returns(i)
-    for (let i = 0; i < 8_000; i++) if (calculator.add(i, 1) !== i) throw new Error(`add(${i}, 1) did not return ${i}`)
-  })
-  assertWithin(t, configured, configuredLimit, '8,000 literal setups and calls through configure()')
+  for (let i = 0; i < count; i++) calculator[configure]().add(i, 1).returns(i)
+  for (let i = 0; i < count; i++) if (calculator.add(i, 1) !== i) throw new Error(`add(${i}, 1) did not return ${i}`)
+  return calculator
+}
+
+/**
+ * E94 (R14V-2): how both halves of the test below are measured: after a warm-up with 1,000, the best of three runs of
+ * `run(count)`, each on a fresh substitute, so that one run stalled by the scheduler of a busy machine does not decide
+ * (a single measurement of the configure() half once took 40 times its usual time at a load average of 16 on 4 cores).
+ * Checks it against 1 s, scaled by the load factor measured right before. Returns the time.
+ */
+const bestRunWithin = (t: ExecutionContext, label: string, run: (count: number) => void, count = 8_000): number => {
+  run(1_000) // warm up
+  const limit = timeLimit(1000)
+  const elapsed = bestOfThree(() => run(count))
+  assertWithin(t, elapsed, limit, label)
+  return elapsed
+}
+
+test('R:RT-8 / D19 8000 literal setups and 8000 matching calls finish in under 1s (literal substitutions are indexed)', t => {
+  bestRunWithin(t, '8,000 literal setups and 8,000 matching calls', literalSetupsAndCalls)
+
+  // the same through configure(), on a substitute that also has matcher setups
+  let calculator: any
+  bestRunWithin(t, '8,000 literal setups and calls through configure()', count => { calculator = configuredSetupsAndCalls(count) })
   t.is(calculator.add(1, 0), -2)
   t.is(calculator.add(1, 2), -1)
 
   const { grows, report } = growthOf(1_000, literalSetupsAndCalls)
   t.false(grows, report)
+})
+
+test('R14V-2 (E94) both halves of the R:RT-8 setup test are the best of three fresh runs: one stalled run does not decide', t => {
+  const stall = 300
+  let runs = 0
+  let stalledRun = 0
+  const elapsed = bestRunWithin(t, '1,000 literal setups and calls through configure(), the first measured run stalled', count => {
+    runs++
+    const run = millisecondsOf(() => {
+      configuredSetupsAndCalls(count)
+      if (runs === 2) for (const until = Date.now() + stall; Date.now() < until;) { /* the stall */ }
+    })
+    if (runs === 2) stalledRun = run
+  }, 1_000)
+  t.is(runs, 4, 'a warm-up and three measured runs')
+  t.true(stalledRun >= stall, `${stalledRun.toFixed(1)} ms`)
+  t.true(elapsed < stalledRun, `best of three: ${elapsed.toFixed(1)} ms, the stalled run: ${stalledRun.toFixed(1)} ms`)
+})
+
+const throws = (check: () => void): void => {
+  try {
+    check()
+  } catch {
+    return
+  }
+  throw new Error('the check passed, but it should have failed')
+}
+
+test('R14FE-5 (E97) the search for calls further down a fluent chain is bounded, and passing checks do not search', t => {
+  // a chain deeper, and a tree of auto-substitutes wider, than the search goes, where the checked member was never
+  // called: every failing check searches as far as it can
+  let deep = Substitute.for<any>()
+  const chain = deep
+  for (let i = 0; i < 20_000; i++) deep = deep.next(i)
+  const api = Substitute.for<any>()
+  for (let i = 0; i < 50_000; i++) api.get(i).then
+  throws(() => chain.received().end()) // warm up
+  throws(() => api.received().json())
+  assertFast(t, 1000, '50 failing checks on a 20,000-step chain and 50 on 50,000 auto-substitutes', () => {
+    for (let i = 0; i < 50; i++) {
+      throws(() => chain.received().end())
+      throws(() => api.received().json())
+    }
+  })
+
+  // a passing check costs the same with such a tree as without it
+  const flat = Substitute.for<any>()
+  flat.ping()
+  api.ping()
+  assertRatiosWithin(t, () => {
+    const rounds: number[] = []
+    for (let round = 0; round < 5; round++) {
+      const without = millisecondsOf(() => { for (let i = 0; i < 5_000; i++) flat.received(1).ping() })
+      const withTree = millisecondsOf(() => { for (let i = 0; i < 5_000; i++) api.received(1).ping() })
+      rounds.push(withTree / Math.max(without, 0.5))
+    }
+    return { 'with a tree': [...rounds].sort((a, b) => a - b)[2] }
+  }, 1.5, '5,000 passing checks of a substitute with 50,000 auto-substitutes, against one without')
 })
