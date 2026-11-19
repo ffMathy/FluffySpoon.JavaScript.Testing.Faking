@@ -1032,17 +1032,29 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     if (directRecord !== undefined) pairReadings(memberRecord, directRecord)
 
     const hashes = new ArgumentHashes(rawArgs)
-    const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
+    let directHashes: ArgumentHashes | undefined
+    let answer: any
+    answerSource = undefined
+    // E103 (R15V-3): an answer that throws (a throws() setup, a throwing mimicks() function or mimicked method) is noted
+    // under both readings, as the direct call notes it (E101: without catching, see noteThrew)
+    let answered = false
+    try {
+      answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
+      if (answer === NOT_CONFIGURED && directRecord !== undefined) {
+        directHashes = new ArgumentHashes(directArgs!)
+        answer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
+      }
+      answered = true
+    } finally {
+      if (!answered) noteHelperThrew(memberRecord, memberState, directRecord, direct.state, direct.key)
+    }
     if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state)
     if (directRecord !== undefined) {
-      const directHashes = new ArgumentHashes(directArgs!)
-      const directAnswer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
-      if (directAnswer !== NOT_CONFIGURED) return noteHelperAnswer(directAnswer, memberRecord, memberState, directRecord, direct.state)
       // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf). E91: only when the
       // invocation can be a wrapper's (see wrapperThis); otherwise the member reading's own auto-substitute, below.
       if (!isStringAssertionKey(direct.key)) {
         if (wrapperThis(thisArg)) {
-          const directEntry = direct.state.callEntry(direct.key, directHashes)
+          const directEntry = direct.state.callEntry(direct.key, directHashes!)
           directEntry.handOut(memberRecord)
           directAnswers.set(memberRecord, memberState)
           // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
@@ -1444,8 +1456,32 @@ const isConstructor = (fn: Function): boolean => {
 const callOrConstruct = (fn: Function, thisArg: unknown, args: any[], self: Self): any =>
   self.construct === true && isConstructor(fn) ? Reflect.construct(fn, args, self.newTarget ?? fn) : Reflect.apply(fn, thisArg, args)
 
+/**
+ * E88: a call that threw answered no substitute either (see throughCall): notes that it threw, with the throws() setup of
+ * the member if that is what threw (answerSource, set by execute), else THREW (mimicks(), a mimicked method).
+ * E101 (R15V-1): called from a `finally` once the answer did not complete, never from a `catch` that throws the error
+ * again: a debugger set to pause on caught exceptions then stops once per call, where the error was thrown, and an
+ * uncaught error points there, not into the library.
+ */
+const noteThrew = (state: SubstituteState, key: PropertyKey, record: CallRecord): void => {
+  const source = answerSource as Substitution | object | undefined
+  state.noteConfiguredAnswer(record, source instanceof Substitution && source.method === 'throws' && source.key === key ? source : THREW)
+}
+
+/**
+ * E103 (R15V-3): noteThrew for a call/apply invocation (see dualHelper), which is one call under both readings (D26), as
+ * noteHelperAnswer notes what it answered: the throws() setup that threw (of the member call/apply, or of the direct
+ * call), else THREW, for the record of each reading given.
+ */
+const noteHelperThrew = (memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState, directKey: PropertyKey): void => {
+  const source = answerSource as Substitution | object | undefined
+  const note = source instanceof Substitution && source.method === 'throws' && (source.key === memberRecord.key || source.key === directKey) ? source : THREW
+  memberState.noteConfiguredAnswer(memberRecord, note)
+  if (directRecord !== undefined && directRecord.kind === 'call') directState.noteConfiguredAnswer(directRecord, note)
+}
+
 /** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
-const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord | undefined, self: Self): any => {
+const configuredAnswer =(state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord | undefined, self: Self): any => {
   const substitution = state.findCallSubstitution(key, hashes)
   if (substitution !== undefined) {
     // (no record: a matcher's look, E95)
@@ -1471,13 +1507,13 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   const hashes = new ArgumentHashes(args)
   let answer: any
   answerSource = undefined
+  // E101 (R15V-1): noted without catching (see noteThrew)
+  let answered = false
   try {
     answer = configuredAnswer(state, key, args, hashes, record, self)
-  } catch (thrown) {
-    // E88: a call that threw answered no substitute either (see throughCall)
-    const source = answerSource as Substitution | object | undefined // (set by execute when a throws() setup threw)
-    state.noteConfiguredAnswer(record, source instanceof Substitution && source.method === 'throws' && source.key === key ? source : THREW)
-    throw thrown
+    answered = true
+  } finally {
+    if (!answered) noteThrew(state, key, record)
   }
   // E23: `new` answers with an object; for any other configured value it gives the auto-substitute of the call
   if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return handOutConfigured(answer, record, state)

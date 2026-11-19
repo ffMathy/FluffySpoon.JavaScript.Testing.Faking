@@ -411,8 +411,10 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     }
     return MATCHES
   } catch {
-    // E93: keys or items that cannot be read (now): compared as such values are, by identity (see literalEquals)
-    return literalEquals(expected, actual) ? MATCHES : DIFFERS
+    // E93: keys or items that cannot be read (now): compared as such values are, by identity, which was decided above
+    // before any key was listed (they are not the same). E102 (R15V-2): without comparing them again, which would read
+    // a throwing getter of the actual value a second time (deep equality cannot hold for a container with a matcher).
+    return DIFFERS
   }
 }
 
