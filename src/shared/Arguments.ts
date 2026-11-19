@@ -93,8 +93,114 @@ const brandOf = (value: unknown): ArgumentBrand | undefined => {
 export const isSingleArgument = (value: unknown): value is Argument<unknown> => brandOf(value) === 'single'
 /** True for matchers created with Arg.all, by any copy of this package. */
 export const isAllArguments = (value: unknown): value is AllArguments<any[]> => brandOf(value) === 'all'
-/** True for any Arg matcher. */
-export const isArgumentMatcher = (value: unknown): value is AnyArgument => brandOf(value) !== undefined
+/** True for any Arg matcher (created with Arg, by any copy of this package), and only for those. */
+export const isArgMatcher = (value: unknown): value is AnyArgument => brandOf(value) !== undefined
+/** Which Arg matcher a value is: Arg.any/Arg.is ('single') or Arg.all ('all'), if it is one. */
+export const argumentKindOf = (value: unknown): ArgumentBrand | undefined => brandOf(value)
+
+// ---- E75 (R12FE-1): the matchers of test runners ----------------------------------------------------------------
+
+/**
+ * E75: the matchers of test runners, used in the expected arguments of a setup or a check, match as the runner's own
+ * equality uses them, like an Arg matcher (D3: a call with one is a setup or a check, never a real call; D27: also
+ * nested in plain objects and arrays):
+ * - 'asymmetric': jest's and vitest's asymmetric matchers (expect.any(String), expect.anything(),
+ *   expect.stringContaining('@'), expect.objectContaining({ ... }), expect.arrayContaining([...]), expect.closeTo(...),
+ *   their `expect.not` forms and the matchers of expect.extend): an object with its own `$$typeof` set to
+ *   Symbol.for('jest.asymmetricMatcher') and an `asymmetricMatch` function. It matches a value for which
+ *   `asymmetricMatch(value)` is truthy.
+ * - 'sinon': sinon's matchers (sinon.match(...), sinon.match.has('err'), sinon.match.string, ...), as sinon creates them:
+ *   an object with its own `test` function and `message` string, and `and` and `or` functions, whose prototype is not
+ *   Object.prototype. It matches a value for which `test(value)` is truthy.
+ * They are recognised only on the expected side: a received (actual) argument that is such an object is a value like
+ * any other. Only own properties are looked at first (an object that inherits from a substitute reaches nothing of
+ * it), and the sinon shape only on an object that is not a plain one, so that a plain object argument costs one look.
+ */
+export type ForeignMatcherKind = 'asymmetric' | 'sinon'
+
+const asymmetricMatcherType = Symbol.for('jest.asymmetricMatcher')
+const hasOwn = Object.prototype.hasOwnProperty
+
+/**
+ * Which matcher of a test runner an object is (see ForeignMatcherKind), if it is one. `plain`: whether its prototype is
+ * Object.prototype or null (the caller knows it), where only the jest shape is looked for.
+ */
+export const foreignMatcherKind = (value: object, plain: boolean): ForeignMatcherKind | undefined => {
+  try {
+    if (hasOwn.call(value, '$$typeof'))
+      return (value as any).$$typeof === asymmetricMatcherType && typeof (value as any).asymmetricMatch === 'function' ? 'asymmetric' : undefined
+    if (plain || !hasOwn.call(value, 'test') || !hasOwn.call(value, 'message')) return undefined
+    const matcher = value as any
+    return typeof matcher.test === 'function' && typeof matcher.message === 'string' &&
+      typeof matcher.and === 'function' && typeof matcher.or === 'function' ? 'sinon' : undefined
+  } catch {
+    return undefined // a revoked proxy, a throwing getter
+  }
+}
+
+/** Whether a value is an object whose prototype is Object.prototype or null (undefined: it cannot be read). */
+const isPlainObject = (value: object): boolean | undefined => {
+  try {
+    const prototype = Object.getPrototypeOf(value)
+    return prototype === Object.prototype || prototype === null
+  } catch {
+    return undefined
+  }
+}
+
+/** The matcher of a test runner that a value is (see ForeignMatcherKind), if it is one. */
+export const foreignMatcherOf = (value: unknown): ForeignMatcherKind | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined
+  const plain = isPlainObject(value)
+  return plain === undefined ? undefined : foreignMatcherKind(value, plain)
+}
+
+/** Every kind of matcher of an expected argument: Arg.any/Arg.is ('single'), Arg.all ('all'), and E75's. */
+export type MatcherKind = ArgumentBrand | ForeignMatcherKind
+
+/** The kind of matcher an expected argument is (see MatcherKind), if it is one. */
+export const matcherKindOf = (value: unknown): MatcherKind | undefined => brandOf(value) ?? foreignMatcherOf(value)
+
+/**
+ * True for any matcher of an expected argument: an Arg matcher, or (E75) a matcher of a test runner. (A received value is
+ * never a matcher; isArgMatcher tells the library's own matchers apart there.)
+ */
+export const isArgumentMatcher = (value: unknown): boolean => matcherKindOf(value) !== undefined
+
+/** Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. */
+export const evaluateForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown): ArgumentEvaluation => {
+  let result: unknown
+  try {
+    result = kind === 'asymmetric' ? (matcher as any).asymmetricMatch(value) : (matcher as any).test(value)
+  } catch (error) {
+    return { matches: false, error, threw: true }
+  }
+  return { matches: !!result, threw: false }
+}
+
+/** Evaluates a matcher of any kind but Arg.all() (see MatcherKind) against a value. */
+export const evaluateMatcher = (matcher: unknown, kind: 'single' | ForeignMatcherKind, value: unknown): ArgumentEvaluation =>
+  kind === 'single' ? evaluateArgument(matcher as AnyArgument, value) : evaluateForeignMatcher(matcher as object, kind, value)
+
+/**
+ * E75: how a matcher of a test runner is printed, as the runner prints it: jest's and vitest's with their
+ * toAsymmetricMatcher() (`Any<String>`, `Anything`, `NumberCloseTo 1 (2 digits)`) or, without it, their toString() and
+ * sample (`StringContaining`, `ObjectContaining` and the sample after it: see `sample`), sinon's with its `message`
+ * (`has("err")`, `typeOf("string")`). `sample`: whether the sample is printed after the text.
+ */
+export const foreignMatcherLabel = (value: unknown): { text: string, sample?: { value: unknown } } | undefined => {
+  const kind = foreignMatcherOf(value)
+  if (kind === undefined) return undefined
+  const matcher = value as any
+  try {
+    if (kind === 'sinon') return { text: String(matcher.message) }
+    if (typeof matcher.toAsymmetricMatcher === 'function') return { text: String(matcher.toAsymmetricMatcher()) }
+    const text = typeof matcher.toString === 'function' && matcher.toString !== Object.prototype.toString ? String(matcher.toString()) : 'AsymmetricMatcher'
+    return hasOwn.call(matcher, 'sample') ? { text, sample: { value: matcher.sample } } : { text }
+  } catch {
+    return { text: kind === 'sinon' ? 'SinonMatcher' : 'AsymmetricMatcher' }
+  }
+}
 
 /**
  * Evaluates a matcher against a value. A predicate that throws is treated as a non-match and the error is reported.

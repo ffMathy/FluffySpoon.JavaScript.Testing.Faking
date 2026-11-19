@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from 'vitest'
 import { inspect } from 'util'
-import { Substitute, configure } from '@fluffy-spoon/substitute'
+import { Substitute, Arg, configure } from '@fluffy-spoon/substitute'
 
 // Round 7 (E24-E27, E27 reverted by E34): printing, freezing, the `in` operator and the __esModule member of substitutes, as vitest's
 // matchers, its pretty-format and util.inspect see them. Unlike test-runners/vitest, this suite is expected to pass;
@@ -132,5 +132,49 @@ describe('R8 vitest snapshots and diffs of values that hold substitutes', () => 
     expect(timed(() => { message = failureOf(() => expect(state).toEqual({ status: 200 })).message })).toBeLessThan(2000)
     expect(message).not.toContain('MockFunction')
     expect(message).not.toContain('Maximum call stack')
+  })
+})
+
+// Round 13 (E75, R12FE-1): vitest's asymmetric matchers in the expected arguments of a check or a setup match as they do
+// in vitest's own equality, at the top level and nested in plain objects and arrays, and a failure message prints them
+// as vitest does. Before, they were compared as values: didNotReceive() with them always passed (vitest types them
+// `any`, so TypeScript accepted them), and setups with them never answered.
+describe('E75 vitest asymmetric matchers in checks and setups', () => {
+  interface Mailer {
+    send(to: string, template: 'welcome' | 'dunning', vars?: Record<string, string | number>): Promise<{ messageId: string }>
+  }
+
+  test('didNotReceive() with them fails when a matching call was made, and received() with them passes', () => {
+    const mailer = Substitute.for<Mailer>()
+    void mailer.send('ann@example.com', 'welcome', { customer: 'cus_1' })
+    expect(() => mailer.didNotReceive().send(expect.any(String), 'welcome', expect.anything())).toThrow(
+      "Expected to receive 0 method calls matching send(Any<String>, 'welcome', Anything), but received 1."
+    )
+    mailer.received(1).send(expect.stringContaining('@'), 'welcome', expect.objectContaining({ customer: 'cus_1' }))
+    mailer.received(1).send(expect.stringMatching(/^ann@/), 'welcome', { customer: expect.any(String) })
+    mailer.didNotReceive().send(expect.any(String), 'dunning', Arg.any())
+    expect(() => mailer.received(2).send(expect.stringContaining('@'), 'welcome', expect.objectContaining({ customer: 'cus_1' }))).toThrow(
+      "matching send(StringContaining '@', 'welcome', ObjectContaining { customer: 'cus_1' })"
+    )
+  })
+
+  test('setups with them answer the calls they match, and calls with them are setups, not calls', async () => {
+    const mailer = Substitute.for<Mailer>()
+    mailer.send(expect.any(String), 'dunning').resolves({ messageId: 'm1' })
+    await expect(mailer.send('bob@example.com', 'dunning')).resolves.toEqual({ messageId: 'm1' })
+    mailer.received(1).send(Arg.all())
+    const calc = Substitute.for<any>()
+    calc.add(expect.closeTo(0.3, 5), Arg.any()).returns(42)
+    expect(calc.add(0.1 + 0.2, 1)).toBe(42)
+    calc.received(1).add(Arg.all())
+  })
+
+  test('substitutes still compare by identity in vitest\'s own matchers', () => {
+    const logger = Substitute.for<Logger>()
+    const fn = vi.fn()
+    fn(logger)
+    expect(fn).toHaveBeenCalledWith(logger)
+    expect(fn).toHaveBeenCalledWith(expect.anything())
+    failureOf(() => expect(fn).toHaveBeenCalledWith(Substitute.for()))
   })
 })

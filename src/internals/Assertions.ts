@@ -205,12 +205,14 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
   if (count === undefined && calls > 0) return undefined
 
   const deferrable = calls > 0 && count !== undefined && (count <= calls || reads === 0)
-  // D36: a member that was only read, with a count above the reads, fails as a property assertion and as a method
-  // assertion (no calls at all), and it is not known yet which one this is.
-  const onlyReadTooFew = calls === 0 && reads > 0 && count !== undefined && count > reads
+  // D36, E77 (R12FE-2): a member that was only read (no calls at all) fails as a property assertion and as a method
+  // assertion, whatever the count (above or below the reads), and it is not known yet which one this is: the message
+  // names neither kind, and says that the member was read without being called. For a count of 0 the reads are what
+  // fails didNotReceive(): they are marked, and the hint points at clearing the received calls after the arrange step.
+  const onlyRead = calls === 0 && reads > 0
   // A deferred failure is only thrown when the member was not invoked, so it is a property assertion.
   // An immediate failure fails for both readings; the kind is only named when the records show it.
-  const kind: ExpectedKind = deferrable || (calls === 0 && reads > 0 && !onlyReadTooFew) ? 'property' : 'unknown'
+  const kind: ExpectedKind = deferrable ? 'property' : 'unknown'
   const createError = (start?: Function) => SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
@@ -218,11 +220,11 @@ export const assertPropertyRead = (state: SubstituteState, key: PropertyKey, cou
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
     explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
-    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && !onlyReadTooFew })),
+    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || count === 0) })),
     hints: reads === 0 ? undefined
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]
         // read but never invoked, or invoked as well: most likely a method, with fewer calls than expected
-        : onlyReadTooFew || (calls > 0 && count !== undefined && calls < count) ? [readWithoutCallHint(state, key, reads)]
+        : onlyRead || (calls > 0 && count !== undefined && calls < count) ? [readWithoutCallHint(state, key, reads)]
           : undefined
   }, start)
 
