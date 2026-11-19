@@ -2,7 +2,7 @@ import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
 // (from the module itself rather than '../shared', whose re-exports are getters in CommonJS output: the matcher search
 // runs on the arguments of every call, and a getter per lookup cost more than E75's own check)
 import {
-  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
+  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, evaluateMatcherInLook, foreignMatcherKind, foreignMatcherOf, isAllArguments,
   isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf
 } from '../shared/Arguments'
 import { SubstituteException } from './SubstituteException'
@@ -368,7 +368,7 @@ const DIFFERS: Evaluation = { matches: false }
  * Arg.all() as an object value matches any value. Everything else is compared with deep strict equality.
  * A pair of containers that is already being compared further up matches (cycles end).
  */
-const matchNested = (expected: unknown, actual: unknown, matcherContainers: ReadonlySet<object>, comparing: Array<[unknown, unknown]>): Evaluation => {
+const matchNested = (expected: unknown, actual: unknown, matcherContainers: ReadonlySet<object>, comparing: Array<[unknown, unknown]>, guarded: boolean): Evaluation => {
   // (a container that holds matchers is never a matcher itself: no need to look for one)
   const holder = matcherContainers.has(expected as object)
   const kind = holder ? undefined : matcherKindOf(expected)
@@ -376,7 +376,7 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
   if (kind !== undefined) {
     // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3)
     if (isArgMatcher(actual)) return DIFFERS
-    const evaluation = evaluateMatcher(expected, kind, actual)
+    const evaluation = guarded ? evaluateMatcherInLook(expected, kind, actual) : evaluateMatcher(expected, kind, actual)
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
   if (!holder) return literalEquals(expected, actual) ? MATCHES : DIFFERS
@@ -403,7 +403,7 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     comparing.push([expected, actual])
     try {
       for (const [expectedItem, actualItem] of pairs) {
-        const evaluation = matchNested(expectedItem, actualItem, matcherContainers, comparing)
+        const evaluation = matchNested(expectedItem, actualItem, matcherContainers, comparing, guarded)
         if (!evaluation.matches) return evaluation
       }
     } finally {
@@ -411,8 +411,10 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     }
     return MATCHES
   } catch {
-    // E93: keys or items that cannot be read (now): compared as such values are, by identity (see literalEquals)
-    return literalEquals(expected, actual) ? MATCHES : DIFFERS
+    // E93: keys or items that cannot be read (now): compared as such values are, by identity, which was decided above
+    // before any key was listed (they are not the same). E102 (R15V-2): without comparing them again, which would read
+    // a throwing getter of the actual value a second time (deep equality cannot hold for a container with a matcher).
+    return DIFFERS
   }
 }
 
@@ -583,8 +585,9 @@ export class RecordedArguments {
     return this.matchDetailed(other.value).matches
   }
 
-  public matches(actualArguments: readonly unknown[] | undefined): boolean {
-    return this.matchDetailed(actualArguments).matches
+  /** `guarded`: see matchDetailed. */
+  public matches(actualArguments: readonly unknown[] | undefined, guarded = false): boolean {
+    return this.matchDetailed(actualArguments, guarded).matches
   }
 
   /**
@@ -592,8 +595,9 @@ export class RecordedArguments {
    * undefined argument, or a matcher that accepts undefined (Arg.any(), Arg.any('undefined'), ...): `f(1)` and
    * `f(1, undefined)` match each other, `set('a', 1, Arg.any())` matches `set('a', 1)`, and `f(1)` and `f(1, 2)` do not.
    * Arg.all() at a position matches whatever remains from there, including nothing.
+   * E100: `guarded` when the caller holds the guard of the matchers it evaluates (see evaluateArgument).
    */
-  public matchDetailed(actualArguments: readonly unknown[] | undefined): ArgumentsMatch {
+  public matchDetailed(actualArguments: readonly unknown[] | undefined, guarded = false): ArgumentsMatch {
     const expected = this._value
     if (expected === undefined || actualArguments === undefined)
       return expected === undefined && actualArguments === undefined ? MATCH : NO_MATCH
@@ -615,14 +619,14 @@ export class RecordedArguments {
         // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3; E75: a test runner's
         // matcher there is a value like any other)
         if (isArgMatcher(actualArgument)) return NO_MATCH
-        const evaluation = evaluateMatcher(expectedArgument, kind, actualArgument)
+        const evaluation = guarded ? evaluateMatcherInLook(expectedArgument, kind, actualArgument) : evaluateMatcher(expectedArgument, kind, actualArgument)
         if (!evaluation.matches)
           return evaluation.threw ? { matches: false, predicateThrew: true, predicateError: evaluation.error } : NO_MATCH
         continue
       }
       const containers = this._matcherContainers
       if (containers !== undefined && containers.has(expectedArgument)) {
-        const evaluation = matchNested(expectedArgument, actualArgument, containers, [])
+        const evaluation = matchNested(expectedArgument, actualArgument, containers, [], guarded)
         if (!evaluation.matches)
           return evaluation.predicateThrew === true ? { matches: false, predicateThrew: true, predicateError: evaluation.predicateError } : NO_MATCH
         continue

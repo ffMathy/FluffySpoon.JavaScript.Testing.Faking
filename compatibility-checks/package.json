@@ -24,6 +24,7 @@
         "validate:jest-modules-babel": "jest -c jest.modules.babel.config.js",
         "validate:jest-modules-esm": "node --experimental-vm-modules node_modules/jest/bin/jest.js -c jest.modules.esm.config.js",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
+        "validate:mocha-async": "mocha --require tsx/cjs test-runners/mocha-async/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
         "validate:nodejs-modules": "node --test --experimental-test-module-mocks test-runners/nodejs-modules/index.test.mjs",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",

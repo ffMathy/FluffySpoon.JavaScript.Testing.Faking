@@ -175,3 +175,44 @@ test('R14FE-5 (E97) the search for calls further down a fluent chain is bounded,
     return { 'with a tree': [...rounds].sort((a, b) => a - b)[2] }
   }, 1.5, '5,000 passing checks of a substitute with 50,000 auto-substitutes, against one without')
 })
+
+test('R15-ADV-4 (E100) a real call is matched against predicate setups in one look, whose walk of the arguments is bounded and done once', t => {
+  // the docs agent's bench: 4,000 Arg.is setups plus 4,000 calls (about 8 million predicate evaluations), with one guard
+  // per call rather than one per evaluation (README "Performance": about 0.6 seconds)
+  const warm = Substitute.for<any>()
+  for (let i = 0; i < 4_000; i++) warm.find(Arg.is(x => x === i)).returns(i)
+  for (let i = 0; i < 4_000; i++) warm.find(i)
+  assertFast(t, 3000, '4,000 Arg.is() setups plus 4,000 calls', () => {
+    const s = Substitute.for<any>()
+    for (let i = 0; i < 4_000; i++) s.find(Arg.is(x => x === i)).returns(i)
+    for (let i = 0; i < 4_000; i++) if (s.find(i) !== i) throw new Error(`mismatch ${i}`)
+  }, 1)
+
+  // predicates that read a substitute deep in a wide argument (in the first of 1,000 records, which the walk reaches
+  // last), and a callback that calls a substitute outside the argument (so that the walk goes to its end): the argument
+  // is walked once per call, not once per predicate (500 predicates compared with each call)
+  const audit = Substitute.for<any>()
+  const user = Substitute.for<any>()
+  user.name.returns('ann')
+  const repo = Substitute.for<any>()
+  for (let i = 0; i < 500; i++) repo.save(Arg.is((batch: any) => { batch.done(); return batch.rows[0].user.name === `u${i}` })).returns(i)
+  const rows = Array.from({ length: 1_000 }, (_, i) => ({ id: i, tag: `t${i}`, user: i === 0 ? user : null }))
+  let calls = 0
+  let first = false
+  const done = () => {
+    if (!first) return
+    first = false
+    audit.note() // (once per call: recording it costs more than the walk)
+  }
+  const save = () => {
+    calls++
+    first = true
+    repo.save({ rows, done })
+  }
+  save() // warm up
+  assertFast(t, 1000, '100 calls compared with 500 predicates that look into a 1,000-record argument', () => {
+    for (let i = 0; i < 100; i++) save()
+  })
+  t.notThrows(() => user.didNotReceive().name)
+  t.notThrows(() => audit.received(calls).note())
+})

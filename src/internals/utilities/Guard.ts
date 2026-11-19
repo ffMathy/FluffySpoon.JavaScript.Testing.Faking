@@ -15,10 +15,17 @@ export type LibraryGuard = {
   /** How many comparisons of any copy are under way (see literalEquals). */
   comparing: number
   /**
-   * E95 (R14FE-1): how many matchers of any copy are looking at a value (an Arg.is predicate, a test runner's
-   * asymmetricMatch or a sinon matcher's test, see evaluateArgument): what they do to substitutes leaves no trace.
+   * E95 (R14FE-1): how many looks of any copy are under way in which nothing done to substitutes leaves a trace: a
+   * matcher (an Arg.is predicate, a test runner's asymmetricMatch or a sinon matcher's test) in a check, a setup or any
+   * other matching against recorded calls (see evaluateArgument), and E100 a substitute that a matcher looks at answering
+   * (see Look.lookedPeek).
    */
   matching: number
+  /**
+   * E100 (R15-ADV-4): while a real call of the code under test is matched against setups with matchers, the values those
+   * matchers look at (see Look): only what is done to these substitutes leaves no trace. Undefined otherwise.
+   */
+  looking: ArgumentLook | undefined
   /**
    * E71 (R11V-4): while a failure message is built with its roots numbered (E52, see Paths.withRootNumbers), the numbers
    * of the roots shown so far, so that a substitute of another copy among the arguments is numbered in the same message.
@@ -28,6 +35,30 @@ export type LibraryGuard = {
   rootLabels: number
 }
 
+/**
+ * E100 (R15-ADV-4): the values that the matchers of one real call look at while the call is matched against setups (see
+ * Look): the call's arguments, then what the substitutes among them answered meanwhile. Kept on the shared guard, so that
+ * a substitute of another copy among them is looked at too; each copy walks it by the same rules (see Look).
+ */
+export type ArgumentLook = {
+  /** The call's arguments. */
+  args: readonly unknown[]
+  /** The values that looked substitutes answered, in that order (created by the first). */
+  answers: unknown[] | undefined
+  /** How many of the arguments, then of the answers, the walk has taken so far. */
+  taken: number
+  /** The values that the walk has still to look at, each followed by its depth (created by the first walk). */
+  pending: unknown[] | undefined
+  /** The substitutes (proxies, of any copy) that the walk found so far (created by the first walk). */
+  reached: Set<object> | undefined
+  /** The objects walked so far, each one once (created by the first walk). */
+  seen: Set<object> | undefined
+  /** How many more items the walks of this look may list. */
+  budget: number
+  /** The look under way when this one began (a real call made by code that a matcher runs, see Look). */
+  outer: ArgumentLook | undefined
+}
+
 const GUARD_KEY = Symbol.for('@fluffy-spoon/substitute:guard')
 
 const isGuard = (value: unknown): value is LibraryGuard =>
@@ -35,7 +66,7 @@ const isGuard = (value: unknown): value is LibraryGuard =>
   typeof (value as LibraryGuard).printing === 'number' && typeof (value as LibraryGuard).comparing === 'number'
 
 const sharedGuard = (): LibraryGuard => {
-  const own: LibraryGuard = { printing: 0, comparing: 0, matching: 0, rootNumbers: undefined, rootLabels: 0 }
+  const own: LibraryGuard = { printing: 0, comparing: 0, matching: 0, looking: undefined, rootNumbers: undefined, rootLabels: 0 }
   // (Node.js 10 has no globalThis)
   const scope: Record<symbol, unknown> | undefined = typeof globalThis === 'object' && globalThis !== null ? globalThis as any
     : typeof global === 'object' && global !== null ? global as any : undefined
@@ -46,6 +77,7 @@ const sharedGuard = (): LibraryGuard => {
       // (made by an earlier version of the library, which does not share the numbering)
       if (typeof existing.rootLabels !== 'number') Object.assign(existing, { rootNumbers: undefined, rootLabels: 0 })
       if (typeof existing.matching !== 'number') existing.matching = 0
+      if (!('looking' in existing)) (existing as LibraryGuard).looking = undefined
       return existing
     }
     Object.defineProperty(scope, GUARD_KEY, { value: own, writable: false, enumerable: false, configurable: true })
