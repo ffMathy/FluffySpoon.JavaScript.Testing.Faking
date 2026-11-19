@@ -104,7 +104,10 @@ process, and scales the limit by that time over the workload's time on an idle m
 clamped to between 1 and 4 (`MAX_FACTOR`). If a measurement exceeds its limit, it is judged once more against the
 larger of that factor and one measured right after it. A busy machine slows the workload as much as the test, so the
 limit grows with the load, while an algorithmic regression still fails, as no limit grows beyond 4 times. Every check
-logs its time, limit and factor. A new timing test must use the helper: a test in
+logs its time, limit and factor. A measurement of a single run, which one scheduling stall can slow down, takes the
+best of three runs after a warm-up (`bestOfThree()`); in `spec/regression/fixes/performance.test.ts`, both halves of
+the test of 8,000 setups (literal ones, and ones through `configure()`) do so on fresh substitutes, and a test there
+checks that one stalled run does not decide. A new timing test must use the helper: a test in
 `spec/regression/fixes/round9-hashing.test.ts` checks that no timing-sensitive file compares a time with a fixed
 number. To reproduce a busy machine, start the busy loops (for example `node -e 'for (;;) {}'`, 12 of them for 4
 cores) in the same shell session as `npm test`: Linux groups the processes of a session for scheduling (autogroup),
@@ -184,19 +187,19 @@ Afterwards the same script runs two more checks with the TypeScript of this repo
 - `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
   compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
   against the built typings and fails when that needs more type instantiations than its budget,
-  `INSTANTIATION_BUDGET` in the script: 470,000 (469,919 with TypeScript 5.9.2 now, so 81 to spare: a change to the
+  `INSTANTIATION_BUDGET` in the script: 470,000 (469,735 with TypeScript 5.9.2 now, so 265 to spare: a change to the
   typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change
   to the typings that needs more must make them cheaper, or raise the budget in the same change with a reason in the
   script's header. To run it alone: `npm run build && node spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
 
   The budget covers TypeScript 5.9 only. On older TypeScript, large unions cost more, and that cost is accepted as it
   is (README, "Typing limitations"). Check times measured on Node.js 22 with `strict` and `skipLibCheck`, best of 3 on
-  an otherwise idle machine (the README's numbers): the T44 fixture takes 3.2 s on TypeScript 3.6, 2.9 s on 4.2, 3.7 s
-  on 4.5, 2.1 s on 5.9 and 1.2 s on 7.0, and a file with a few setups and checks on the same union 2.1 s, 2.0 s,
-  2.6 s, 1.4 s and 0.75 s; a substitute of a union of 60 interfaces whose methods have different parameter lists takes
-  24 s on 3.6 and 29 s on 4.2 (those versions merge the signatures of each variant's members in quadratic time, and
-  the per-arity signatures of such methods multiply them), 3.1 s on 4.5, 2.5 s on 5.9 and 1.1 s on 7.0; a few setups
-  on Node.js' `EventEmitter<Events>` (`@types/node` 18) take 0.24 to 0.31 s on 4.8 to 5.9 and 0.04 s on 7.0, mostly
+  an otherwise idle machine (the README's numbers): the T44 fixture takes 4.1 s on TypeScript 3.6, 3.6 s on 4.2, 4.7 s
+  on 4.5, 2.9 s on 5.9 and 1.4 s on 7.0, and a file with a few setups and checks on the same union 2.6 s, 2.5 s,
+  3.4 s, 1.9 s and 1.0 s; a substitute of a union of 60 interfaces whose methods have different parameter lists takes
+  30 s on 3.6 and 37 s on 4.2 (those versions merge the signatures of each variant's members in quadratic time, and
+  the per-arity signatures of such methods multiply them), 4.5 s on 4.5, 4.0 s on 5.9 and 1.6 s on 7.0; a few setups
+  on Node.js' `EventEmitter<Events>` (`@types/node` 18) take 0.32 to 0.40 s on 4.8 to 5.9 and 0.05 s on 7.0, mostly
   for its generic methods, whose signatures are built when the substitute is compared with `EventEmitter`. A change to
   the typings should not make these slower; compare before and after on TypeScript 3.6 and 5.9.
 
