@@ -421,7 +421,7 @@ const noteHelperAnswer = <T>(value: T, memberRecord: CallRecord, memberState: Su
 
 /** E88: answered by the mimicked instance (see fromMimicked). */
 const MIMICKED: object = Object.freeze({ answeredBy: 'the mimicked instance' })
-/** E88: the call threw: a throws() setup whose setup is not known, mimicks() or the mimicked instance (see resolveCall). */
+/** E88: the call threw, from mimicks() or a mimicked method (a throws() setup of the member is noted itself, see resolveCall). */
 const THREW: object = Object.freeze({ answeredBy: 'an error' })
 /** E88: answered by a configured value whose setup is not known. */
 const CONFIGURED: object = Object.freeze({ answeredBy: 'a configured value' })
