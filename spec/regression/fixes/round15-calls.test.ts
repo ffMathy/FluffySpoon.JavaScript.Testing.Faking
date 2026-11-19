@@ -131,3 +131,61 @@ test('R14-ADV-2 wrappers keep E82: undefined, null, objects and functions as the
   // bind is unchanged
   t.is(fn.bind('primitive', 1)().name, 'ann')
 })
+
+// ---- E93 (R14V-1): values whose keys cannot be listed, next to a matcher --------------------------------------------
+
+/** Proxies whose ownKeys / getOwnPropertyDescriptor traps throw: Object.keys and util.isDeepStrictEqual throw for them. */
+const unlistables = (): Array<[string, object]> => [
+  ['ownKeys', new Proxy({ a: 1 }, { ownKeys() { throw new Error('ownKeys') } })],
+  ['getOwnPropertyDescriptor', new Proxy({ a: 1 }, { getOwnPropertyDescriptor() { throw new Error('getOwnPropertyDescriptor') } })]
+]
+
+test('R14V-1 a value whose keys cannot be listed, nested next to a matcher, matches by identity: nested setups answer', t => {
+  for (const [name, value] of unlistables()) {
+    const repo = Substitute.for<any>()
+    repo.load({ entity: value, id: Arg.any() }).returns('n')
+    t.is(repo.load({ entity: value, id: 7 }), 'n', name)
+    // the other key order, arrays, and re-configuration
+    repo.find({ id: Arg.any(), entity: value }).returns('f')
+    t.is(repo.find({ id: 1, entity: value }), 'f', name)
+    repo.list([value, Arg.any()]).returns('l')
+    t.is(repo.list([value, 2]), 'l', name)
+    repo.load({ entity: value, id: Arg.any() }).returns('again')
+    t.is(repo.load({ entity: value, id: 8 }), 'again', name)
+    // another value (equal or not) does not match
+    t.not(repo.load({ entity: { a: 1 }, id: 7 }), 'again', name)
+    t.not(repo.load({ entity: unlistables()[0][1], id: 7 }), 'again', name)
+    // a nested setup through a call with the matcher
+    const app = Substitute.for<any>()
+    app.repo({ entity: value, id: Arg.any() }).name.returns('nested')
+    t.is(app.repo({ entity: value, id: 1 }).name, 'nested', name)
+  }
+})
+
+test('R14V-1 checks with such a value next to a matcher count the calls made: didNotReceive() fails, received(1) passes', t => {
+  for (const [name, value] of unlistables()) {
+    const repo = Substitute.for<any>()
+    repo.save({ entity: value, id: 1 }) // code under test
+    t.notThrows(() => repo.received(1).save({ entity: value, id: Arg.any() }), name)
+    t.notThrows(() => repo.received(1).save({ entity: value, id: 1 }), name)
+    t.notThrows(() => repo[received](1).save({ id: Arg.any(), entity: value }), name)
+    const message = failureOf(t, () => repo.didNotReceive().save({ entity: value, id: Arg.any() }))
+    t.true(message.includes('Expected to receive 0 method calls matching save('), message)
+    failureOf(t, () => repo[didNotReceive]().save({ id: Arg.any(), entity: value }))
+    t.notThrows(() => repo.didNotReceive().save({ entity: { a: 1 }, id: Arg.any() }), name)
+    t.throws(() => repo.received(2).save({ entity: value, id: Arg.any() }), { instanceOf: SubstituteException })
+    // the setups and checks above recorded nothing
+    t.notThrows(() => repo.received(1).save(Arg.all()), name)
+  }
+})
+
+test('R14V-1 a container whose keys can no longer be listed at the call is compared by identity, never different by default', t => {
+  // a filter that held a matcher when the setup was made, and cannot be read when the call is made
+  const { proxy: filter, revoke } = Proxy.revocable<object>({ id: Arg.any() }, {})
+  const repo = Substitute.for<any>()
+  repo.load({ filter }).returns('n')
+  revoke()
+  t.is(repo.load({ filter }), 'n')
+  t.not(repo.load({ filter: { id: 7 } }), 'n')
+  t.notThrows(() => repo.received(1).load({ filter }))
+})

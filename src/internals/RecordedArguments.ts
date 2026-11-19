@@ -169,7 +169,22 @@ const holdsMatcher = (container: object, budget: number, depth: number, search: 
   return found
 }
 
+/**
+ * E93 (R14V-1): a container whose keys or items cannot be read (a proxy whose ownKeys or getOwnPropertyDescriptor trap
+ * throws) holds no matcher, and the search goes on with the items next to it: such a value is compared like the other
+ * values that cannot be read, by identity (E14/E83), also next to a matcher (`{ entity, id: Arg.any() }`).
+ */
 const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
+  try {
+    return searchInside(container, budget, depth, search, probe)
+  } catch {
+    // (left out: the containers around it are not remembered as searched in full)
+    search.cuts++
+    return false
+  }
+}
+
+const searchInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   const cuts = search.cuts
   if (Array.isArray(container)) {
     const length = container.length
@@ -259,24 +274,33 @@ const holdsNoMatcherAtAll = (root: object): boolean => {
     }
     return true
   }
-  while (pending.length > 0) {
-    const [container, depth] = pending.pop()!
+  /** Looks at the items of one container (false: a matcher may be among them). */
+  const lookInside = (container: object, depth: number): boolean => {
     if (Array.isArray(container)) {
-      if (container.length > MAX_SCANNED_ITEMS) continue
+      if (container.length > MAX_SCANNED_ITEMS) return true
       if ((items -= container.length) < 0) return false
       for (let index = 0; index < container.length; index++) if (!look(container[index], depth + 1)) return false
-      continue
+      return true
     }
-    if (isInFamily(container)) continue
+    if (isInFamily(container)) return true
     const keys = Object.keys(container)
     const symbols = Object.getOwnPropertySymbols(container)
-    if (keys.length + symbols.length > MAX_SCANNED_ITEMS) continue
+    if (keys.length + symbols.length > MAX_SCANNED_ITEMS) return true
     if ((items -= keys.length + symbols.length) < 0) return false
     const proxy = types.isProxy(container)
     for (let index = 0; index < keys.length; index++) if (!look(dataValue(container, keys[index], proxy), depth + 1)) return false
     for (let index = 0; index < symbols.length; index++) {
       const symbol = symbols[index]
       if (Object.prototype.propertyIsEnumerable.call(container, symbol) && !look(dataValue(container, symbol, proxy), depth + 1)) return false
+    }
+    return true
+  }
+  while (pending.length > 0) {
+    const [container, depth] = pending.pop()!
+    try {
+      if (!lookInside(container, depth)) return false
+    } catch {
+      return false // E93: its keys or items cannot be read, so nothing is known
     }
   }
   return true
@@ -356,7 +380,8 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
   if (!holder) return literalEquals(expected, actual) ? MATCHES : DIFFERS
-  if (comparing.some(([e, a]) => e === expected && a === actual)) return MATCHES
+  // E93 (R14V-1): the same container matches itself before any of its keys is listed
+  if (expected === actual || comparing.some(([e, a]) => e === expected && a === actual)) return MATCHES
 
   const container = expected as object
   try {
@@ -386,7 +411,8 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
     }
     return MATCHES
   } catch {
-    return DIFFERS
+    // E93: keys or items that cannot be read (now): compared as such values are, by identity (see literalEquals)
+    return literalEquals(expected, actual) ? MATCHES : DIFFERS
   }
 }
 
