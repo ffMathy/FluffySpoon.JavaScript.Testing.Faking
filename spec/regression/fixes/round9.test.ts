@@ -585,7 +585,10 @@ test('R8FE-9 (E52) messages whose calls print differently, or that show one subs
   const handlers = Substitute.for<any>()
   handlers.on(function handle() { return 1 })
   const alike = messageOf(() => handlers.received(1).on(function handle() { return 2 }))
-  t.false(alike.includes('#'), alike)
+  // (round 14, E87: the message ends with a note that names #private fields, as the calls print alike)
+  t.false(alike.includes('@Substitute#'), alike)
+  t.false(alike.includes('The substitutes are numbered'), alike)
+  t.true(alike.endsWith('Match such arguments with Arg.is(), or pass the same instance.\n'), alike)
   // a check with a count, whose expected call prints like the one received
   const log = Substitute.for<any>()
   log.write(app)

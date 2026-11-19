@@ -30,7 +30,9 @@ const messageOf = (assertion: () => unknown): string => {
 const linesOf = (message: string) => {
   const flat = message.replace(/\n\s*/g, ' ')
   const expected = /matching (.*?), but received/.exec(flat)?.[1]
-  const received = message.split('\n› ').slice(1).map(line => line.replace(/\n\s*/g, ' ').replace(/^[✔✘] /, '').trim())
+  // (round 14, E87: without the note for lines that still print alike, at the end of the message)
+  const received = message.replace(/\nSome (calls|assignments) print the same but do not match: .*\n$/, '\n')
+    .split('\n› ').slice(1).map(line => line.replace(/\n\s*/g, ' ').replace(/^[✔✘] /, '').trim())
   return { expected, received }
 }
 
@@ -122,9 +124,12 @@ test('R9-ADV-1 (E54) an expected and a received call that print alike two levels
   // differing further down than four levels: printing deeper would not tell them apart, so they stay two levels deep
   const far = Substitute.for<any>()
   far.find({ a: { b: { c: { d: { e: { f: 1 } } } } } })
-  const farLines = linesOf(messageOf(() => far.received(1).find({ a: { b: { c: { d: { e: { f: 2 } } } } } })))
+  const farMessage = messageOf(() => far.received(1).find({ a: { b: { c: { d: { e: { f: 2 } } } } } }))
+  const farLines = linesOf(farMessage)
   t.is(farLines.expected, 'find({ a: { b: { c: [Object] } } })')
   t.deepEqual(farLines.received, ['@Substitute.find({ a: { b: { c: [Object] } } })'])
+  // (round 14, E87: and the message says that they can differ in what it leaves out)
+  t.true(farMessage.endsWith('\nSome calls print the same but do not match: they can differ in what the message leaves out ([Object], more keys, items or characters), functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.\n'), farMessage)
 })
 
 test('R9-ADV-1 (E54) messages that print deeper still number the roots when only the substitutes among the arguments differ (E52)', t => {

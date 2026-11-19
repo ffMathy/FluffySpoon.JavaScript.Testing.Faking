@@ -130,9 +130,9 @@ let causeDepth = 0
  * at" lines of the calls), as util.inspect shows an error without a stack: `[SyntaxError: Unexpected end of JSON input]`,
  * with its own enumerable properties other than name, message and stack, which tell errors apart (`status`, `code`),
  * and its cause, likewise: `[HttpError: not found] { status: 404, [cause]: [TypeError: x is undefined] }`. The
- * properties are printed briefly (see ERROR_PROPERTY_BOUNDS), errors among them compactly as well.
+ * properties are printed briefly (see ERROR_PROPERTY_BOUNDS), errors among them compactly as well. `counted`: see Walk.
  */
-const compactError = (error: Error, sorted = false): string => {
+const compactError = (error: Error, sorted = false, counted?: Counted): string => {
   const head = errorHead(error)
   if (formattingErrors.has(error) || causeDepth >= MAX_CAUSE_DEPTH) return head
   formattingErrors.add(error)
@@ -145,9 +145,10 @@ const compactError = (error: Error, sorted = false): string => {
       const key = keys[index]
       const descriptor = Object.getOwnPropertyDescriptor(error, key)
       const value = descriptor === undefined ? undefined
-        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)
+        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false, undefined, sorted, counted)
           : descriptor.get !== undefined ? (descriptor.set !== undefined ? '[Getter/Setter]' : '[Getter]') : '[Setter]'
       parts.push(`${keyText(key)}: ${value}`)
+      if (counted !== undefined) counted.entries++
     }
     // E78: in a fixed order, and so are the keys and entries in them (see sortedText)
     if (sorted) parts.sort()
@@ -155,7 +156,8 @@ const compactError = (error: Error, sorted = false): string => {
     if (hasOwnProperty.call(error, 'cause')) {
       const descriptor = Object.getOwnPropertyDescriptor(error, 'cause')
       const cause = descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
-      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)}`)
+      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false, undefined, sorted, counted)}`)
+      if (counted !== undefined) counted.entries++
     }
     return parts.length === 0 ? head : `${head} { ${parts.join(', ')} }`
   } finally {
@@ -190,10 +192,10 @@ const printsAs = (print: (depth: number, options: InspectOptions) => string): ob
 /** An error's stand-in: its compact form (E45), at any depth. */
 const errorStandIn = (text: string): object => printsAs(() => text)
 
-/** The compact form of an error (E45). `sorted`: see compactError. */
-const errorText = (error: Error, sorted = false): string => {
+/** The compact form of an error (E45). `sorted`, `counted`: see compactError and Walk. */
+const errorText = (error: Error, sorted = false, counted?: Counted): string => {
   try {
-    return compactError(error, sorted)
+    return compactError(error, sorted, counted)
   } catch {
     // an error whose name, message or properties cannot be read
     return inspect(error, { depth: -1 })
@@ -363,8 +365,11 @@ export type DifferenceSearch = {
  * do. So it is decided once `best` is `base` or less, and while `best` is `floor` or less, only a difference at `base` or
  * less tells it something new (see wanted). `stopped`: not every entry that shows was looked at (the budget is spent,
  * or a value cannot be read).
+ * E84: `defer`: the comparisons in any order that matching ignores are put off (see inAnyOrder and
+ * firstVisibleDifference); `reordered`: then, the least depth at which values compared in their order print
+ * differently where that may be only such an order (it is not in `best`).
  */
-type Comparison = { best: number, stopped: boolean, readonly floor: number, readonly base: number }
+type Comparison = { best: number, stopped: boolean, readonly floor: number, readonly base: number, readonly defer: boolean, reordered: number }
 
 const isObjectLike = (value: unknown): value is object => (typeof value === 'object' && value !== null) || typeof value === 'function'
 
@@ -520,7 +525,7 @@ const compareTexts = (search: DifferenceSearch, comparison: Comparison, expected
 
 /**
  * The depths from `from` on, tried as compareTexts tries them (see above), until `differ` says that the values print
- * differently at the depth tried: a difference there.
+ * differently at the depth tried: a difference there. It stops (`stopped`) when `differ` spends the budget (E84).
  */
 const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from: number, differ: (depth: number) => boolean): void => {
   let depth = from
@@ -529,6 +534,11 @@ const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from:
     if (depth > limit) return
     const tried = depth <= comparison.base ? Math.min(comparison.base, limit) : depth <= comparison.floor ? Math.min(comparison.floor, limit) : depth
     if (differ(tried)) return differs(comparison, tried)
+    // E84: the texts of a comparison in any order (see sortedText) spent the budget
+    if (search.entries < 0) {
+      comparison.stopped = true
+      return
+    }
     depth = tried + 1
   }
 }
@@ -539,6 +549,8 @@ const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from:
  * least depth at which they print differently in more than such an order; the greater of the two counts. (A comparison
  * in any order that the budget cuts short does not count: the one in their order does then.) `reordered`: whether the
  * comparison in any order can find something else at all (it is made only then).
+ * E84 (R13-ADV-1): while the comparison puts it off (`defer`), the comparison in any order is not made: what the one in
+ * their order found is noted as `reordered` instead, as it may be only an order (see firstVisibleDifference).
  */
 const inAnyOrder = (
   comparison: Comparison, inOrder: (comparison: Comparison) => void, anyOrder: (comparison: Comparison) => void, reordered?: () => boolean
@@ -546,6 +558,10 @@ const inAnyOrder = (
   const first: Comparison = { ...comparison }
   inOrder(first)
   if (first.best < comparison.best && !first.stopped && (reordered === undefined || reordered())) {
+    if (comparison.defer) {
+      comparison.reordered = Math.min(first.best, first.reordered)
+      return
+    }
     const second: Comparison = { ...comparison }
     anyOrder(second)
     if (!second.stopped) {
@@ -555,6 +571,7 @@ const inAnyOrder = (
   }
   comparison.best = first.best
   comparison.stopped = first.stopped
+  comparison.reordered = first.reordered
 }
 
 /**
@@ -565,6 +582,9 @@ const inAnyOrder = (
  * prepared), and so it is here. Made once per value and depth for the lines compared with one search (the expected call
  * is compared with each of them). Undefined when the text is cut (then the order decides what shows) or cannot be made.
  * (Node.js 10.0 to 10.11 do not know the option: there, keys and entries are in the order in which they print.)
+ * E84 (R13-ADV-1): the objects, keys, items and entries that a text shows count towards the budget of the search
+ * (DifferenceSearch.entries), as those that the comparison looks at do; the comparisons that print such texts stop once
+ * it is spent (see compareAtDepths).
  */
 const sortedText = (search: DifferenceSearch, value: object, depth: number): string | undefined => {
   const texts = search.sortedTexts ??= new Map()
@@ -572,12 +592,14 @@ const sortedText = (search: DifferenceSearch, value: object, depth: number): str
   if (byDepth === undefined) texts.set(value, byDepth = new Map())
   if (byDepth.has(depth)) return byDepth.get(depth)
   let text: string | undefined
+  const counted: Counted = { entries: 0 }
   try {
-    text = withPrintGuard(() => formatBounded(value, { ...search.bounds, depth }, false, search.keys, true))
+    text = withPrintGuard(() => formatBounded(value, { ...search.bounds, depth }, false, search.keys, true, counted))
     if (text.length > search.bounds.characters) text = undefined
   } catch {
     text = undefined
   }
+  search.entries -= counted.entries
   byDepth.set(depth, text)
   return text
 }
@@ -807,6 +829,14 @@ const entryText = (search: DifferenceSearch, value: unknown, depth: number): str
  * up to maxDepth. The comparison stops once it knows what its caller asks: a depth of `base` or less, if they print
  * differently there; otherwise a depth up to `floor`, if they do there (`base` is `floor` unless given); otherwise the
  * least depth. It also stops when the budget is spent (search.complete is then false), with what it found so far.
+ *
+ * E84 (R13-ADV-1): the comparisons in any order that matching ignores (E78) cost much more than those in their order (they
+ * print the values), and they can only find that values print differently at a greater depth than their comparison in
+ * their order found, never at a lesser one. So the arguments are compared in their order first, with those comparisons
+ * put off (see inAnyOrder). Only when that leaves the least depth to a difference that may be only an order, the
+ * arguments that hold such a difference are compared again, now also in any order, from the least depth found
+ * elsewhere: a comparison in any order is made only for a value whose difference in their order decides the least
+ * depth, and not when another argument already prints differently at a depth no greater than that.
  */
 export const firstVisibleDifference = (
   search: DifferenceSearch, expected: readonly unknown[], actual: readonly unknown[], floor: number, base: number = floor
@@ -818,16 +848,41 @@ export const firstVisibleDifference = (
   if (all >= 0) count = all
   else if (expected.length !== actual.length) return 0
   count = Math.min(count, MAX_PRINTED_ARGUMENTS)
-  const comparison: Comparison = { best: Infinity, stopped: false, floor, base: Math.min(base, floor) }
+  const comparison: Comparison = { best: Infinity, stopped: false, floor, base: Math.min(base, floor), defer: true, reordered: Infinity }
+  /** For each argument compared, the least depth at which it prints differently in its order where that may be only an order. */
+  const reordered: number[] = []
+  /** And how many entries its comparison looked at (one that is compared again looks at them again: they count once). */
+  const looked: number[] = []
   for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
-    try {
-      compareValues(search, comparison, expected[index], actual[index], 0, false)
-    } catch {
-      comparison.stopped = true // a value that cannot be read
-    }
+    const entries = search.entries
+    comparison.reordered = Infinity
+    compareArgument(search, comparison, expected[index], actual[index])
+    reordered.push(comparison.reordered)
+    looked.push(entries - search.entries)
   }
-  if (comparison.stopped) search.complete = false
-  return comparison.best
+  if (comparison.stopped) {
+    // with what it found so far (in their order)
+    search.complete = false
+    return Math.min(comparison.best, ...reordered)
+  }
+  if (decided(comparison) || !reordered.some(depth => depth <= wanted(comparison))) return comparison.best
+  const again: Comparison = { best: comparison.best, stopped: false, floor, base: comparison.base, defer: false, reordered: Infinity }
+  for (let index = 0; index < reordered.length && !decided(again) && !again.stopped; index++) {
+    if (reordered[index] > wanted(again)) continue
+    search.entries += looked[index]
+    compareArgument(search, again, expected[index], actual[index])
+  }
+  if (again.stopped) search.complete = false
+  return again.best
+}
+
+/** Two arguments (see firstVisibleDifference). */
+const compareArgument = (search: DifferenceSearch, comparison: Comparison, expected: unknown, actual: unknown): void => {
+  try {
+    compareValues(search, comparison, expected, actual, 0, false)
+  } catch {
+    comparison.stopped = true // a value that cannot be read
+  }
 }
 
 /** Settings for tests. `budget`: whether a value is prepared only as far as it shows before the cut (see Walk.budget). */
@@ -866,7 +921,14 @@ type Walk = {
   readonly keys?: Map<object, PropertyKey[]>
   /** E78: whether keys and entries are printed sorted, and errors with their properties sorted (see sortedText). */
   readonly sorted: boolean
+  /** E84: counts the objects and entries that are printed, when the caller wants to know (see sortedText). */
+  readonly counted?: Counted
+  /** E86: the containers in the samples of matchers of test runners that hold a matcher (see preparedSample). */
+  holders?: Set<object>
 }
+
+/** E84: how many objects, keys, items and entries a print showed (see Walk.counted). */
+type Counted = { entries: number }
 
 /** The own enumerable keys of an object (see Walk.keys). */
 const listedKeys = (walk: Walk, object: object): PropertyKey[] => {
@@ -888,7 +950,7 @@ const leastLength = (value: unknown, level: number, walk: Walk): number => {
     case 'object':
       if (value === null) return 4
       // deeper than util.inspect looks: `[Object]`, `[Array]` (other objects may print themselves, or `[Foo]`)
-      if (level > walk.bounds.depth && !types.isProxy(value) && !hasOwnProperty.call(value, inspectCustom) && !matcherHolders.has(value)) {
+      if (level > walk.bounds.depth && !types.isProxy(value) && !hasOwnProperty.call(value, inspectCustom) && !holdsMatcher(value, walk)) {
         if (Array.isArray(value)) return 7
         if (Object.getPrototypeOf(value) === Object.prototype) return 8
       }
@@ -910,6 +972,7 @@ const spend = (walk: Walk, characters: number): boolean => {
     return false
   }
   walk.budget -= characters
+  if (walk.counted !== undefined) walk.counted.entries++
   return true
 }
 
@@ -925,26 +988,34 @@ const SEPARATOR = 2
  * value costs as little as printing it. Getters are not run.
  */
 const prepared = (value: unknown, level: number, walk: Walk): unknown => {
+  if (walk.counted !== undefined) countPrinted(value, walk.counted)
   if (typeof value !== 'object' || value === null) return value
   const ancestor = walk.ancestors.get(value)
   if (ancestor !== undefined) return ancestor // a cycle
+  // a revoked proxy, of which nothing can be read (util.inspect shows `<Revoked Proxy>`)
+  if (isRevokedProxy(value)) return value
   // E75: a matcher of a test runner prints as the runner shows it (`Any<String>`, `StringContaining '@'`, `has("err")`)
   const foreign = foreignMatcherLabel(value)
   if (foreign !== undefined) {
     const text = foreign.text
     if (foreign.sample === undefined) return printsAs(() => text)
-    const sample = prepared(foreign.sample.value, level + 1, walk)
-    return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth })}`)
+    // E86 (R13FE-1): and with its sample (`ObjectContaining { input: ... }`), which is part of its text: at its level,
+    // with at least its first level shown (when the matcher is deeper than util.inspect looks). Its text and the
+    // indentation of the level it opens count towards the budget (each matcher prints its sample anew, and indents
+    // what it holds), so that a chain of nested matchers costs no more than the text that shows.
+    if (!spend(walk, text.length + 2 * level)) return printsAs(() => text)
+    const sample = preparedSample(foreign.sample.value, level, walk)
+    return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth: Math.max(depth, 0) })}`)
   }
   if (isError(value)) {
-    const text = errorText(value, walk.sorted)
+    const text = errorText(value, walk.sorted, walk.counted)
     walk.budget -= text.length
     return errorStandIn(text)
   }
   if (level > walk.bounds.depth) {
     // deeper than util.inspect looks (it shows `[Object]`): only errors are replaced, as their stand-in shows more, and
     // containers that hold a matcher are shown
-    if (!matcherHolders.has(value) || types.isProxy(value)) return value
+    if (!holdsMatcher(value, walk) || types.isProxy(value)) return value
     const copy = Array.isArray(value) ? preparedArray(value, level, walk) : preparedKeyed(value, level, walk)
     return printsAs((_, options) => inspect(copy, { ...options, depth: 0 }))
   }
@@ -952,6 +1023,77 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if ((types.isMap(value) || types.isSet(value)) && !types.isProxy(value) && typeof (value as any)[inspectCustom] !== 'function')
     return preparedCollection(value as Map<unknown, unknown> | Set<unknown>, types.isMap(value), level, walk)
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
+}
+
+/** Whether a value is a revoked proxy (Array.isArray throws for one, and any other read). */
+const isRevokedProxy = (value: object): boolean => {
+  if (!types.isProxy(value)) return false
+  try {
+    Array.isArray(value)
+    return false
+  } catch {
+    return true
+  }
+}
+
+/** Whether an object is a container that holds a matcher: in the arguments of a setup or a check, or (E86) in a sample. */
+const holdsMatcher = (value: object, walk: Walk): boolean => matcherHolders.has(value) || walk.holders?.has(value) === true
+
+/**
+ * E86 (R13FE-1): the sample of a matcher of a test runner (`expect.objectContaining({ input: expect.objectContaining({
+ * items: expect.arrayContaining([3]) }) })`), prepared at the matcher's level (it prints as part of the matcher's
+ * text). The matchers in it, at any depth, are shown by their own text, as those of the expected call are (see
+ * matcherHolders): the containers in it that hold one are noted (Walk.holders), looking at the entries that print, at
+ * most MATCHER_SEARCH_ENTRIES of them, and not into the samples of the matchers (they are noted when those print).
+ * Deeper than util.inspect looks, the sample shows its first level, as a container that holds a matcher does.
+ */
+const preparedSample = (sample: unknown, level: number, walk: Walk): unknown => {
+  if (typeof sample !== 'object' || sample === null || types.isProxy(sample)) return sample
+  const holders = walk.holders ??= new Set()
+  let entries = MATCHER_SEARCH_ENTRIES
+  const visiting = new Set<object>()
+  /** Whether a value is a matcher or a container that holds one. */
+  const visit = (value: unknown): boolean => {
+    if (typeof value !== 'object' || value === null || types.isProxy(value)) return false
+    if (holders.has(value) || isArgumentMatcher(value)) return true
+    const isArray = Array.isArray(value)
+    if (visiting.has(value) || !(isArray || printsByKeys(value))) return false
+    visiting.add(value)
+    let holds = false
+    if (isArray) {
+      const count = Math.min((value as unknown[]).length, walk.bounds.maxArrayLength)
+      for (let index = 0; index < count && --entries >= 0; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, index)
+        if (descriptor !== undefined && 'value' in descriptor && visit(descriptor.value)) holds = true
+      }
+    } else {
+      const keys = listedKeys(walk, value)
+      const count = Math.min(keys.length, walk.bounds.keys)
+      for (let index = 0; index < count && --entries >= 0; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, keys[index])
+        if (descriptor !== undefined && 'value' in descriptor && visit(descriptor.value)) holds = true
+      }
+    }
+    if (holds) holders.add(value)
+    return holds
+  }
+  try {
+    visit(sample)
+  } catch {
+    // a value that cannot be read
+  }
+  if (level <= walk.bounds.depth) return prepared(sample, level, walk)
+  if (walk.ancestors.has(sample)) return walk.ancestors.get(sample) // a cycle
+  return Array.isArray(sample) ? preparedArray(sample, level, walk) : printsByKeys(sample) ? preparedKeyed(sample, level, walk) : prepared(sample, level, walk)
+}
+
+/**
+ * E84: counts a value that a print shows (see Walk.counted): an object (its entries are counted as they are copied, see
+ * spend) and a function, which util.inspect prints with its own keys.
+ */
+const countPrinted = (value: unknown, counted: Counted): void => {
+  if (typeof value === 'object' && value !== null) counted.entries++
+  else if (typeof value === 'function') counted.entries += types.isProxy(value) ? 1 : 1 + Object.keys(value).length
 }
 
 /**
@@ -1117,9 +1259,11 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
  * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
  * `sorted`: E78, with keys and entries in a fixed order and errors with their properties sorted (only to compare
- * values, see sortedText; messages and printouts show them in their order).
+ * values, see sortedText; messages and printouts show them in their order). `counted`: see Walk.counted.
  */
-export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false): string => {
+export const formatBounded = (
+  value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false, counted?: Counted
+): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
@@ -1129,7 +1273,7 @@ export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolea
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
   if (sorted) options.sorted = true
   const walk: Walk = {
-    bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys, sorted
+    bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys, sorted, counted
   }
   let printable: unknown
   try {

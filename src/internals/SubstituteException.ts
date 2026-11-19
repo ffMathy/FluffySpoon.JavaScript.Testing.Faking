@@ -346,6 +346,54 @@ const printsAlike = (mismatch: CallCountMismatch, print: Printer, deeper: Deeper
   }).value
 }
 
+/**
+ * E87 (R13FE-2): the note a message ends with when, after the deeper re-print, the expected call or assignment still
+ * prints exactly like a received one that it does not match (see printedAlike). `cut`: the lines show that the message
+ * leaves something out (`[Object]` deeper than it prints, `... 3 more keys`, `… (20 more characters)`, `[Getter]`), where
+ * they can differ as well.
+ */
+export const PRINTED_ALIKE_NOTES = {
+  method: 'Some calls print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.',
+  set: 'Some assignments print the same but do not match: functions and symbols match by identity, and #private fields and other internal state are not printed. Match such values with Arg.is(), or assign the same instance.',
+  methodCut: 'Some calls print the same but do not match: they can differ in what the message leaves out ([Object], more keys, items or characters), functions and symbols match by identity, and #private fields and other internal state are not printed. Match such arguments with Arg.is(), or pass the same instance.',
+  setCut: 'Some assignments print the same but do not match: they can differ in what the message leaves out ([Object], more keys, items or characters), functions and symbols match by identity, and #private fields and other internal state are not printed. Match such values with Arg.is(), or assign the same instance.'
+}
+
+/**
+ * What a printed value or argument list shows when the message leaves something out: an object deeper than it prints
+ * (`[Object]`, `[Array]`, `[Foo]`) or an accessor (`[Getter]`), and what is cut (`... 3 more keys`, `... 2 more items`,
+ * `... 1 more argument`, `... 5 more characters`, `… (20 more characters)`).
+ */
+const LEFT_OUT = /\[[A-Za-z_$][\w$]*(: null prototype)?\]|… \((\d+ )?more characters\)|\.\.\. \d+ more (key|item|argument|character)s?\b/
+
+const withoutColors = (text: string): string => text.replace(/\x1b\[\d+m/g, '')
+
+/**
+ * E87 (R13FE-2): the text (without colours) of a listed call's arguments or assignment's value, when the call or
+ * assignment does not match the expected one and prints exactly like it, as the message prints them (`print` has
+ * printed both: an exact comparison of their texts). `colors`: whether `print` prints with colours.
+ */
+const printedAlike = (mismatch: CallCountMismatch, listed: ListedCall, print: Printer, colors: boolean, deeper: Deeper | undefined): string | undefined => {
+  const { expected } = mismatch
+  const { record } = listed
+  if (listed.matches) return undefined
+  let texts: [string, string] | undefined
+  if (expected.kind === 'method' && record.kind === 'call')
+    texts = [printArguments(record.args, print, recordBounds(record, deeper)), printArguments(expected.specification?.value ?? NO_ARGUMENTS, print, expectedBounds(deeper))]
+  else if (expected.kind === 'set' && record.kind === 'set')
+    texts = [print.value(record.args?.[0], recordBounds(record, deeper)), print.value(expected.specification?.value?.[0], expectedBounds(deeper))]
+  if (texts === undefined) return undefined
+  if (!colors) return texts[0] === texts[1] ? texts[0] : undefined
+  const text = withoutColors(texts[0])
+  return text === withoutColors(texts[1]) ? text : undefined
+}
+
+/** E87: the note for lines that print alike as `text` (see PRINTED_ALIKE_NOTES). */
+const printedAlikeNote = (mismatch: CallCountMismatch, text: string): string => {
+  const cut = LEFT_OUT.test(text)
+  return mismatch.expected.kind === 'set' ? (cut ? PRINTED_ALIKE_NOTES.setCut : PRINTED_ALIKE_NOTES.set) : (cut ? PRINTED_ALIKE_NOTES.methodCut : PRINTED_ALIKE_NOTES.method)
+}
+
 const describeError = (error: unknown): string => {
   try {
     if (error instanceof Error) return `${error.name}: ${error.message}`
@@ -371,24 +419,40 @@ export class SubstituteException extends Error {
     // E54: lines that print alike are printed deeper
     const deeper = withPrintGuard(() => deeperLines(mismatch, plain))
     const print = colors ? new Printer(true, undefined, plain.keys) : plain
-    let message = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, print, deeper))
+    let built = withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, print, deeper))
+    let message = built.text
     // E52: the expected call prints like a received call that it does not match: number the roots, if that shows more
     // than one of them
     if (withPrintGuard(() => printsAlike(mismatch, plain, deeper))) {
       const numbered = withRootNumbers(() => withPrintGuard(() => SubstituteException.buildCallCountMismatchMessage(mismatch, colors, new Printer(colors, print), deeper)))
-      if (numbered.roots > 1) message = numbered.value + (numbered.value.endsWith('\n') ? '' : '\n') + new TextBuilder()
-        .add('The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', t => t.faint())
-        .newLine()
-        .toString(colors)
+      if (numbered.roots > 1) {
+        built = numbered.value
+        message = SubstituteException.withNote(built.text, 'The substitutes are numbered in this message (@Substitute#1, @Substitute#2, ...) to tell them apart.', colors)
+      }
     }
+    // E87 (R13FE-2): lines that still print exactly alike
+    if (built.printedAlike !== undefined) message = SubstituteException.withNote(message, printedAlikeNote(mismatch, built.printedAlike), colors)
     return new this(message, EXCEPTION.callCountMismatch, stackStart)
   }
 
-  private static buildCallCountMismatchMessage(mismatch: CallCountMismatch, colors: boolean, print: Printer, deeper: Deeper | undefined): string {
+  /** A message with a note at its end, on a line of its own. */
+  private static withNote(message: string, note: string, colors: boolean): string {
+    return message + (message.endsWith('\n') ? '' : '\n') + new TextBuilder().add(note, t => t.faint()).newLine().toString(colors)
+  }
+
+  /**
+   * The message, and (E87) whether a listed call or assignment that does not match the expected one prints exactly like
+   * it.
+   */
+  private static buildCallCountMismatchMessage(
+    mismatch: CallCountMismatch, colors: boolean, print: Printer, deeper: Deeper | undefined
+  ): { text: string, printedAlike: string | undefined } {
     const { expected, key } = mismatch
     const substitutePath = mismatch.subject?.path ?? mismatch.substitutePath
     const memberPath = key === SELF ? substitutePath : `${substitutePath}.${keyToString(key)}`
 
+    /** E87: the text of the listed lines that print exactly like the expected one without matching it (they all print so). */
+    let alike: string | undefined
     const textBuilder = new TextBuilder()
       .add('Call count mismatch in ')
     if (key === SELF) textBuilder.add(substitutePath, t => t.bold().underline())
@@ -421,6 +485,7 @@ export class SubstituteException extends Error {
         const call = describeRecord(listed.record, print, colors, deeper)
         // E81: a record of one of several substitutes is shown with that substitute's own path
         const recordPath = listed.owner === undefined ? memberPath : key === SELF ? listed.owner.path : `${listed.owner.path}.${keyToString(key)}`
+        if (alike === undefined) alike = printedAlike(mismatch, listed, print, colors, deeper)
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
           .add(listed.record.constructed === true ? `new ${recordPath}` : recordPath, style)
@@ -443,7 +508,7 @@ export class SubstituteException extends Error {
       for (const hint of hints) textBuilder.add(hint).newLine()
     }
 
-    return textBuilder.toString(colors)
+    return { text: textBuilder.toString(colors), printedAlike: alike }
   }
 
   public static forPropertyNotMocked(property: PropertyKey) {
