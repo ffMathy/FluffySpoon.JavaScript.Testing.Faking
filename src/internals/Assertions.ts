@@ -1,6 +1,6 @@
 import { inspect, types } from 'util'
 
-import { SubstituteState } from './SubstituteState'
+import { AutoEntry, SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind } from './SubstituteException'
 import { CallRecord } from './CallRecord'
@@ -97,6 +97,8 @@ const FLUENT_SEARCH_BUDGET = 10000
 const FLUENT_PATHS_SHOWN = 3
 /** E97: and the characters of each path it names, at most (each argument in a path is bounded, but a path has many). */
 const FLUENT_PATH_CHARACTERS = 1000
+/** E108: how many of the methods on the way to that place the fluent remedy names, at most. */
+const FLUENT_METHODS_SHOWN = 3
 
 /**
  * E97 (R14FE-5): a check that found no record of the member on the checked substitute, while a member of that name was
@@ -104,6 +106,13 @@ const FLUENT_PATH_CHARACTERS = 1000
  * `reply.code(404).send(...)` or `span.setAttribute(...).setStatus(...)`, whose result is a new substitute): a hint that
  * names up to FLUENT_PATHS_SHOWN of them, nearest first, and the remedy. Undefined when there are none (within the
  * search's bounds).
+ *
+ * E108 (R15-ADV-6): the remedy is for the first place named, and works when it is followed. When every step from the
+ * checked substitute down to it is a call (`reply.code(404).header(...).send(...)`), it names each of those methods
+ * (up to FLUENT_METHODS_SHOWN, and says that the others likewise): once all of them return the substitute, the member
+ * is called on the substitute itself. When a step is a member read (`db.users.where({ id: 1 }).limit(1).exec()`), making
+ * methods return the substitute cannot bring the calls back to it, so the remedy is to check the substitute the member
+ * was called on, named by its whole path (`sub.users.where({ id: 1 }).limit(1).received(1).exec(...)`).
  */
 const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: ExpectedCount): string | undefined => {
   if (key === SELF) return undefined
@@ -132,23 +141,40 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
     }
   }
   if (found.length === 0) return undefined
-  // the step below the checked substitute that the first of them was reached through: the method to configure
-  const rootSet = new Set(roots)
-  let step = found[0].owner!
-  while (!rootSet.has(step.parent)) step = step.parent.owner!
   const paths = found.map(state => `${truncateText(state.memberPath(key), FLUENT_PATH_CHARACTERS)}(...)`)
   if (more) paths.push('more')
-  const listed = paths.length === 1 ? paths[0] : `${paths.slice(0, -1).join(', ')} and ${paths[paths.length - 1]}`
-  const lead = `${keyToString(key)} was not called on ${subject.path} itself, but on ${paths.length === 1 ? 'a substitute' : 'substitutes'} further down: ${listed}.`
-  const parent = asExpression(step.parent)
-  const access = step.key === SELF ? '' : memberAccess(step.key)
-  if (step.kind === 'call') {
-    return `${lead} A call that is not configured answers a new substitute. For a fluent API, make the method return the ` +
-      `substitute (${parent}${access}(Arg.all()).returns(${parent})) or mimick an instance whose methods return this.`
+  const lead = `${keyToString(key)} was not called on ${subject.path} itself, but on ${paths.length === 1 ? 'a substitute' : 'substitutes'} further down: ${andList(paths)}.`
+  // E108: the steps from the checked substitute (one of the roots) down to the first place named
+  const place = found[0]
+  const rootSet = new Set<SubstituteState>(roots)
+  const steps: AutoEntry[] = []
+  let state = place
+  do {
+    steps.push(state.owner!)
+    state = state.owner!.parent
+  } while (!rootSet.has(state))
+  if (steps.some(step => step.kind !== 'call')) {
+    return `${lead} To check calls there, check that substitute: ` +
+      `${truncateText(asExpression(place), FLUENT_PATH_CHARACTERS)}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
   }
-  return `${lead} To check calls there, check that substitute: ` +
-    `${parent}${access}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
+  // every step is a call: each of those methods (once each, from the top) returns the checked substitute
+  const parent = asExpression(state)
+  const methods: PropertyKey[] = []
+  for (let index = steps.length - 1; index >= 0; index--) if (!methods.includes(steps[index].key)) methods.push(steps[index].key)
+  const setups = methods.slice(0, FLUENT_METHODS_SHOWN).map(method => `${parent}${method === SELF ? '' : memberAccess(method)}(Arg.all()).returns(${parent})`)
+  const others = methods.length - setups.length
+  if (setups.length === 1) {
+    return `${lead} A call that is not configured answers a new substitute. For a fluent API, make the method return the ` +
+      `substitute (${setups[0]}) or mimick an instance whose methods return this.`
+  }
+  const listedSetups = others > 0 ? `${setups.join(', ')} and likewise for the ${others} other ${others === 1 ? 'method' : 'methods'} on the way` : andList(setups)
+  return `${lead} A call that is not configured answers a new substitute. For a fluent API, make each method on the way ` +
+    `return the substitute (${listedSetups}) or mimick an instance whose methods return this.`
 }
+
+/** `a`, `a and b`, `a, b and c` */
+const andList = (items: readonly string[]): string =>
+  items.length === 1 ? items[0] : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`
 
 /**
  * The amended D9 case: a property-style assertion on a member that has only ever been invoked, never read as a
