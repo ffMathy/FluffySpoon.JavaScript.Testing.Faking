@@ -437,6 +437,21 @@ pgPool.query(Arg.all()).mimicks(async () => pgResult)
 pgPool[configure]().query(Arg.all()).resolves(pgResult)
 pgPool.query(Arg.any('string'), Arg.all()).resolves(pgResult)
 
+// R15FE-2 / T78: an overload whose parameters become impossible (hono's Context.get with an empty ContextVariableMap)
+// is left out, so the remaining overload has the setup API
+interface EmptyVariables {}
+interface HonoVariables { user: { id: string }; requestId: string }
+interface HonoGet {
+  <Key extends keyof HonoVariables>(key: Key): HonoVariables[Key]
+  <Key extends keyof EmptyVariables>(key: Key): EmptyVariables[Key]
+}
+interface HonoContext { get: HonoGet }
+const honoContext = Substitute.for<HonoContext>()
+honoContext.get('user').returns({ id: 'u1' })
+honoContext[configure]().get('user').returns({ id: 'u1' })
+honoContext.get(Arg.all()).returns({ id: 'u1' })
+honoContext.received(1).get('requestId')
+
 try {
   calculator.received().add(9, 9)
 } catch (error) {
