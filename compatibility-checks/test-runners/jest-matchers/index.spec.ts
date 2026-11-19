@@ -261,3 +261,31 @@ describe('E75 jest asymmetric matchers in checks and setups', () => {
     expectAssertionFailure(failureOf(() => expect(fn).toHaveBeenCalledWith(Substitute.for())), 'toHaveBeenCalledWith')
   })
 })
+
+// R13FE-5 (E82): jest.fn(implementation) calls its implementation with `implementation.apply(this, arguments)`, as other
+// wrappers do. With a function substitute as the implementation, the mock answers what the substitute answers for the
+// call, including the same auto-substitute (with the nested setups made on it), and the call is checked on the substitute.
+describe('R13FE-5 jest.fn(substitute) answers what the substitute answers', () => {
+  test('the auto-substitute of the call, with its nested setups; its calls are checked on the substitute', () => {
+    const fetchUser = Substitute.for<any>()
+    fetchUser(1).name.returns('ann')
+    const mock = jest.fn(fetchUser)
+    const user = mock(1)
+    expect(user.name).toBe('ann')
+    user.save()
+    expect(mock).toHaveBeenCalledWith(1)
+    fetchUser.received(1)(1)
+    fetchUser(1).received(1).save()
+    expect(user).toBe(fetchUser(1))
+  })
+
+  test('a configured value, and a method of a substitute', () => {
+    const api = Substitute.for<any>()
+    api.getOrder(2).returns({ id: 2 })
+    api.getUser(1).name.returns('bob')
+    expect(jest.fn(api.getOrder)(2)).toEqual({ id: 2 })
+    expect(jest.fn(api.getUser)(1).name).toBe('bob')
+    api.received(1).getOrder(2)
+    api.received(1).getUser(1)
+  })
+})
