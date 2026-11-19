@@ -130,9 +130,9 @@ let causeDepth = 0
  * at" lines of the calls), as util.inspect shows an error without a stack: `[SyntaxError: Unexpected end of JSON input]`,
  * with its own enumerable properties other than name, message and stack, which tell errors apart (`status`, `code`),
  * and its cause, likewise: `[HttpError: not found] { status: 404, [cause]: [TypeError: x is undefined] }`. The
- * properties are printed briefly (see ERROR_PROPERTY_BOUNDS), errors among them compactly as well.
+ * properties are printed briefly (see ERROR_PROPERTY_BOUNDS), errors among them compactly as well. `counted`: see Walk.
  */
-const compactError = (error: Error, sorted = false): string => {
+const compactError = (error: Error, sorted = false, counted?: Counted): string => {
   const head = errorHead(error)
   if (formattingErrors.has(error) || causeDepth >= MAX_CAUSE_DEPTH) return head
   formattingErrors.add(error)
@@ -145,9 +145,10 @@ const compactError = (error: Error, sorted = false): string => {
       const key = keys[index]
       const descriptor = Object.getOwnPropertyDescriptor(error, key)
       const value = descriptor === undefined ? undefined
-        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)
+        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false, undefined, sorted, counted)
           : descriptor.get !== undefined ? (descriptor.set !== undefined ? '[Getter/Setter]' : '[Getter]') : '[Setter]'
       parts.push(`${keyText(key)}: ${value}`)
+      if (counted !== undefined) counted.entries++
     }
     // E78: in a fixed order, and so are the keys and entries in them (see sortedText)
     if (sorted) parts.sort()
@@ -155,7 +156,8 @@ const compactError = (error: Error, sorted = false): string => {
     if (hasOwnProperty.call(error, 'cause')) {
       const descriptor = Object.getOwnPropertyDescriptor(error, 'cause')
       const cause = descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
-      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)}`)
+      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false, undefined, sorted, counted)}`)
+      if (counted !== undefined) counted.entries++
     }
     return parts.length === 0 ? head : `${head} { ${parts.join(', ')} }`
   } finally {
@@ -190,10 +192,10 @@ const printsAs = (print: (depth: number, options: InspectOptions) => string): ob
 /** An error's stand-in: its compact form (E45), at any depth. */
 const errorStandIn = (text: string): object => printsAs(() => text)
 
-/** The compact form of an error (E45). `sorted`: see compactError. */
-const errorText = (error: Error, sorted = false): string => {
+/** The compact form of an error (E45). `sorted`, `counted`: see compactError and Walk. */
+const errorText = (error: Error, sorted = false, counted?: Counted): string => {
   try {
-    return compactError(error, sorted)
+    return compactError(error, sorted, counted)
   } catch {
     // an error whose name, message or properties cannot be read
     return inspect(error, { depth: -1 })
@@ -523,7 +525,7 @@ const compareTexts = (search: DifferenceSearch, comparison: Comparison, expected
 
 /**
  * The depths from `from` on, tried as compareTexts tries them (see above), until `differ` says that the values print
- * differently at the depth tried: a difference there.
+ * differently at the depth tried: a difference there. It stops (`stopped`) when `differ` spends the budget (E84).
  */
 const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from: number, differ: (depth: number) => boolean): void => {
   let depth = from
@@ -532,6 +534,11 @@ const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from:
     if (depth > limit) return
     const tried = depth <= comparison.base ? Math.min(comparison.base, limit) : depth <= comparison.floor ? Math.min(comparison.floor, limit) : depth
     if (differ(tried)) return differs(comparison, tried)
+    // E84: the texts of a comparison in any order (see sortedText) spent the budget
+    if (search.entries < 0) {
+      comparison.stopped = true
+      return
+    }
     depth = tried + 1
   }
 }
@@ -575,6 +582,9 @@ const inAnyOrder = (
  * prepared), and so it is here. Made once per value and depth for the lines compared with one search (the expected call
  * is compared with each of them). Undefined when the text is cut (then the order decides what shows) or cannot be made.
  * (Node.js 10.0 to 10.11 do not know the option: there, keys and entries are in the order in which they print.)
+ * E84 (R13-ADV-1): the objects, keys, items and entries that a text shows count towards the budget of the search
+ * (DifferenceSearch.entries), as those that the comparison looks at do; the comparisons that print such texts stop once
+ * it is spent (see compareAtDepths).
  */
 const sortedText = (search: DifferenceSearch, value: object, depth: number): string | undefined => {
   const texts = search.sortedTexts ??= new Map()
@@ -582,12 +592,14 @@ const sortedText = (search: DifferenceSearch, value: object, depth: number): str
   if (byDepth === undefined) texts.set(value, byDepth = new Map())
   if (byDepth.has(depth)) return byDepth.get(depth)
   let text: string | undefined
+  const counted: Counted = { entries: 0 }
   try {
-    text = withPrintGuard(() => formatBounded(value, { ...search.bounds, depth }, false, search.keys, true))
+    text = withPrintGuard(() => formatBounded(value, { ...search.bounds, depth }, false, search.keys, true, counted))
     if (text.length > search.bounds.characters) text = undefined
   } catch {
     text = undefined
   }
+  search.entries -= counted.entries
   byDepth.set(depth, text)
   return text
 }
@@ -909,7 +921,12 @@ type Walk = {
   readonly keys?: Map<object, PropertyKey[]>
   /** E78: whether keys and entries are printed sorted, and errors with their properties sorted (see sortedText). */
   readonly sorted: boolean
+  /** E84: counts the objects and entries that are printed, when the caller wants to know (see sortedText). */
+  readonly counted?: Counted
 }
+
+/** E84: how many objects, keys, items and entries a print showed (see Walk.counted). */
+type Counted = { entries: number }
 
 /** The own enumerable keys of an object (see Walk.keys). */
 const listedKeys = (walk: Walk, object: object): PropertyKey[] => {
@@ -953,6 +970,7 @@ const spend = (walk: Walk, characters: number): boolean => {
     return false
   }
   walk.budget -= characters
+  if (walk.counted !== undefined) walk.counted.entries++
   return true
 }
 
@@ -968,6 +986,7 @@ const SEPARATOR = 2
  * value costs as little as printing it. Getters are not run.
  */
 const prepared = (value: unknown, level: number, walk: Walk): unknown => {
+  if (walk.counted !== undefined) countPrinted(value, walk.counted)
   if (typeof value !== 'object' || value === null) return value
   const ancestor = walk.ancestors.get(value)
   if (ancestor !== undefined) return ancestor // a cycle
@@ -980,7 +999,7 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
     return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth })}`)
   }
   if (isError(value)) {
-    const text = errorText(value, walk.sorted)
+    const text = errorText(value, walk.sorted, walk.counted)
     walk.budget -= text.length
     return errorStandIn(text)
   }
@@ -995,6 +1014,15 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   if ((types.isMap(value) || types.isSet(value)) && !types.isProxy(value) && typeof (value as any)[inspectCustom] !== 'function')
     return preparedCollection(value as Map<unknown, unknown> | Set<unknown>, types.isMap(value), level, walk)
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
+}
+
+/**
+ * E84: counts a value that a print shows (see Walk.counted): an object (its entries are counted as they are copied, see
+ * spend) and a function, which util.inspect prints with its own keys.
+ */
+const countPrinted = (value: unknown, counted: Counted): void => {
+  if (typeof value === 'object' && value !== null) counted.entries++
+  else if (typeof value === 'function') counted.entries += types.isProxy(value) ? 1 : 1 + Object.keys(value).length
 }
 
 /**
@@ -1160,9 +1188,11 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
  * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
  * `sorted`: E78, with keys and entries in a fixed order and errors with their properties sorted (only to compare
- * values, see sortedText; messages and printouts show them in their order).
+ * values, see sortedText; messages and printouts show them in their order). `counted`: see Walk.counted.
  */
-export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false): string => {
+export const formatBounded = (
+  value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false, counted?: Counted
+): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
@@ -1172,7 +1202,7 @@ export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolea
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
   if (sorted) options.sorted = true
   const walk: Walk = {
-    bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys, sorted
+    bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys, sorted, counted
   }
   let printable: unknown
   try {
