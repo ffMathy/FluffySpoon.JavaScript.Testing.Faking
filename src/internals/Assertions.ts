@@ -26,6 +26,8 @@ export interface SeveralSubstitutes {
   recordsFor(key: PropertyKey): CallRecord[]
   /** The substitute that a record of recordsFor belongs to, as messages name it. */
   ownerOf(record: CallRecord): { readonly path: string } | undefined
+  /** E99: records that a failing check lists after those of recordsFor, without counting them. */
+  uncountedFor?(key: PropertyKey): CallRecord[]
 }
 
 /** What a check counts the calls of: a substitute, or several (E81). */
@@ -33,6 +35,14 @@ export type CheckSubject = SubstituteState | SeveralSubstitutes
 
 const ownerOf = (subject: CheckSubject, record: CallRecord): { readonly path: string } | undefined =>
   subject instanceof SubstituteState ? undefined : subject.ownerOf(record)
+
+/** E99: the records that a failing check lists without counting them (sets, or reads and calls), never marked as matching. */
+const uncountedOf = (subject: CheckSubject, key: PropertyKey, sets: boolean): ListedCall[] => {
+  if (subject instanceof SubstituteState || subject.uncountedFor === undefined) return []
+  const listed: ListedCall[] = []
+  for (const record of subject.uncountedFor(key)) if ((record.kind === 'set') === sets) listed.push({ record, matches: false, owner: subject.ownerOf(record) })
+  return listed
+}
 
 /** received(n): n must be omitted or be a non-negative safe integer. received(0) is didNotReceive(). */
 export const validateExpectedCount = (count: unknown, stackStart?: Function): ExpectedCount => {
@@ -177,6 +187,7 @@ export const assertCall = (state: CheckSubject, key: PropertyKey, args: any[], c
   }
   if (countMatches(count, matches)) return
   const tooFew = matches < (count ?? 1)
+  listed.push(...uncountedOf(state, key, false))
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
@@ -205,6 +216,7 @@ export const assertSet = (state: CheckSubject, key: PropertyKey, value: unknown,
     listed.push({ record, matches: match.matches, predicateThrew: match.predicateThrew, predicateError: match.predicateError, owner: ownerOf(state, record) })
   }
   if (countMatches(count, matches)) return
+  listed.push(...uncountedOf(state, key, true))
   throw SubstituteException.forCallCountMismatch({
     substitutePath: state.path,
     subject: state,
@@ -325,7 +337,10 @@ export const assertPropertyRead = (state: CheckSubject, key: PropertyKey, count:
     expected: { count, kind },
     receivedText: kind === 'property' ? (reads === 0 ? 'none' : reads.toString()) : describeReceived(reads, calls),
     explanation: deferrable && reads === 0 ? onlyInvokedExplanation(state, key, calls, count!) : undefined,
-    listed: records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || values || count === 0), owner: ownerOf(state, record) })),
+    listed: [
+      ...records.map((record: CallRecord) => ({ record, matches: record.kind === 'get' && (!onlyRead || values || count === 0), owner: ownerOf(state, record) })),
+      ...uncountedOf(state, key, false)
+    ],
     // E97: no record of the member at all (the check fails at once), but calls of it further down a fluent chain
     hints: reads === 0 || values ? (records.length === 0 && count !== 0 ? asHints(fluentChainHint(state, key, count)) : undefined)
       : count === 0 && calls === 0 ? [onlyReadHint(state, key, reads)]

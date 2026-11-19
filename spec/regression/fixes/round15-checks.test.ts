@@ -227,14 +227,19 @@ test('R14-ADV-4 (E89) the finding: a substitute of another copy that a matching 
   t.true(errorOf(t, () => factory.create(Arg.any())[received](2).run()).includes('Expected to receive 2 method calls matching run(), but received 1.'))
   t.notThrows(() => factory.create(Arg.any())[didNotReceive]().stop())
 
-  // further down, through that copy's configure view
+  // further down: E105 (round 16) changed this. The steps after the other copy's substitute are not followed through that
+  // copy's configure view (a check there would count what a setup forwards to, R15-ADV-1); it is E89's usage error, and
+  // the substitute is checked directly
   const db = Substitute.for<any>()
   const pool = other.Substitute.for<any>()
   db.pool(Arg.any()).returns(pool)
   db.pool('main').client(1).query('select 1') // the code under test
-  t.notThrows(() => db.pool(Arg.any()).client(1)[received](1).query(Arg.any()))
-  t.notThrows(() => db.pool(Arg.any()).client(Arg.any())[received](1).query('select 1'))
-  t.true(errorOf(t, () => db.pool(Arg.any()).client(1)[didNotReceive]().query(Arg.any())).includes('Expected to receive 0 method calls'))
+  for (const check of [
+    () => db.pool(Arg.any()).client(1)[received](1).query(Arg.any()),
+    () => db.pool(Arg.any()).client(Arg.any())[received](1).query('select 1'),
+    () => db.pool(Arg.any()).client(1)[didNotReceive]().query(Arg.any())
+  ]) t.true(errorOf(t, check).startsWith('Cannot check through @Substitute.pool(Arg.any{any}).client('))
+  t.notThrows(() => pool.client(1).received(1).query('select 1'))
 
   // with no matching call, nothing is counted
   const idle = Substitute.for<any>()
