@@ -169,6 +169,9 @@ test.describe('Verifies test runner compatibility', () => {
   // Round 9 (E53): module mocks that need a plain object, made of a substitute's member handles: a module re-exported
   // by a barrel (`export *`, jest with ts-jest and babel-jest, in the jest-modules suites above), vitest's vi.mock(),
   // node:test's mock.module() and jest's unstable_mockModule() for native ES modules. These suites must pass.
+  // (Round 15, E96: the native ES modules suite of jest also checks Arg matchers inside jest's asymmetric matchers, with
+  // the expect of jest 30 and of jest 29, in test-runners/jest-esm-modules/matchers.test.mjs; the jest and vitest matcher
+  // suites above check them for CommonJS and vitest.)
   test.describe('module mocks that need a plain object', () => {
     for (const suite of ['vitest-modules', 'nodejs-modules', 'jest-modules-esm']) {
       test.it(`E53 the documented pattern works (${suite})`, () => {

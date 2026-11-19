@@ -1,8 +1,10 @@
 import test from 'ava'
+import { inspect } from 'util'
 
 import { Substitute, Arg, configure, received, didNotReceive, mimick } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
+import { matcherKindOf } from '../../../src/shared/Arguments'
 
 // Round 15: the calls-and-arguments part of the round-14 findings (R14-ADV-2, R14V-1, R14FE-1, R14FE-4), decided in the
 // fix spec as E91, E93, E95 and E96.
@@ -321,4 +323,86 @@ test('R14FE-1 the property-style half of a check (D9) is still deferred, and lat
   } finally {
     clock.uninstall()
   }
+})
+
+// ---- E96 (R14FE-4): Arg matchers inside the matchers of test runners ------------------------------------------------
+
+/*
+ * The equality of jest's and vitest's expect, reduced to what decides here (the compatibility checks run the real
+ * ones): a value with an `asymmetricMatch` method is a matcher, and asked; otherwise objects compare key by key.
+ */
+const isAsymmetric = (value: any): boolean => !!value && typeof value.asymmetricMatch === 'function'
+const runnerEquals = (a: any, b: any): boolean => {
+  if (isAsymmetric(a) && !isAsymmetric(b)) return !!a.asymmetricMatch(b)
+  if (isAsymmetric(b) && !isAsymmetric(a)) return !!b.asymmetricMatch(a)
+  if (typeof a !== 'object' || a === null || typeof b !== 'object' || b === null) return Object.is(a, b)
+  const keys = Object.keys(a)
+  return keys.length === Object.keys(b).length && keys.every(key => runnerEquals(a[key], b[key]))
+}
+/** jest's expect.objectContaining(sample), as E75 recognises it and as jest matches it. */
+const objectContaining = (sample: Record<string, unknown>): object => ({
+  $$typeof: Symbol.for('jest.asymmetricMatcher'),
+  sample,
+  asymmetricMatch: (other: any) => other !== null && typeof other === 'object' &&
+    Object.keys(sample).every(key => key in other && runnerEquals(sample[key], other[key])),
+  toAsymmetricMatcher: () => 'ObjectContaining'
+})
+
+test('R14FE-4 an Arg matcher inside the sample of a test runner\'s matcher matches as the Arg matcher, in checks and setups', t => {
+  const producer = Substitute.for<any>()
+  producer.send({ topic: 'orders', messages: [{ key: 'o1' }] })
+  t.notThrows(() => producer.received(1).send(objectContaining({ topic: Arg.any('string') })))
+  t.notThrows(() => producer.received(1).send(objectContaining({ topic: Arg.is((topic: string) => topic.startsWith('ord')), messages: Arg.any('array') })))
+  t.notThrows(() => producer.didNotReceive().send(objectContaining({ topic: Arg.any('number') })))
+  t.notThrows(() => producer.didNotReceive().send(objectContaining({ topic: Arg.is.not((topic: string) => topic === 'orders') })))
+  const message = failureOf(t, () => producer.didNotReceive().send(objectContaining({ topic: Arg.any('string') })))
+  t.true(message.includes('Expected to receive 0 method calls matching send(ObjectContaining'), message)
+
+  const repo = Substitute.for<any>()
+  repo.save(objectContaining({ id: Arg.any(), tags: Arg.all() })).returns('saved')
+  t.is(repo.save({ id: 7, tags: ['a'], name: 'x' }), 'saved')
+  t.not(repo.save({ name: 'x' }), 'saved')
+  t.notThrows(() => repo.received(2).save(Arg.all()))
+})
+
+test('R14FE-4 a runner\'s equality asks Arg matchers through asymmetricMatch: Arg.any / Arg.is decide, Arg.all() matches anything, an Arg matcher matches nothing', t => {
+  t.true(runnerEquals({ id: 7 }, { id: Arg.any() }))
+  t.true(runnerEquals({ id: 'x' }, { id: Arg.any('string') }))
+  t.false(runnerEquals({ id: 7 }, { id: Arg.any('string') }))
+  t.true(runnerEquals({ id: 7 }, { id: Arg.is((id: number) => id > 5) }))
+  t.false(runnerEquals({ id: 7 }, { id: Arg.is.not((id: number) => id > 5) }))
+  t.true(runnerEquals({ id: [1, 2] }, { id: Arg.all() }))
+  t.false(runnerEquals({ id: 7 }, { id: Arg.is(() => { throw new Error('boom') }) }), 'a predicate that throws does not match')
+  const matcher = Arg.any() as any
+  t.false(matcher.asymmetricMatch(Arg.any()), 'D3: an Arg matcher is never a value that a matcher matches')
+  t.true((Arg.all() as any).asymmetricMatch(undefined))
+
+  // what it looks at on a substitute leaves no trace (E95)
+  const user = Substitute.for<any>()
+  user.name.returns('ann', 'bob')
+  t.true(runnerEquals({ user }, { user: Arg.is((u: any) => u.name === 'ann') }))
+  t.notThrows(() => user.didNotReceive().name)
+  t.is(user.name, 'ann')
+})
+
+test('R14FE-4 Arg matchers print as before and are still recognised as Arg matchers first', t => {
+  const matchers = [Arg.any(), Arg.any('string'), Arg.is((x: number) => x > 1), Arg.is.not((x: number) => x > 1), Arg.all()] as any[]
+  for (const matcher of matchers) {
+    t.false(Object.prototype.hasOwnProperty.call(matcher, 'asymmetricMatch'))
+    t.false(Object.keys(matcher).includes('asymmetricMatch'))
+    t.false('$$typeof' in matcher)
+    t.is(typeof matcher.asymmetricMatch, 'function')
+    t.is(matcherKindOf(matcher), matcher === matchers[4] ? 'all' : 'single')
+  }
+  t.is(inspect(matchers, { breakLength: Infinity }), "[ Arg.any{any}, Arg.any{string}, Arg.is{(x) => x > 1}, Not Arg.is{(x) => x > 1}, Arg.all{} ]")
+  t.is(String(matchers[0]), 'Arg.any{any}')
+  t.is(JSON.stringify(matchers[0]), '{"_description":"Arg.any{any}","_type":"SingleArgument"}')
+  const repo = Substitute.for<any>()
+  repo.find({ id: Arg.any() }, objectContaining({ tag: Arg.any('string') })).returns(1)
+  t.is(plain(String(repo)), [
+    '@Substitute {',
+    '  configured:',
+    "    find({ id: Arg.any{any} }, ObjectContaining) => returns(1)",
+    '}'
+  ].join('\n'))
 })

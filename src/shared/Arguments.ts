@@ -90,6 +90,24 @@ const brandOf = (value: unknown): ArgumentBrand | undefined => {
   }
 }
 
+/**
+ * E96 (R14FE-4): Arg matchers compose with the matchers of test runners. jest's and vitest's equality treats any object
+ * with an `asymmetricMatch` method as an asymmetric matcher, so an Arg matcher in the sample of one of theirs
+ * (`expect.objectContaining({ topic: Arg.any('string') })`, `expect.arrayContaining([{ key: Arg.any() }])`), in a setup
+ * or a check, or in `expect(value).toEqual({ id: Arg.any() })`, matches as the Arg matcher: Arg.any / Arg.is (and their
+ * `.not` forms) as their predicate decides (E95: leaving no trace on substitutes), Arg.all() any value (as an object
+ * value, D27), and never an Arg matcher (D3). A method of the prototype, not enumerable: Arg matchers print as before,
+ * and they have no `$$typeof`, so the library recognises them as Arg matchers first (by their brand), never as matchers
+ * of a test runner (E75). (sinon's matchers only call `test` on matchers of sinon's own, so `sinon.match({ id: Arg.any() })`
+ * compares the Arg matcher as a value.)
+ */
+const asymmetricMatch = function asymmetricMatch(this: unknown, value: unknown): boolean {
+  const kind = brandOf(this)
+  if (kind === 'all') return true
+  return kind === 'single' && brandOf(value) === undefined && evaluateArgument(this as AnyArgument, value).matches
+}
+Object.defineProperty(BaseArgument.prototype, 'asymmetricMatch', { value: asymmetricMatch, writable: true, configurable: true })
+
 /** True for matchers created with Arg.any / Arg.is (including `.not`), by any copy of this package. */
 export const isSingleArgument = (value: unknown): value is Argument<unknown> => brandOf(value) === 'single'
 /** True for matchers created with Arg.all, by any copy of this package. */
