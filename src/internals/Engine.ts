@@ -2301,8 +2301,9 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   /**
    * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitute that each record listed so far belongs to, for this use of the check
    * view only (see use), so that a report made from it and thrown later (D9) names them, and another use counts afresh.
+   * (Created when records are first listed: the check itself, before a use, lists none.)
    */
-  private readonly _owners = new Map<CallRecord, Checked>()
+  private _owners?: Map<CallRecord, Checked>
 
   constructor(private readonly route: CheckRoute, private _end?: RouteEnd) { }
 
@@ -2368,18 +2369,21 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   }
 
   /** The records of `key` of the substitutes (not those in `except`), each with its owner, in the order they were received. */
+  /*
+   * (No record is listed twice: the substitutes are distinct, and no two of them have their calls of a member recorded at
+   * the same substitute and member, see recordedAt. In one use every listing is of the same member, so a record always
+   * has the same owner.)
+   */
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined): CallRecord[] {
-    const owners = this._owners
-    const listed = new Set<CallRecord>()
+    const owners = this._owners ?? (this._owners = new Map())
     const records: CallRecord[] = []
     for (const checked of checkedList) {
       if (isForeign(checked)) continue
       const at = recordedAt(checked, key)
       if (at === undefined) continue
       for (const record of at.state.recordsFor(at.key)) {
-        if (listed.has(record) || except?.has(record) === true) continue
-        listed.add(record)
-        if (!owners.has(record)) owners.set(record, checked)
+        if (except !== undefined && except.has(record)) continue
+        owners.set(record, checked)
         records.push(record)
       }
     }
@@ -2387,7 +2391,7 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   }
 
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
-    const owner = this._owners.get(record)
+    const owner = this._owners?.get(record)
     return owner === undefined || isForeign(owner) ? undefined : owner
   }
 }
