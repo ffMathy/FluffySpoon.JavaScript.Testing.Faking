@@ -727,11 +727,24 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
 }
 
+/**
+ * E74 (R12-ADV-1): an array of `length` holes, for a copy of an array. A long one is made the way V8 makes a sparse
+ * array (by its last index), so that it takes no room for its holes: `new Array(length)` fills a million slots, which
+ * takes milliseconds for every print of an array of a million items. util.inspect shows both alike.
+ */
+const holes = (length: number): unknown[] => {
+  if (length <= ARRAY_KEYS_LIMIT) return new Array(length)
+  const array: unknown[] = []
+  array[length - 1] = undefined
+  delete array[length - 1]
+  return array
+}
+
 /** An array: its first maxArrayLength items (util.inspect shows how many more there are, as the copy has the same length). */
 const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => {
   const length = array.length
   const count = Math.min(length, walk.bounds.maxArrayLength)
-  const copy: unknown[] = new Array(length)
+  const copy: unknown[] = holes(length)
   const prototype = Object.getPrototypeOf(array)
   if (prototype !== Array.prototype) Object.setPrototypeOf(copy, prototype)
   walk.ancestors.set(array, copy)
@@ -756,10 +769,12 @@ const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => 
         Object.defineProperty(copy, index, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
       }
     }
-    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows); they are listed only
-    // for an array that is short or copied anyway (listing them lists every index)
+    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows). E74 (R12-ADV-1):
+    // they are listed only for an array of at most ARRAY_KEYS_LIMIT items, as listing them lists every index, also when
+    // the array is copied (an array of a million errors would otherwise cost a listing of a million keys at each print);
+    // a longer copy shows its first items and how many more there are, without its other keys
     if (!walk.exhausted) {
-      const extra = arrayExtraKeys(array, changed ? Infinity : ARRAY_KEYS_LIMIT)
+      const extra = arrayExtraKeys(array, ARRAY_KEYS_LIMIT)
       if (extra !== undefined && extra.length > 0 && copyKeys(array, copy, extra, Infinity, level, walk)) changed = true
     }
   } finally {
