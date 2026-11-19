@@ -114,6 +114,9 @@ type NoOverloads = [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, 
  * A generic signature whose return type is conditional on a type parameter (`conv<K>(e: K): K extends string ? number :
  * boolean`, `listeners` of Node's `EventEmitter<T>`) does not match the pattern (TypeScript compares it with every
  * slot with its type parameters replaced by `any`); it is matched on its own (R7TD-1, T53).
+ * An overloaded function whose last overload can never be called and returns `never` once its type parameters are
+ * replaced by their constraints (hono's `Context.get`, see `PossibleOverloads`) matches neither pattern; it is matched
+ * by a third one, without that overload (R15FE-2, T78).
  */
 type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
   ({ substituteOverloads: TFunction } & TFunction) extends {
@@ -131,6 +134,82 @@ type Overloads<TFunction> = [TFunction] extends [Primitive] ? NoOverloads :
   ] :
   TFunction extends (...args: infer A) => infer R ? [NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, NoOverload, LastSlot<A, R>] :
   TFunction extends new (...args: infer A) => infer R ? ConstructOverloads<TFunction, A, R> :
+  TFunction extends (...args: any) => any ? PossibleOverloads<TFunction> :
+  NoOverloads
+
+// An overload whose parameters cannot take any argument (hono's `Context.get` declares `<Key extends keyof
+// ContextVariableMap>(key: Key): ContextVariableMap[Key]` last, and `ContextVariableMap` is `{}` unless an application
+// adds to it, so that its `key` is `never` once the type parameter is replaced by its constraint) is left out when the
+// setup signatures, the configure view and the `Arg.all()` signatures are built (R15FE-2, T78). Such an overload
+// returns `never` once its type parameters are replaced by their constraints (`{}[never]`), which is what TypeScript
+// infers for its slot in the patterns of `Overloads`, while it checks an overloaded function against a pattern with
+// the type parameters replaced by `any` (`{}[any]`), which `never` does not accept. When it is the last overload,
+// neither pattern matched, and the member had no setup API at all (`c.get('user').returns(user)`,
+// `c[configure]().get('user')` and `c.get(Arg.all())` did not compile). The pattern below accepts it: each return type
+// is inferred in a union with a type that no function returns (`NeverReturn`), which `any` fits. The overloads it finds
+// are those of `Overloads`; the ones whose required parameters include `never` are dropped (`DroppedOverload`), and
+// the last remaining one moves to the last slot, which carries the signature for a single `Arg.all()`.
+// Only functions that the patterns above do not match get here (after the construct signatures, so that the patterns
+// of other types are not nested deeper, which TypeScript 3.6 reports as "excessively deep" in generic code), and this
+// pattern is only taken when it leaves an overload out: for any other type nothing changes. So a function whose
+// impossible overload is not the last one keeps the typing it had: when that overload returns `never`, the second
+// pattern above gives the last overload alone the setup API, otherwise the first pattern keeps the impossible
+// overload, whose positional signature takes no argument but `never` or `any`.
+type PossibleOverloads<TFunction> =
+  ({ substituteOverloads: TFunction } & TFunction) extends {
+    substituteOverloads(...args: infer A1): infer R1 | NeverReturn
+    substituteOverloads(...args: infer A2): infer R2 | NeverReturn
+    substituteOverloads(...args: infer A3): infer R3 | NeverReturn
+    substituteOverloads(...args: infer A4): infer R4 | NeverReturn
+    substituteOverloads(...args: infer A5): infer R5 | NeverReturn
+    substituteOverloads(...args: infer A6): infer R6 | NeverReturn
+    substituteOverloads(...args: infer A7): infer R7 | NeverReturn
+    substituteOverloads(...args: infer A8): infer R8 | NeverReturn
+  } ? WithPossibleOverloads<[
+    PossibleSlot<A1, R1, A2, R2>, PossibleSlot<A2, R2, A3, R3>, PossibleSlot<A3, R3, A4, R4>,
+    PossibleSlot<A4, R4, A5, R5>, PossibleSlot<A5, R5, A6, R6>, PossibleSlot<A6, R6, A7, R7>,
+    PossibleSlot<A7, R7, A8, R8>, PossibleOverload<LastSlot<A8, R8>>
+  ]> :
+  NoOverloads
+type NeverReturn = { readonly '@fluffy-spoon/substitute:never-return': true }
+// Only taken when an overload was left out and another one remains; otherwise the function is typed as before T78.
+type WithPossibleOverloads<S extends any[]> =
+  DroppedOverload extends S[number] ?
+  ([Extract<S[number], Overload<any[], any>>] extends [never] ? NoOverloads : WithoutDroppedLast<S>) :
+  NoOverloads
+// The slot of an overload that is left out. It is not a `NoOverload`: the function has more than one overload, so
+// `IsGenericSignature` must not take the remaining one for the function's only signature (whose own generic signature
+// would then be compared with the function's overloads), and the result of a single `Arg.all()` is computed from all
+// remaining overloads (`AllArgumentsResult`, which counts only real overloads).
+type DroppedOverload = { readonly droppedOverload: true }
+type PossibleSlot<A, R, TNextArguments, TNextReturnType> = PossibleOverload<Slot<A, R, TNextArguments, TNextReturnType>>
+type PossibleOverload<TSlot> =
+  TSlot extends Overload<infer A, any> ? (HasImpossibleParameter<A> extends true ? DroppedOverload : TSlot) : TSlot
+// `true` when one of the first 6 parameters is required and of type `never`. (An optional parameter of type `never`
+// can be left out; a rest parameter of type `never[]` takes no argument.)
+type HasImpossibleParameter<A extends any[]> =
+  [] extends A ? false : [A[0]] extends [never] ? true :
+  [any] extends A ? false : [A[1]] extends [never] ? true :
+  [any, any] extends A ? false : [A[2]] extends [never] ? true :
+  [any, any, any] extends A ? false : [A[3]] extends [never] ? true :
+  [any, any, any, any] extends A ? false : [A[4]] extends [never] ? true :
+  [any, any, any, any, any] extends A ? false : [A[5]] extends [never] ? true :
+  false
+// The last remaining overload in the last slot, and `DroppedOverload` in the slots from where it was up to the last
+// but one, so that the slot before the last never reads as empty. Only `DroppedOverload`s: nothing can be called.
+type WithoutDroppedLast<S extends any[]> =
+  S[7] extends Overload<any[], any> ? [S[0], S[1], S[2], S[3], S[4], S[5], S[6] extends Overload<any[], any> ? S[6] : DroppedOverload, S[7]] :
+  S[6] extends Overload<any[], any> ? [S[0], S[1], S[2], S[3], S[4], S[5], DroppedOverload, S[6]] :
+  S[5] extends Overload<any[], any> ? [S[0], S[1], S[2], S[3], S[4], DroppedOverload, DroppedOverload, S[5]] :
+  S[4] extends Overload<any[], any> ? [S[0], S[1], S[2], S[3], DroppedOverload, DroppedOverload, DroppedOverload, S[4]] :
+  S[3] extends Overload<any[], any> ?
+  [S[0], S[1], S[2], DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, S[3]] :
+  S[2] extends Overload<any[], any> ?
+  [S[0], S[1], DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, S[2]] :
+  S[1] extends Overload<any[], any> ?
+  [S[0], DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, S[1]] :
+  S[0] extends Overload<any[], any> ?
+  [DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, DroppedOverload, S[0]] :
   NoOverloads
 
 // A type with construct signatures but no call signatures (a class, `new (url: string) => ApiClient`): the overloads

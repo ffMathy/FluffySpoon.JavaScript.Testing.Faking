@@ -59,6 +59,27 @@
             "./dist/index.js"
         ],
         "./package.json": "./package.json",
+        "./dist/shared": [
+            {
+                "types": "./dist/shared/index.d.ts",
+                "default": "./dist/shared/index.js"
+            },
+            "./dist/shared/index.js"
+        ],
+        "./dist/api": [
+            {
+                "types": "./dist/api/index.d.ts",
+                "default": "./dist/api/index.js"
+            },
+            "./dist/api/index.js"
+        ],
+        "./dist/api/types": [
+            {
+                "types": "./dist/api/types/index.d.ts",
+                "default": "./dist/api/types/index.js"
+            },
+            "./dist/api/types/index.js"
+        ],
         "./dist/*.js": "./dist/*.js",
         "./dist/*.mjs": "./dist/*.mjs",
         "./dist/*": "./dist/*.js"
