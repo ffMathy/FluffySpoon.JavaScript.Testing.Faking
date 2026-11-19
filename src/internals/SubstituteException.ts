@@ -108,6 +108,12 @@ class Printer {
     return printed.text
   }
 
+  /** E79: whether the text of an argument list printed with `bounds` shows a substitute (see value). */
+  showsSubstitute(args: readonly unknown[], bounds: PrintBounds): boolean {
+    this.arguments(args, bounds)
+    return Printer.known(this.lists, bounds).get(args)?.unnumbered === false
+  }
+
   arguments(args: readonly unknown[], bounds: PrintBounds): string {
     const known = Printer.known(this.lists, bounds)
     let printed = known.get(args)
@@ -292,10 +298,50 @@ const deeperLines = (mismatch: CallCountMismatch, print: Printer): Deeper | unde
 /**
  * E52: whether the expected call or assignment prints like one that was received (and is listed) but does not match
  * it (each printed as deep as the message prints it, see deeperLines). `print`: without colours.
+ * E79 (R12-ADV-2): as deeperLines takes it, too: two lines that show substitutes print alike also where they differ
+ * only where the expected call has a matcher (it stands for the received value there) or in an order that matching
+ * ignores (E72, E78), as firstVisibleDifference finds up to the depth at which they are printed, if they print
+ * differently with the roots numbered (so they differ in which substitute is an argument). So a check whose only real
+ * difference is which substitute is the argument numbers the substitutes also with a matcher elsewhere in the expected
+ * call, or with keys in another order.
  */
 const printsAlike = (mismatch: CallCountMismatch, print: Printer, deeper: Deeper | undefined): boolean => {
-  const expectedText = printArguments(mismatch.expected.specification?.value ?? [], print, expectedBounds(deeper))
-  return unmatchedOfExpectedKind(mismatch, print).some(record => printArguments(record.args ?? [], print, recordBounds(record, deeper)) === expectedText)
+  const expectedArguments = mismatch.expected.specification?.value ?? NO_ARGUMENTS
+  const bounds = expectedBounds(deeper)
+  const expectedText = printArguments(expectedArguments, print, bounds)
+  /** Compares the lines with the texts of `printer`, up to the depth at which they are printed (one budget for all). */
+  const comparer = (printer: Printer) => {
+    const search: DifferenceSearch = {
+      bounds: MESSAGE_BOUNDS,
+      maxDepth: bounds.depth,
+      textOf: (value, depth) => printer.value(value, messageBounds(depth)),
+      keys: print.keys,
+      entries: DIFFERENCE_ENTRIES
+    }
+    /** Whether they print alike; undefined when the comparison could not tell (the budget is spent). */
+    return (args: readonly unknown[]): boolean | undefined => {
+      if (search.entries <= 0) return undefined
+      const difference = firstVisibleDifference(search, expectedArguments, args, bounds.depth)
+      return search.complete === true ? difference > bounds.depth : undefined
+    }
+  }
+  let alike: ((args: readonly unknown[]) => boolean | undefined) | undefined
+  const candidates: Array<readonly unknown[]> = []
+  for (const record of unmatchedOfExpectedKind(mismatch, print)) {
+    const args = record.args ?? NO_ARGUMENTS
+    const lineBounds = recordBounds(record, deeper)
+    if (printArguments(args, print, lineBounds) === expectedText) return true
+    // (lines printed at different depths, or that show no substitute on either side, which numbering cannot tell apart)
+    if (lineBounds !== bounds || !print.showsSubstitute(expectedArguments, bounds) || !print.showsSubstitute(args, lineBounds)) continue
+    alike ??= comparer(print)
+    if (alike(args) === true) candidates.push(args)
+  }
+  if (candidates.length === 0) return false
+  // and they print differently with the roots numbered
+  return withRootNumbers(() => {
+    const numbered = comparer(new Printer(false, undefined, print.keys))
+    return candidates.some(args => numbered(args) === false)
+  }).value
 }
 
 const describeError = (error: unknown): string => {

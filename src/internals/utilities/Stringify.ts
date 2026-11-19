@@ -132,7 +132,7 @@ let causeDepth = 0
  * and its cause, likewise: `[HttpError: not found] { status: 404, [cause]: [TypeError: x is undefined] }`. The
  * properties are printed briefly (see ERROR_PROPERTY_BOUNDS), errors among them compactly as well.
  */
-const compactError = (error: Error): string => {
+const compactError = (error: Error, sorted = false): string => {
   const head = errorHead(error)
   if (formattingErrors.has(error) || causeDepth >= MAX_CAUSE_DEPTH) return head
   formattingErrors.add(error)
@@ -145,15 +145,17 @@ const compactError = (error: Error): string => {
       const key = keys[index]
       const descriptor = Object.getOwnPropertyDescriptor(error, key)
       const value = descriptor === undefined ? undefined
-        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false)
+        : 'value' in descriptor ? formatBounded(descriptor.value, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)
           : descriptor.get !== undefined ? (descriptor.set !== undefined ? '[Getter/Setter]' : '[Getter]') : '[Setter]'
       parts.push(`${keyText(key)}: ${value}`)
     }
+    // E78: in a fixed order, and so are the keys and entries in them (see sortedText)
+    if (sorted) parts.sort()
     if (keys.length > shown) parts.push(`... ${keys.length - shown} more ${keys.length - shown === 1 ? 'key' : 'keys'}`)
     if (hasOwnProperty.call(error, 'cause')) {
       const descriptor = Object.getOwnPropertyDescriptor(error, 'cause')
       const cause = descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
-      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false)}`)
+      parts.push(`[cause]: ${descriptor !== undefined && !('value' in descriptor) ? '[Getter]' : formatBounded(cause, ERROR_PROPERTY_BOUNDS, false, undefined, sorted)}`)
     }
     return parts.length === 0 ? head : `${head} { ${parts.join(', ')} }`
   } finally {
@@ -188,10 +190,10 @@ const printsAs = (print: (depth: number, options: InspectOptions) => string): ob
 /** An error's stand-in: its compact form (E45), at any depth. */
 const errorStandIn = (text: string): object => printsAs(() => text)
 
-/** The compact form of an error (E45). */
-const errorText = (error: Error): string => {
+/** The compact form of an error (E45). `sorted`: see compactError. */
+const errorText = (error: Error, sorted = false): string => {
   try {
-    return compactError(error)
+    return compactError(error, sorted)
   } catch {
     // an error whose name, message or properties cannot be read
     return inspect(error, { depth: -1 })
@@ -308,6 +310,12 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  *   maxArrayLength entries (keys and values, in their order) and the own enumerable keys of a Map or a Set (E69);
  * - E72: keys in another order do not count as a difference (matching does not see it either): the values of the same
  *   keys are compared, so that a DTO built as `{ ...input, id }` is printed as deep as a difference further down needs;
+ * - E78: nor does any other order that matching ignores: the entries of a Map or a Set that print in another order
+ *   (a Set of tags or a Map of headers built in another order) are compared by key (the values of the same key of a
+ *   Map, one level down) and, where the keys are not the same values (objects), as a multiset of their texts at each
+ *   depth; errors and functions whose own properties print in another order are compared by their texts at each depth.
+ *   Those texts have their keys and entries, all the way down, in a fixed order (see sortedText). (Each line prints in
+ *   its own order.) Where the entries in their order already print alike, they are not compared again;
  * - two strings longer than util.inspect shows of them print alike if what shows is the same, and so do two symbols with
  *   the same description;
  * - a matcher stands for the received value only where matching takes it as a matcher, in plain objects and arrays
@@ -345,6 +353,8 @@ export type DifferenceSearch = {
    * comparison, or a value could not be read; it then gives what it found up to there).
    */
   complete?: boolean
+  /** E78: the sorted texts of values made so far, by depth (see sortedText). */
+  sortedTexts?: Map<object, Map<number, string | undefined>>
 }
 
 /**
@@ -456,11 +466,31 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
     comparison.stopped = true
     return
   }
-  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual))
+  if (typeof expected === 'function' || typeof actual === 'function' || types.isProxy(expected) || types.isProxy(actual)) {
+    // E78: two functions (not substitutes or other proxies) whose properties print in another order
+    if (typeof expected === 'function' && typeof actual === 'function' && !types.isProxy(expected) && !types.isProxy(actual))
+      return inAnyOrder(comparison,
+        inOrder => compareTexts(search, inOrder, expected, actual, level),
+        anyOrder => compareAtDepths(search, anyOrder, level > 0 ? level - 1 : 0, depth => {
+          const text = sortedText(search, expected, depth - level)
+          return text === undefined || text !== sortedText(search, actual, depth - level)
+        }))
     return compareTexts(search, comparison, expected, actual, level)
+  }
   const prototype = Object.getPrototypeOf(expected)
   const shape = prototype === Object.getPrototypeOf(actual) ? shapeOf(expected, prototype) : 'text'
-  if (shape === 'text' || shape !== shapeOf(actual, prototype)) return compareTexts(search, comparison, expected, actual, level)
+  if (shape === 'text' || shape !== shapeOf(actual, prototype)) {
+    // E78: two errors whose properties print in another order (an error prints alike at any depth at which it shows)
+    if (isError(expected) && isError(actual))
+      return inAnyOrder(comparison,
+        inOrder => compareTexts(search, inOrder, expected, actual, level),
+        anyOrder => {
+          // (an error prints so at any depth)
+          const text = sortedText(search, expected, 0)
+          if (text === undefined || text !== sortedText(search, actual, 0)) differs(anyOrder, shows)
+        })
+    return compareTexts(search, comparison, expected, actual, level)
+  }
   if (shape === 'array') return compareArrays(search, comparison, expected as unknown[], actual as unknown[], level, literal)
   if (shape === 'collection')
     return compareCollections(search, comparison, expected as Map<unknown, unknown> | Set<unknown>, actual as Map<unknown, unknown> | Set<unknown>, level)
@@ -485,15 +515,71 @@ const compareValues = (search: DifferenceSearch, comparison: Comparison, expecte
  * `floor`: those depths are tried before deeper ones, so that the lines of a message are printed at the least depth that
  * tells them apart. (Two values that print alike at a depth print alike at the depths before it.)
  */
-const compareTexts = (search: DifferenceSearch, comparison: Comparison, expected: object, actual: object, level: number): void => {
-  let depth = level > 0 ? level - 1 : 0
+const compareTexts = (search: DifferenceSearch, comparison: Comparison, expected: object, actual: object, level: number): void =>
+  compareAtDepths(search, comparison, level > 0 ? level - 1 : 0, depth => search.textOf(expected, depth - level) !== search.textOf(actual, depth - level))
+
+/**
+ * The depths from `from` on, tried as compareTexts tries them (see above), until `differ` says that the values print
+ * differently at the depth tried: a difference there.
+ */
+const compareAtDepths = (search: DifferenceSearch, comparison: Comparison, from: number, differ: (depth: number) => boolean): void => {
+  let depth = from
   for (;;) {
     const limit = Math.min(wanted(comparison), search.maxDepth)
     if (depth > limit) return
     const tried = depth <= comparison.base ? Math.min(comparison.base, limit) : depth <= comparison.floor ? Math.min(comparison.floor, limit) : depth
-    if (search.textOf(expected, tried - level) !== search.textOf(actual, tried - level)) return differs(comparison, tried)
+    if (differ(tried)) return differs(comparison, tried)
     depth = tried + 1
   }
+}
+
+/**
+ * E78: two values compared in their order (`inOrder`, as they print) and, where that finds a difference, in any order
+ * that matching ignores (`anyOrder`). Each of the two finds a depth at which the values print differently, at most the
+ * least depth at which they print differently in more than such an order; the greater of the two counts. (A comparison
+ * in any order that the budget cuts short does not count: the one in their order does then.) `reordered`: whether the
+ * comparison in any order can find something else at all (it is made only then).
+ */
+const inAnyOrder = (
+  comparison: Comparison, inOrder: (comparison: Comparison) => void, anyOrder: (comparison: Comparison) => void, reordered?: () => boolean
+): void => {
+  const first: Comparison = { ...comparison }
+  inOrder(first)
+  if (first.best < comparison.best && !first.stopped && (reordered === undefined || reordered())) {
+    const second: Comparison = { ...comparison }
+    anyOrder(second)
+    if (!second.stopped) {
+      comparison.best = Math.max(first.best, second.best)
+      return
+    }
+  }
+  comparison.best = first.best
+  comparison.stopped = first.stopped
+}
+
+/**
+ * E78: the text of a value as a message prints it `depth` levels deep (see DifferenceSearch.textOf), with the keys of
+ * its objects, the entries of its Maps and Sets and the own properties of its errors in a fixed order (util.inspect's
+ * `sorted` option, and compactError's), so that two values whose texts are the same print alike but for an order that
+ * matching ignores. A function is printed by util.inspect as it is, with all of its properties and what they hold (see
+ * prepared), and so it is here. Made once per value and depth for the lines compared with one search (the expected call
+ * is compared with each of them). Undefined when the text is cut (then the order decides what shows) or cannot be made.
+ * (Node.js 10.0 to 10.11 do not know the option: there, keys and entries are in the order in which they print.)
+ */
+const sortedText = (search: DifferenceSearch, value: object, depth: number): string | undefined => {
+  const texts = search.sortedTexts ??= new Map()
+  let byDepth = texts.get(value)
+  if (byDepth === undefined) texts.set(value, byDepth = new Map())
+  if (byDepth.has(depth)) return byDepth.get(depth)
+  let text: string | undefined
+  try {
+    text = withPrintGuard(() => formatBounded(value, { ...search.bounds, depth }, false, search.keys, true))
+    if (text.length > search.bounds.characters) text = undefined
+  } catch {
+    text = undefined
+  }
+  byDepth.set(depth, text)
+  return text
 }
 
 /** E72: whether the first `count` keys of two lists are the same keys, in any order. */
@@ -552,7 +638,7 @@ const compareArrays = (search: DifferenceSearch, comparison: Comparison, expecte
   compareKeys(search, comparison, expected, actual, expectedExtra, actualExtra, Infinity, level, literal)
 }
 
-/** E69: two Maps or two Sets at `level` with the same prototype: their size, first entries (in their order) and own keys. */
+/** E69: two Maps or two Sets at `level` with the same prototype: their size, first entries (E78: in any order) and own keys. */
 const compareCollections = (
   search: DifferenceSearch, comparison: Comparison, expected: Map<unknown, unknown> | Set<unknown>, actual: Map<unknown, unknown> | Set<unknown>, level: number
 ): void => {
@@ -568,6 +654,27 @@ const compareCollections = (
   if (size !== actualSize) return differs(comparison, level)
   const count = Math.min(size, search.bounds.maxArrayLength)
   search.entries -= count
+  let entries: [unknown[], unknown[]] | undefined
+  inAnyOrder(comparison,
+    inOrder => compareEntriesInOrder(search, inOrder, expected, actual, isMap, count, level),
+    anyOrder => {
+      entries ??= [firstEntries(expected, isMap, count), firstEntries(actual, isMap, count)]
+      compareEntriesInAnyOrder(search, anyOrder, entries[0], entries[1], isMap, level)
+    },
+    // entries whose keys (members) are the same values at the same positions, all but one at most, compare in any order
+    // as they do in their order (the one left cannot be paired with another)
+    () => {
+      entries = [firstEntries(expected, isMap, count), firstEntries(actual, isMap, count)]
+      return otherPositions(entries[0], entries[1], isMap) > 1
+    })
+  compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, Infinity, level, true)
+}
+
+/** The first `count` entries of two Maps (keys and values) or two Sets (members) at `level`, in their order. */
+const compareEntriesInOrder = (
+  search: DifferenceSearch, comparison: Comparison, expected: Map<unknown, unknown> | Set<unknown>, actual: Map<unknown, unknown> | Set<unknown>,
+  isMap: boolean, count: number, level: number
+): void => {
   const expectedEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(expected)
   const actualEntries: Iterator<unknown> = (isMap ? mapEntries : setValues).call(actual)
   for (let index = 0; index < count && !decided(comparison) && !comparison.stopped; index++) {
@@ -581,7 +688,117 @@ const compareCollections = (
       compareValues(search, comparison, expectedValue, actualValue, level + 1, true)
     } else compareValues(search, comparison, expectedStep.value, actualStep.value, level + 1, true)
   }
-  compareKeys(search, comparison, expected, actual, expectedKeys, actualKeys, Infinity, level, true)
+}
+
+/** The key of an entry of a Map (`[key, value]`), or a member of a Set. */
+const entryKey = (entry: unknown, isMap: boolean): unknown => isMap ? (entry as [unknown, unknown])[0] : entry
+
+/** At how many positions the first entries of two Maps or two Sets have keys (members) that are not the same value. */
+const otherPositions = (expected: readonly unknown[], actual: readonly unknown[], isMap: boolean): number => {
+  let count = 0
+  for (let index = 0; index < expected.length; index++)
+    if (index >= actual.length || !Object.is(entryKey(expected[index], isMap), entryKey(actual[index], isMap))) count++
+  return count
+}
+
+/** Entries of two Maps (`[key, value]`) or two Sets (members) at `level`, in their order. */
+const compareEntries = (
+  search: DifferenceSearch, comparison: Comparison, expected: readonly unknown[], actual: readonly unknown[], isMap: boolean, level: number
+): void => {
+  for (let index = 0; index < expected.length && index < actual.length && !decided(comparison) && !comparison.stopped; index++) {
+    if (isMap) {
+      const [expectedKey, expectedValue] = expected[index] as [unknown, unknown]
+      const [actualKey, actualValue] = actual[index] as [unknown, unknown]
+      compareValues(search, comparison, expectedKey, actualKey, level + 1, true)
+      compareValues(search, comparison, expectedValue, actualValue, level + 1, true)
+    } else compareValues(search, comparison, expected[index], actual[index], level + 1, true)
+  }
+}
+
+/** The first `count` entries of a Map (`[key, value]`) or a Set (its members), in their order. */
+const firstEntries = (collection: Map<unknown, unknown> | Set<unknown>, isMap: boolean, count: number): unknown[] => {
+  const iterator: Iterator<unknown> = (isMap ? mapEntries : setValues).call(collection)
+  const entries: unknown[] = []
+  for (let index = 0; index < count; index++) {
+    const step = iterator.next()
+    if (step.done === true) break
+    entries.push(step.value)
+  }
+  return entries
+}
+
+/**
+ * E78: the first entries of two Maps or two Sets at `level` in any order (see inAnyOrder): the entries of the same key
+ * of a Map compare their values; the members of a Set that are the same value print alike. The other entries (keys or
+ * members that are not the same value: objects, or values that print alike) are compared in their order and, where
+ * that finds a difference between more than one of them, as a multiset of their texts, at the depths at which they
+ * show (so that only those are printed).
+ */
+const compareEntriesInAnyOrder = (
+  search: DifferenceSearch, comparison: Comparison, expected: readonly unknown[], actual: readonly unknown[], isMap: boolean, level: number
+): void => {
+  const keyOf = (entry: unknown): unknown => entryKey(entry, isMap)
+  // (as a Map or a Set finds them: -0 and 0 are one key there, but print differently)
+  const positions = new Map<unknown, number>()
+  for (let index = 0; index < actual.length; index++) positions.set(keyOf(actual[index]), index)
+  const paired = new Set<number>()
+  const unpaired: unknown[] = []
+  for (let index = 0; index < expected.length && !decided(comparison) && !comparison.stopped; index++) {
+    const key = keyOf(expected[index])
+    const position = positions.get(key)
+    if (position === undefined || !Object.is(key, keyOf(actual[position]))) {
+      unpaired.push(expected[index])
+      continue
+    }
+    paired.add(position)
+    if (isMap) compareValues(search, comparison, (expected[index] as [unknown, unknown])[1], (actual[position] as [unknown, unknown])[1], level + 1, true)
+  }
+  if (unpaired.length === 0 || decided(comparison) || comparison.stopped) return
+  const others = actual.filter((_, index) => !paired.has(index))
+  // (one of each can only be paired so)
+  if (unpaired.length === 1) return compareEntries(search, comparison, unpaired, others, isMap, level)
+  /** The texts of the entries (see entryText), sorted; undefined when one of them is cut. */
+  const textsAt = (entries: readonly unknown[], depth: number): string[] | undefined => {
+    const texts: string[] = []
+    for (const entry of entries) {
+      const key = entryText(search, keyOf(entry), depth)
+      const value = isMap ? entryText(search, (entry as [unknown, unknown])[1], depth) : ''
+      if (key === undefined || value === undefined) return undefined
+      texts.push(isMap ? `${key} => ${value}` : key)
+    }
+    return texts.sort()
+  }
+  inAnyOrder(comparison,
+    inOrder => compareEntries(search, inOrder, unpaired, others, isMap, level),
+    // the entries show from depth `level` on (their values one level deeper)
+    anyOrder => compareAtDepths(search, anyOrder, level, depth => {
+      const expectedTexts = textsAt(unpaired, depth - level - 1)
+      const actualTexts = textsAt(others, depth - level - 1)
+      return expectedTexts === undefined || actualTexts === undefined || expectedTexts.length !== actualTexts.length ||
+        expectedTexts.some((text, index) => text !== actualTexts[index])
+    }))
+}
+
+/**
+ * E78: the text of a key, value or member of a Map or a Set at level L, printed `depth` levels deeper than L, for
+ * compareEntriesInAnyOrder: two of them print alike but for orders that matching ignores exactly when their texts are
+ * the same (an object by its sorted text, see sortedText; two primitives as primitivesPrintAlike decides it at a level
+ * inside a container). Undefined when the text of an object is cut.
+ */
+const entryText = (search: DifferenceSearch, value: unknown, depth: number): string | undefined => {
+  if (isObjectLike(value)) {
+    // (a substitute by its own text)
+    if (typeof value === 'function' && types.isProxy(value)) return `o${search.textOf(value, depth)}`
+    const text = sortedText(search, value, depth)
+    return text === undefined ? undefined : `o${text}`
+  }
+  if (typeof value === 'string') {
+    const shown = search.bounds.maxStringLength
+    return value.length > shown ? `S${value.length}:${value.slice(0, shown)}` : `s${value}`
+  }
+  if (typeof value === 'symbol') return `y${value.toString()}`
+  if (typeof value === 'number') return Object.is(value, -0) ? 'n-0' : `n${value}`
+  return `${typeof value}:${String(value)}`
 }
 
 /**
@@ -647,6 +864,8 @@ type Walk = {
   budget: number
   exhausted: boolean
   readonly keys?: Map<object, PropertyKey[]>
+  /** E78: whether keys and entries are printed sorted, and errors with their properties sorted (see sortedText). */
+  readonly sorted: boolean
 }
 
 /** The own enumerable keys of an object (see Walk.keys). */
@@ -718,7 +937,7 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
     return printsAs((depth, options) => `${text} ${inspect(sample, { ...options, depth })}`)
   }
   if (isError(value)) {
-    const text = errorText(value)
+    const text = errorText(value, walk.sorted)
     walk.budget -= text.length
     return errorStandIn(text)
   }
@@ -735,11 +954,24 @@ const prepared = (value: unknown, level: number, walk: Walk): unknown => {
   return printsByKeys(value) ? preparedKeyed(value, level, walk) : value
 }
 
+/**
+ * E74 (R12-ADV-1): an array of `length` holes, for a copy of an array. A long one is made the way V8 makes a sparse
+ * array (by its last index), so that it takes no room for its holes: `new Array(length)` fills a million slots, which
+ * takes milliseconds for every print of an array of a million items. util.inspect shows both alike.
+ */
+const holes = (length: number): unknown[] => {
+  if (length <= ARRAY_KEYS_LIMIT) return new Array(length)
+  const array: unknown[] = []
+  array[length - 1] = undefined
+  delete array[length - 1]
+  return array
+}
+
 /** An array: its first maxArrayLength items (util.inspect shows how many more there are, as the copy has the same length). */
 const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => {
   const length = array.length
   const count = Math.min(length, walk.bounds.maxArrayLength)
-  const copy: unknown[] = new Array(length)
+  const copy: unknown[] = holes(length)
   const prototype = Object.getPrototypeOf(array)
   if (prototype !== Array.prototype) Object.setPrototypeOf(copy, prototype)
   walk.ancestors.set(array, copy)
@@ -764,10 +996,12 @@ const preparedArray = (array: unknown[], level: number, walk: Walk): unknown => 
         Object.defineProperty(copy, index, { get: descriptor.get, set: descriptor.set, enumerable: true, configurable: true })
       }
     }
-    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows); they are listed only
-    // for an array that is short or copied anyway (listing them lists every index)
+    // E67: and its other keys, which util.inspect shows after the items (`total` of paginated rows). E74 (R12-ADV-1):
+    // they are listed only for an array of at most ARRAY_KEYS_LIMIT items, as listing them lists every index, also when
+    // the array is copied (an array of a million errors would otherwise cost a listing of a million keys at each print);
+    // a longer copy shows its first items and how many more there are, without its other keys
     if (!walk.exhausted) {
-      const extra = arrayExtraKeys(array, changed ? Infinity : ARRAY_KEYS_LIMIT)
+      const extra = arrayExtraKeys(array, ARRAY_KEYS_LIMIT)
       if (extra !== undefined && extra.length > 0 && copyKeys(array, copy, extra, Infinity, level, walk)) changed = true
     }
   } finally {
@@ -882,8 +1116,10 @@ const stringLimit = (value: unknown, bounds: PrintBounds): number =>
 /**
  * E44: a value as messages, printouts and paths show it, within `bounds` (see PrintBounds): errors compactly (E40, E45),
  * anything else with a bounded util.inspect, cut after `bounds.characters` characters. `keys`: see Walk.keys.
+ * `sorted`: E78, with keys and entries in a fixed order and errors with their properties sorted (only to compare
+ * values, see sortedText; messages and printouts show them in their order).
  */
-export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>): string => {
+export const formatBounded =(value: unknown, bounds: PrintBounds, colors: boolean, keys?: Map<object, PropertyKey[]>, sorted = false): string => {
   const options: InspectOptions = {
     depth: bounds.depth,
     maxArrayLength: bounds.maxArrayLength,
@@ -891,7 +1127,10 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
     colors
   }
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
-  const walk: Walk = { bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys }
+  if (sorted) options.sorted = true
+  const walk: Walk = {
+    bounds, ancestors: new Map(), budget: printSettings.budget ? bounds.characters + BUDGET_MARGIN : Infinity, exhausted: false, keys, sorted
+  }
   let printable: unknown
   try {
     printable = prepared(value, 0, walk)
