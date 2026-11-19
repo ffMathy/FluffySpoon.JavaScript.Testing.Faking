@@ -562,7 +562,7 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     if (value !== REAL_READ) return value
     // E95: a matcher's look leaves no trace (see peekGet); E100: when a real call is matched, a look at its arguments
     if (libraryGuard.matching > 0) return peekGet(faceState(face), property)
-    if (libraryGuard.looking !== undefined && looksAt(face)) return lookedPeek(() => peekGet(faceState(face), property))
+    if (libraryGuard.looking !== undefined && looksAt(face)) return lookedGet(faceState(face), property)
     return realGet(faceState(face), property, adjacentHandOut(face), captureStack(get))
   },
   set: function set(target: FaceTarget, property: PropertyKey, value: unknown, receiver: unknown) {
@@ -713,18 +713,17 @@ const configuredPrimitive = (state: SubstituteState, hint: unknown, receiver: un
 const configuredConversion = (state: SubstituteState, key: string, instance: any, receiver: unknown, start: Function): unknown => {
   // E95 (see peekGet); E100: a look at the arguments of a real call (see looksAt), whose answers are looked at too
   const looking = libraryGuard.matching > 0 || (libraryGuard.looking !== undefined && looksAt(state))
-  const peek = <T>(answer: () => T): T => libraryGuard.matching > 0 ? answer() : lookedPeek(answer)
   const property = state.propertySubstitution(key)
   if (property !== undefined) {
     if (!looking) state.addRecord('get', key, undefined, captureStack(start))
-    const method = looking ? peek(() => peekExecute(property)) : execute(property)
+    const method = !looking ? execute(property) : libraryGuard.matching > 0 ? peekExecute(property) : lookedExecute(property)
     return typeof method === 'function' ? Reflect.apply(method, receiver, []) : NO_PRIMITIVE
   }
   const call = state.findCallSubstitution(key, new ArgumentHashes([]), !looking)
   const mimicked = instance !== undefined && !isSubstituteProxy(instance) && hasMember(instance, key) &&
     typeof instance[key] === 'function' && !isDefaultConversion(instance[key])
   if ((call === undefined || call.method === 'auto') && !mimicked) return NO_PRIMITIVE
-  if (looking) return peek(() => peekCall(state, key, [], NO_SELF))
+  if (looking) return libraryGuard.matching > 0 ? peekCall(state, key, [], NO_SELF) : lookedCall(state, key, [], NO_SELF)
   return resolveCall(state, key, [], state.addRecord('call', key, [], captureStack(start)), NO_SELF)
 }
 
@@ -1018,7 +1017,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
       // E95 (see peekCall): with Arg matchers among the arguments it is a setup or a check, which records nothing
       if (RecordedArguments.containsMatchers(rawArgs)) return configureCall(faceState(face), helper, RecordedArguments.forSpecification(rawArgs))
       // E100: a look at the arguments of a real call (see looksAt)
-      if (libraryGuard.matching === 0) return lookedPeek(() => peekHelper(face, helper, rawArgs, thisArg, directArgs))
+      if (libraryGuard.matching === 0) return lookedHelper(face, helper, rawArgs, thisArg, directArgs)
       return peekHelper(face, helper, rawArgs, thisArg, directArgs)
     }
     const direct = directReadingOf(face)
@@ -1106,13 +1105,8 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         if (libraryGuard.matching > 0 || (libraryGuard.looking !== undefined && looksAt(face))) {
           // E95: a matcher's look (see peekGet); with Arg matchers among the arguments, a setup (see peekCall)
           if (RecordedArguments.containsMatchers(rawArgs)) return configureCall(memberState, 'bind', RecordedArguments.forSpecification(rawArgs))
-          const peek = () => {
-            const hashes = new ArgumentHashes(rawArgs)
-            const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, undefined, thisArg)
-            return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', hashes), thisArg, boundArgs)
-          }
           // E100: a look at the arguments of a real call (see looksAt)
-          return libraryGuard.matching === 0 ? lookedPeek(peek) : peek()
+          return libraryGuard.matching === 0 ? lookedBind(face, rawArgs, thisArg, boundArgs) : peekBind(face, rawArgs, thisArg, boundArgs)
         }
         if (RecordedArguments.containsMatchers(rawArgs)) {
           retract(chainHead)
@@ -1149,6 +1143,26 @@ const peekHelper = (face: Face, helper: FunctionHelperKey, rawArgs: any[], thisA
   return entryProxy(memberState.callEntry(helper, hashes))
 }
 
+/** E95: `x.bind(...)` that a matcher's look makes (see peekGet): answered as dualHelper's bind would, leaving no trace. */
+const peekBind = (face: Face, rawArgs: any[], thisArg: unknown, boundArgs: any[]): any => {
+  const memberState = faceState(face)
+  const hashes = new ArgumentHashes(rawArgs)
+  const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, undefined, thisArg)
+  return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', hashes), thisArg, boundArgs)
+}
+
+/*
+ * E100: the peeks of a substitute that the look at the arguments of a real call looks at (see lookedPeek), as functions
+ * of their own: a closure in the traps, invoke and the call/apply helpers themselves would make every operation allocate
+ * its context, also when nothing is looked at.
+ */
+const lookedGet = (state: SubstituteState, key: PropertyKey): any => lookedPeek(() => peekGet(state, key))
+const lookedCall = (state: SubstituteState, key: PropertyKey, args: any[], self: Self): any => lookedPeek(() => peekCall(state, key, args, self))
+const lookedExecute = (substitution: Substitution): any => lookedPeek(() => peekExecute(substitution))
+const lookedHelper = (face: Face, helper: FunctionHelperKey, rawArgs: any[], thisArg: unknown, directArgs: any[] | undefined): any =>
+  lookedPeek(() => peekHelper(face, helper, rawArgs, thisArg, directArgs))
+const lookedBind = (face: Face, rawArgs: any[], thisArg: unknown, boundArgs: any[]): any => lookedPeek(() => peekBind(face, rawArgs, thisArg, boundArgs))
+
 /**
  * The function `x.bind(thisArg, ...boundArgs)` returns (D26). Invoking it is a direct call of x with the bound
  * arguments first and thisArg as `this`. Anything else on it is the result of the call of x's member `bind`:
@@ -1164,7 +1178,7 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
       const value = faceGet(bindEntry, property, get)
       if (value !== REAL_READ) return value
       if (libraryGuard.matching > 0) return peekGet(bindEntry.state, property)
-      if (libraryGuard.looking !== undefined && isLooked(proxy)) return lookedPeek(() => peekGet(bindEntry.state, property)) // E100
+      if (libraryGuard.looking !== undefined && isLooked(proxy)) return lookedGet(bindEntry.state, property) // E100
       return realGet(bindEntry.state, property, bindEntry.adjacentHandOut(), captureStack(get))
     },
     set: function set(_target: unknown, property: PropertyKey, value: unknown) {
@@ -1393,7 +1407,7 @@ const invoke = (
 ): any => {
   if (libraryGuard.matching > 0) return peekCall(state, key, args, self) // E95
   // E100: a look at the arguments of a real call (`subject`: the substitute invoked, see looksAt)
-  if (libraryGuard.looking !== undefined && looksAt(subject)) return lookedPeek(() => peekCall(state, key, args, self))
+  if (libraryGuard.looking !== undefined && looksAt(subject)) return lookedCall(state, key, args, self)
   const read = readSource === TAKE_PENDING_READ ? state.takePendingRead(key) : readSource
 
   if (RecordedArguments.containsMatchers(args)) {
