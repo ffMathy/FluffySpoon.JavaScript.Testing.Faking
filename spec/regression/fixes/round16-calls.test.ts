@@ -36,6 +36,219 @@ const withRetry = (fn: Function): any => function (this: unknown, ...args: unkno
 }
 const callWith = (fn: Function): any => (...args: unknown[]) => fn.call(undefined, ...args)
 
+// ---- E100 (R15-ADV-4): only a matcher's look at the values being matched leaves no trace --------------------------
+
+/** jest's and vitest's asymmetric matchers, as E75 recognises them (the shape, without jest). */
+const asymmetric = (test: (value: any) => unknown): object => ({ $$typeof: Symbol.for('jest.asymmetricMatcher'), asymmetricMatch: test })
+/** sinon's matchers, as E75 recognises them (the shape, without sinon): an object that is not plain, with test and message. */
+class SinonLikeMatcher {
+  constructor(public test: (value: any) => unknown, public message = 'match(fn)') { }
+  and(): void { }
+  or(): void { }
+}
+
+/** Loads a second, independent copy of the library (a duplicate install), as duplicate-copies.test.ts does. */
+const loadSecondCopy = (): typeof import('../../../src') => {
+  const entry = require.resolve('../../../src')
+  const root = path.dirname(entry) + path.sep
+  const saved = new Map<string, NodeModule>()
+  for (const key of Object.keys(require.cache)) {
+    if (key.startsWith(root)) {
+      saved.set(key, require.cache[key]!)
+      delete require.cache[key]
+    }
+  }
+  try {
+    return require(entry)
+  } finally {
+    for (const key of Object.keys(require.cache)) if (key.startsWith(root)) delete require.cache[key]
+    for (const [key, module] of saved) require.cache[key] = module
+  }
+}
+
+test('R15-ADV-4 (E100) calls that the code under test makes from a callback that a predicate invokes are recorded and use up sequence values', t => {
+  const db = Substitute.for<any>()
+  const logger = Substitute.for<any>()
+  const ids = Substitute.for<any>()
+  ids.next().returns(1, 2, 3)
+  // driving a callback API by invoking the callback in a predicate
+  db.query(Arg.any(), Arg.is((callback: Function) => { callback(null, [{ id: 7 }]); return true })).returns(undefined)
+  const seen: unknown[] = []
+  const load = (sql: string) => db.query(sql, (_error: unknown, rows: unknown[]) => {
+    seen.push(ids.next())
+    logger.info('rows', rows.length)
+  })
+  load('a') // the code under test
+  load('b')
+  // cd1bf29: [1, 1], and both checks failed with "received none" (as if the code under test had made none of the calls)
+  t.deepEqual(seen, [1, 2])
+  t.notThrows(() => logger[received](2).info('rows', 1))
+  t.notThrows(() => ids[received](2).next())
+  t.notThrows(() => db.received(1).query('a', Arg.any()))
+
+  // in a check, the callback runs again, and nothing it does is recorded or used up there
+  t.notThrows(() => db.received(2).query(Arg.any(), Arg.is((callback: Function) => { callback(null, []); return true })))
+  t.deepEqual(seen, [1, 2, 3, 3], 'the check\'s callback runs saw the next value without using it up')
+  t.notThrows(() => logger[received](2).info(Arg.all()))
+  t.notThrows(() => ids[received](2).next())
+  t.is(ids.next(), 3)
+
+  // the documented way to drive callbacks, mimicks(), as before
+  const db2 = Substitute.for<any>()
+  const logger2 = Substitute.for<any>()
+  db2.query(Arg.any(), Arg.any()).mimicks((_sql: string, callback: Function) => callback(null, [{ id: 7 }]))
+  db2.query('a', (_error: unknown, rows: unknown[]) => logger2.info('rows', rows.length))
+  t.notThrows(() => logger2[received](1).info('rows', 1))
+})
+
+test('R15-ADV-4 (E100) a predicate runs at every comparison: a callback it invokes runs once per setup the call is compared with', t => {
+  const emitter = Substitute.for<any>()
+  const audit = Substitute.for<any>()
+  // compared with the most recent setup first: it does not match, so the older one is compared too
+  emitter.on('data', Arg.is((listener: Function) => { listener('first'); return true })).returns('older')
+  emitter.on('data', Arg.is((listener: Function) => { listener('second'); return false })).returns('newer')
+  t.is(emitter.on('data', (chunk: string) => audit.write(chunk)), 'older')
+  t.notThrows(() => audit.received(1).write('second'))
+  t.notThrows(() => audit.received(1).write('first'))
+  t.notThrows(() => audit.received(2).write(Arg.all()))
+})
+
+test('R15-ADV-4 (E100) the predicate\'s own look at substitute arguments, and at what they answer, leaves no trace', t => {
+  const repo = Substitute.for<any>()
+  const user = Substitute.for<any>()
+  const address = Substitute.for<any>()
+  user.name.returns('ann', 'bob')
+  user.address.returns(address)
+  address.city.returns('Oslo', 'Rome')
+  user.load().returns(address)
+  repo.save(Arg.is(u => u.name === 'ann' && u.address.city === 'Oslo' && u.load().city === 'Oslo' &&
+    u.profile.tags.first() !== undefined && u.settings.get.call(u.settings, 'x') !== undefined)).returns('saved')
+  t.is(repo.save(user), 'saved') // the code under test
+  t.is(repo.save(user), 'saved', 'the predicate saw the same values again')
+  t.notThrows(() => repo.received(2).save(user))
+  for (const check of [() => user.didNotReceive().name, () => user.didNotReceive().address, () => user.didNotReceive().load(),
+    () => user.didNotReceive().profile, () => user.profile.didNotReceive().tags, () => user.didNotReceive().settings,
+    () => address.didNotReceive().city]) t.notThrows(check)
+  t.is(user.name, 'ann', 'the first real read gets the first value')
+  t.is(address.city, 'Oslo')
+
+  // substitutes inside the argument: in plain objects, arrays, Maps, Sets and class instances, and a prototype
+  class Box { constructor(public item: unknown) { } }
+  const base = Substitute.for<any>()
+  class Derived extends base.Base { }
+  const store = Substitute.for<any>()
+  const item = Substitute.for<any>()
+  item.id.returns(1, 2)
+  store.put(Arg.is(v => v.list[0].id === 1 && v.map.get('k').id === 1 && [...v.set][0].id === 1 &&
+    v.box.item.id === 1 && v.nested.deeper.item.id === 1)).returns('stored')
+  t.is(store.put({ list: [item], map: new Map([['k', item]]), set: new Set([item]), box: new Box(item), nested: { deeper: { item } } }), 'stored')
+  store.keep({ owner: Arg.is((owner: any) => owner.id === 1) }).returns('kept')
+  t.is(store.keep({ owner: item }), 'kept')
+  store.derive(Arg.is(value => value.tag === undefined || true)).returns('derived')
+  t.is(store.derive(new Derived()), 'derived')
+  t.notThrows(() => item.didNotReceive().id)
+  t.notThrows(() => base.Base.prototype.didNotReceive().tag)
+  t.is(item.id, 1)
+
+  // assignments the predicate makes on a looked substitute are not made (as in checks, E95)
+  const target = Substitute.for<any>()
+  const instance = { count: 1 }
+  target[mimick](instance)
+  store.touch(Arg.is(v => { v.count = 9; return true })).returns('touched')
+  t.is(store.touch(target), 'touched')
+  t.is(instance.count, 1)
+  t.notThrows(() => target.didNotReceive().count = Arg.any())
+})
+
+test('R15-ADV-4 (E100) a substitute that is not among the values being matched is recorded when a predicate reads it, as at d417925', t => {
+  const repo = Substitute.for<any>()
+  const config = Substitute.for<any>()
+  config.limit.returns(5, 6)
+  repo.find(Arg.is(n => n < config.limit)).returns('found')
+  t.is(repo.find(3), 'found') // the code under test
+  t.notThrows(() => config.received(1).limit)
+  t.is(config.limit, 6, 'the predicate\'s read used up the first value')
+  // in a check, nothing at all is recorded (the look of a check, E95)
+  t.notThrows(() => repo.received(1).find(Arg.is(n => n < config.limit)))
+  t.notThrows(() => config.received(2).limit)
+})
+
+test('R15-ADV-4 (E100) matchers of test runners and sinon: their look at the arguments leaves no trace, a callback they invoke is recorded', t => {
+  const user = Substitute.for<any>()
+  user.id.returns('u1', 'u2')
+  const audit = Substitute.for<any>()
+  const api = Substitute.for<any>()
+  api.send(asymmetric(u => u.id === 'u1')).returns('runner')
+  api.post(new SinonLikeMatcher(u => u.id === 'u1')).returns('sinon')
+  // an Arg matcher inside a runner matcher (E96): the runner's equality asks it, in the same look
+  api.put({ user: asymmetric(value => Arg.is((u: any) => u.id === 'u1').asymmetricMatch(value)) } as any).returns('nested')
+  t.is(api.send(user), 'runner')
+  t.is(api.post(user), 'sinon')
+  t.is(api.put({ user }), 'nested')
+  t.notThrows(() => user.didNotReceive().id)
+  t.is(user.id, 'u1')
+
+  api.subscribe(asymmetric((listener: Function) => { listener('event'); return true })).returns('subscribed')
+  api.listen(new SinonLikeMatcher((listener: Function) => { listener('event'); return true })).returns('listening')
+  t.is(api.subscribe((event: string) => audit.log(event)), 'subscribed')
+  t.is(api.listen((event: string) => audit.log(event)), 'listening')
+  t.notThrows(() => audit.received(2).log('event'))
+})
+
+test('R15-ADV-4 (E100) re-entrancy: a real call made from a predicate\'s callback is matched in a look of its own, and the outer look applies again after it', t => {
+  const service = Substitute.for<any>()
+  const repo = Substitute.for<any>()
+  const user = Substitute.for<any>()
+  const order = Substitute.for<any>()
+  const metrics = Substitute.for<any>()
+  user.name.returns('ann')
+  order.total.returns(10, 20)
+  repo.save(Arg.is(o => o.total === 10)).returns('saved')
+  service.run(user, Arg.is((callback: Function) => { callback(); return true })).returns('ran')
+  const result = service.run(user, () => {
+    // the code under test, inside the callback: a real call matched against setups with a predicate of their own
+    if (repo.save(order) !== 'saved') throw new Error('not answered')
+    metrics.count()
+    void user.name // a substitute the outer look looks at: not recorded, as the predicate's own reads are not
+  })
+  t.is(result, 'ran')
+  t.notThrows(() => repo.received(1).save(order))
+  t.notThrows(() => metrics.received(1).count())
+  t.notThrows(() => order.didNotReceive().total)
+  t.is(order.total, 10)
+  t.notThrows(() => user.didNotReceive().name)
+
+  // a predicate whose callback calls the same member again (recursion through the same setups)
+  const tree = Substitute.for<any>()
+  const visits: number[] = []
+  tree.visit(Arg.is((node: { depth: number, next: Function }) => { node.next(); return true })).returns('visited')
+  const visit = (depth: number): unknown => tree.visit({ depth, next: () => { visits.push(depth); if (depth < 3) visit(depth + 1) } })
+  t.is(visit(1), 'visited')
+  t.deepEqual(visits, [1, 2, 3])
+  t.notThrows(() => tree.received(3).visit(Arg.any()))
+})
+
+test('R15-ADV-4 (E100) two copies of the library: a substitute of the other copy among the arguments is looked at, one outside them is recorded', t => {
+  const copyB = loadSecondCopy()
+  const user = copyB.Substitute.for<any>()
+  user.name.returns('ann', 'bob')
+  const audit = copyB.Substitute.for<any>()
+  const repo = Substitute.for<any>()
+  repo.save(Arg.is(u => u.name === 'ann'), Arg.is((callback: Function) => { callback(); return true })).returns('saved')
+  t.is(repo.save(user, () => audit.log('saved')), 'saved')
+  t.notThrows(() => user[copyB.didNotReceive]().name)
+  t.is(user.name, 'ann')
+  t.notThrows(() => audit[copyB.received](1).log('saved'))
+  // and the other way around: a substitute of this copy in a call on the other copy's substitute
+  const own = Substitute.for<any>()
+  own.id.returns(1, 2)
+  const otherRepo = copyB.Substitute.for<any>()
+  otherRepo.save(copyB.Arg.is((value: any) => value.id === 1)).returns('saved by B')
+  t.is(otherRepo.save(own), 'saved by B')
+  t.notThrows(() => own.didNotReceive().id)
+  t.is(own.id, 1)
+})
+
 // ---- E101 (R15V-1): a throwing answer is noted without catching it ------------------------------------------------
 
 test('R15V-1 (E101) a debugger that pauses on caught exceptions stops once per throwing call, where it was thrown', t => {

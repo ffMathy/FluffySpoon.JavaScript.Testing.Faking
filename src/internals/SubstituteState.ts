@@ -8,6 +8,9 @@ import {
   lastHashShapeUses, lastHashWasApproximate, narrowHashArguments, newOperation, refinedHashArguments, stillWideIn
 } from './utilities'
 
+import { libraryGuard } from './utilities/Guard'
+import { closeLook, openLook } from './utilities/Look'
+
 export { pathArguments } from './Paths'
 
 let substitutionOrder = 0
@@ -451,8 +454,11 @@ class CallSubstitutions {
     return bucket?.find(substitution => hashes.mayEqual(substitution.args!.value, bucket.length) && substitution.args!.equals(args))
   }
 
-  /** The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one. */
-  public match(hashes: ArgumentHashes): Substitution | undefined {
+  /**
+   * The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one.
+   * `real`: for a real call of the code under test (E100, see Look).
+   */
+  public match(hashes: ArgumentHashes, real = false): Substitution | undefined {
     const actualArguments = hashes.args
     let best: Substitution | undefined
     if (this._literal.size > 0) {
@@ -476,10 +482,20 @@ class CallSubstitutions {
     }
 
     const withMatchers = this._withMatchers
-    for (let index = withMatchers.length - 1; index >= 0; index--) {
-      const candidate = withMatchers[index]
-      if (best !== undefined && candidate.rank >= best.rank) continue
-      if (answers(candidate) && candidate.args!.matches(actualArguments)) best = candidate
+    if (withMatchers.length === 0) return best
+    // E100 (R15-ADV-4): one guard for the matchers of the whole pass. A real call opens the look of its arguments (see
+    // Look); anything else (a setup's registration, a matcher's look itself) looks with nothing recorded at all.
+    const look = real && libraryGuard.matching === 0 ? openLook(actualArguments) : undefined
+    if (look === undefined) libraryGuard.matching++
+    try {
+      for (let index = withMatchers.length - 1; index >= 0; index--) {
+        const candidate = withMatchers[index]
+        if (best !== undefined && candidate.rank >= best.rank) continue
+        if (answers(candidate) && candidate.args!.matches(actualArguments, true)) best = candidate
+      }
+    } finally {
+      if (look === undefined) libraryGuard.matching--
+      else closeLook(look)
     }
     return best
   }
@@ -816,8 +832,8 @@ export class SubstituteState {
    * The substitution that answers a call: the most specific class wins (all-literal, then predicates,
    * then Arg.all()), and within a class the most recently configured one wins.
    */
-  public findCallSubstitution(key: PropertyKey, actualArguments: ArgumentHashes): Substitution | undefined {
-    return this._callSubstitutions.get(key)?.match(actualArguments)
+  public findCallSubstitution(key: PropertyKey, actualArguments: ArgumentHashes, real = false): Substitution | undefined {
+    return this._callSubstitutions.get(key)?.match(actualArguments, real)
   }
 
   // ---- auto-substitutes -----------------------------------------------------------------------
