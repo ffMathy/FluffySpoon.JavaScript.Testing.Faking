@@ -14,10 +14,13 @@ export function optional<T>(sub: SubstituteOf<T | undefined>): SubstituteOf<T | 
 export function nullable<T>(sub: SubstituteOf<T | null>): SubstituteOf<T | null> { return sub }
 export class OptionalFixture<T> { sub: SubstituteOf<T | undefined> = Substitute.for<T | undefined>() }
 
-// A member or check view of a constrained type parameter: annotate it with the constraint's types.
+// A member or check view of a constrained type parameter: annotate it with the constraint's types, or take the check
+// view from the substitute typed as the constraint's substitute. (Annotating a whole check view as
+// `ReturnType<SubstituteOf<Calculator>['received']>` works from TypeScript 3.9 on; 3.6 reports TS2589 for it.)
 export function member<T extends Calculator>(sub: SubstituteOf<T>): SubstituteOf<Calculator>['add'] { return sub.add }
-export function view<T extends Calculator>(sub: SubstituteOf<T>): ReturnType<SubstituteOf<Calculator>['received']> {
-  return sub.received()
+export function view<T extends Calculator>(sub: SubstituteOf<T>) {
+  const calculator: SubstituteOf<Calculator> = sub
+  return calculator.received()
 }
 export function viewMember<T extends Calculator>(sub: SubstituteOf<T>): ReturnType<SubstituteOf<Calculator>['received']>['add'] {
   return sub.received().add
