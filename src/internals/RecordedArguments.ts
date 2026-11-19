@@ -451,10 +451,10 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
   if (expected === actual || comparing.some(([e, a]) => e === expected && a === actual)) return MATCHES
 
   const container = expected as object
+  let pairs: Array<[unknown, unknown]>
   try {
     if (typeof actual !== 'object' || actual === null || isArgMatcher(actual)) return DIFFERS
     if (Array.isArray(container) !== Array.isArray(actual) || Object.getPrototypeOf(container) !== Object.getPrototypeOf(actual)) return DIFFERS
-    let pairs: Array<[unknown, unknown]>
     if (Array.isArray(container)) {
       const items = actual as unknown[]
       const restIndex = container.length > 0 && isAllArguments(container[container.length - 1]) ? container.length - 1 : -1
@@ -467,22 +467,26 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
       if (keys.length !== actualKeys.length || !keys.every(key => actualKeys.indexOf(key) !== -1)) return DIFFERS
       pairs = keys.map((key): [unknown, unknown] => [(container as any)[key], (actual as any)[key]])
     }
-    comparing.push([expected, actual])
-    try {
-      for (const [expectedItem, actualItem] of pairs) {
-        const evaluation = matchNested(expectedItem, actualItem, matcherContainers, comparing, guarded)
-        if (!evaluation.matches) return evaluation
-      }
-    } finally {
-      comparing.pop()
-    }
-    return MATCHES
   } catch {
     // E93: keys or items that cannot be read (now): compared as such values are, by identity, which was decided above
     // before any key was listed (they are not the same). E102 (R15V-2): without comparing them again, which would read
     // a throwing getter of the actual value a second time (deep equality cannot hold for a container with a matcher).
     return DIFFERS
   }
+  // E117 (R16-ADV-8): the items are compared outside the catch above, which is only for reading and listing this
+  // container and the value: a usage error of a matcher inside (an async Arg.is predicate's TypeError, a
+  // SubstituteException) is thrown as at the top level. A predicate that throws is a non-match there as anywhere
+  // (see evaluateArgument), and each nested container's reads are guarded by its own comparison.
+  comparing.push([expected, actual])
+  try {
+    for (const [expectedItem, actualItem] of pairs) {
+      const evaluation = matchNested(expectedItem, actualItem, matcherContainers, comparing, guarded)
+      if (!evaluation.matches) return evaluation
+    }
+  } finally {
+    comparing.pop()
+  }
+  return MATCHES
 }
 
 /**

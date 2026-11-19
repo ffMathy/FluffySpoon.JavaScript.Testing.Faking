@@ -1,10 +1,25 @@
-import test from 'ava'
+import test, { ExecutionContext } from 'ava'
 
-import { Substitute, Arg } from '../../../src'
+import { Substitute, Arg, received, didNotReceive } from '../../../src'
+import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
 
 // Round 17: the calls-and-arguments part of the round-16 findings (R16-ADV-2, R16FE-5, R16-ADV-8, R16V-1), decided in
 // the fix spec as E109, E116, E117 and E118. The timing tests of E109 are in round17-calls-hashing.test.ts (serial run).
+
+const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
+
+/** The message of the SubstituteException that `check` throws (failing the test if it throws none or another error). */
+const failureOf = (t: ExecutionContext, check: () => void, label?: string): string => {
+  try {
+    check()
+  } catch (error) {
+    if (error instanceof SubstituteException) return plain(error.message)
+    throw error
+  }
+  t.fail(`the check passed, but it should have failed${label === undefined ? '' : `: ${label}`}`)
+  return ''
+}
 
 /** Runs `run` with the memos of the argument hash, the search for matchers and the look (E109) off. */
 const withoutMemos = <T>(run: () => T): T => {
@@ -187,4 +202,50 @@ test('R16-ADV-2 (E109) the E100 cases are unchanged: two copies, re-entrancy, ru
   t.is(db.run((log: any) => log.write({ user, table })), 'ran')
   t.notThrows(() => audit.received(1).write(Arg.any()))
   t.notThrows(() => user.didNotReceive().id)
+})
+
+// ---- E117 (R16-ADV-8): an async predicate nested in an object or array is a usage error -----------------------------
+
+const asyncUsage = { instanceOf: TypeError, message: /returned a promise \(or another thenable\), but an Arg\.is predicate must return whether the value matches synchronously/ }
+
+test('R16-ADV-8 (E117) an async Arg.is predicate inside an object or an array throws the documented TypeError, as at the top level', async t => {
+  const rejections: unknown[] = []
+  const onRejection = (reason: unknown) => { rejections.push(reason) }
+  process.on('unhandledRejection', onRejection)
+  try {
+    // in the call of the code under test that a setup with it is compared with
+    const repo = Substitute.for<any>()
+    repo.save({ id: Arg.is((async () => true) as any) }).returns(1)
+    t.throws(() => repo.save({ id: 1 }), asyncUsage)
+    repo.list([Arg.is((async () => true) as any)]).returns(2)
+    t.throws(() => repo.list([1]), asyncUsage)
+    repo.deep({ a: [{ b: Arg.is((async (value: any) => (await Promise.resolve(value)).missing.field) as any) }] }).returns(3)
+    t.throws(() => repo.deep({ a: [{ b: 1 }] }), asyncUsage)
+    // in checks, of any form
+    const service = Substitute.for<any>()
+    service.save({ id: 1 })
+    service.list([1, 2])
+    t.throws(() => service.received(1).save({ id: Arg.is((async () => true) as any) }), asyncUsage)
+    t.throws(() => service.didNotReceive().save({ id: Arg.is((async () => false) as any) }), asyncUsage)
+    t.throws(() => service[received](1).list([1, Arg.is((async () => true) as any)]), asyncUsage)
+    t.throws(() => service[didNotReceive]().list([Arg.is((async () => true) as any), Arg.all()]), asyncUsage)
+    await new Promise(resolve => setTimeout(resolve, 20))
+    t.deepEqual(rejections, [], 'the rejected promises were handled')
+  } finally {
+    process.removeListener('unhandledRejection', onRejection)
+  }
+})
+
+test('R16-ADV-8 (E117) a nested predicate that throws is still a non-match, and a throwing getter of the value is read as often as before (E102)', t => {
+  const repo = Substitute.for<any>()
+  repo.save({ id: Arg.is(() => { throw new Error('boom') }) }).returns(1)
+  t.not(repo.save({ id: 1 }), 1)
+  const message = failureOf(t, () => repo.received(1).save({ id: Arg.is(() => { throw new Error('boom') }) }))
+  t.true(message.includes('boom'), message)
+  let reads = 0
+  const value = { get id() { reads++; throw new Error('not loaded') } }
+  const other = Substitute.for<any>()
+  other.load({ id: Arg.any() }).returns('loaded')
+  t.not(other.load(value), 'loaded')
+  t.is(reads, 2, 'as at d417925 and 8be3a70: once by the comparison with the setup, once by the hash (E102)')
 })
