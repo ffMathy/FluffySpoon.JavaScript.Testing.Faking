@@ -2,7 +2,7 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
-import { pathArguments, relativePath } from './Paths'
+import { pathArguments, recordLabelContext, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
@@ -256,6 +256,18 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
     }
     return prefix
   }
+  // E99 (R15FE-5): received calls are shown with the call that a substitute shared by a setup with matchers was handed
+  // out to, when there is one (see Paths.relativeRecordPath); setups keep the matchers
+  const recordPrefixes = new Map<SubstituteState, string>()
+  const labels = recordLabelContext(RecordedArguments.literalsEqual)
+  const recordPrefixOf = (owner: SubstituteState): string => {
+    let prefix = recordPrefixes.get(owner)
+    if (prefix === undefined) {
+      prefix = relativeRecordPath(owner, state, labels)
+      recordPrefixes.set(owner, prefix)
+    }
+    return prefix
+  }
 
   const lines: string[] = []
   // D26: an invocation through call/apply is shown once, as its direct-call reading
@@ -266,7 +278,7 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
     shown.sort((a, b) => a.record.seq - b.record.seq)
     const capped = capNested(shown, state)
     for (const { record, owner } of capped.shown) {
-      const name = memberWithin(prefixOf(owner), record.key)
+      const name = memberWithin(recordPrefixOf(owner), record.key)
       const suffix = record.kind === 'call'
         ? formatArguments(record.args, colors) + describeOtherReading(record, colors)
         : record.kind === 'set' ? ` = ${formatValue(record.args?.[0], colors)}` : ''

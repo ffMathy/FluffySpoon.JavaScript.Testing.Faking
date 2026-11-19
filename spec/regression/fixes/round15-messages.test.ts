@@ -150,8 +150,10 @@ test('R14FE-5 (E97) every form of a check that finds no record of the member, an
   const db = Substitute.for<any>()
   db('users').where('id', 1).first()
   const first = failureOf(t, () => db[received](2).first())
+  // E108 (round 16): the remedy names every method on the way (the direct call and where), not only the first step
   t.true(first.includes("first was not called on @Substitute itself, but on a substitute further down: @Substitute('users').where('id', 1).first(...). " +
-    fluentRemedy('')), first)
+    'A call that is not configured answers a new substitute. For a fluent API, make each method on the way return the substitute ' +
+    '(sub(Arg.all()).returns(sub) and sub.where(Arg.all()).returns(sub)) or mimick an instance whose methods return this.'), first)
   const where = failureOf(t, () => db.received().where('id', 1))
   t.true(where.includes("but on a substitute further down: @Substitute('users').where(...)."), where)
 

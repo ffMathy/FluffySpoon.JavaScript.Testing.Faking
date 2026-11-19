@@ -37,6 +37,19 @@ export type CallCountMismatch = {
   listed: ListedCall[]
   /** Lines after the listing that explain a likely mistake. */
   hints?: string[]
+  /** E99: how the substitutes of the listed records are shown, when not by their paths (see RecordLabels). */
+  recordLabels?: RecordLabels
+}
+
+/**
+ * E99 (R15FE-5): how the substitutes that listed records belong to are shown (see Paths.recordPath): asked while the
+ * message is built, so that the roots are numbered there when the message numbers them (E52).
+ */
+export type RecordLabels = {
+  /** The path of the substitute that a listed record belongs to: its owner, or the substitute checked when undefined. */
+  path(owner: { readonly path: string } | undefined): string
+  /** The lines under the listing about those substitutes (`owners`: of the records listed, each once). */
+  notes(owners: ReadonlyArray<{ readonly path: string } | undefined>): string[]
 }
 
 const kindPhrase = (kind: ExpectedKind, count: number | undefined): string => {
@@ -472,6 +485,8 @@ export class SubstituteException extends Error {
       .add('.')
     if (mismatch.explanation !== undefined) textBuilder.add(` ${mismatch.explanation}`)
 
+    /** E99: the lines under the listing (see RecordLabels). */
+    let notes: string[] = []
     if (mismatch.listed.length > 0) {
       // an assignment assertion lists only the assignments, the others list reads and calls
       const heading = expected.kind === 'set' ? 'All property assignments to' : 'All property or method calls to'
@@ -479,12 +494,25 @@ export class SubstituteException extends Error {
       const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
       let listedCount = 0
       let listedCharacters = 0
+      // E99: the paths of the substitutes that the records shown belong to, each built once
+      const labels = mismatch.recordLabels
+      const recordPaths = new Map<{ readonly path: string } | undefined, string>()
+      const labelOf = (owner: { readonly path: string } | undefined): string => {
+        let label = recordPaths.get(owner)
+        if (label === undefined) {
+          const path = labels!.path(owner)
+          label = key === SELF ? path : `${path}.${keyToString(key)}`
+          recordPaths.set(owner, label)
+        }
+        return label
+      }
       for (const listed of shown) {
         if (listedCharacters >= MAX_LISTED_CHARACTERS) break
         const style = (part: TextPart) => listed.matches ? part.faint() : part.bold()
         const call = describeRecord(listed.record, print, colors, deeper)
         // E81: a record of one of several substitutes is shown with that substitute's own path
-        const recordPath = listed.owner === undefined ? memberPath : key === SELF ? listed.owner.path : `${listed.owner.path}.${keyToString(key)}`
+        const recordPath = labels !== undefined ? labelOf(listed.owner)
+          : listed.owner === undefined ? memberPath : key === SELF ? listed.owner.path : `${listed.owner.path}.${keyToString(key)}`
         if (alike === undefined) alike = printedAlike(mismatch, listed, print, colors, deeper)
         textBuilder.newLine().add('› ')
           .add(listed.matches ? '✔ ' : '✘ ', style)
@@ -500,9 +528,10 @@ export class SubstituteException extends Error {
       const hidden = mismatch.listed.length - listedCount
       if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
+      if (labels !== undefined) notes = labels.notes([...recordPaths.keys()])
     }
 
-    const hints = mismatch.hints ?? []
+    const hints = notes.length > 0 ? [...notes, ...mismatch.hints ?? []] : mismatch.hints ?? []
     if (hints.length > 0) {
       if (mismatch.listed.length === 0) textBuilder.newLine()
       for (const hint of hints) textBuilder.add(hint).newLine()
