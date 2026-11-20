@@ -33,6 +33,12 @@ export type LibraryGuard = {
   rootNumbers?: Map<object, number>
   /** E71: how many root labels the copies have shown (see Paths.rootLabelCount). */
   rootLabels: number
+  /**
+   * E113 (R16V-3): the functions that `x.bind(...)` gave on a substitute of any copy (see the engine's createBoundProxy).
+   * They answer the library's substitute marker, but they are no substitute. Created by the first copy that needs it
+   * (copies of earlier versions do not mark theirs).
+   */
+  boundFunctions?: WeakSet<object>
 }
 
 /**

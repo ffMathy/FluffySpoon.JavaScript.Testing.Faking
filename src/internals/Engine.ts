@@ -493,7 +493,7 @@ const takeAnswerSource = (): Substitution | object | undefined => {
  * this copy (see boundProxies) is no substitute: what gave it.
  */
 const otherAnswer = (value: unknown, source: Substitution | object | undefined): object =>
-  typeof value === 'function' && types.isProxy(value) && !boundProxies.has(value) ? value : source ?? CONFIGURED
+  typeof value === 'function' && types.isProxy(value) && !isBoundFunction(value) ? value : source ?? CONFIGURED
 
 /**
  * E104 (R15-ADV-8): the functions that `x.bind(...)` gave on a substitute of this copy (see createBoundProxy), with the
@@ -503,9 +503,27 @@ const otherAnswer = (value: unknown, source: Substitution | object | undefined):
  */
 const boundProxies = new WeakMap<object, Face>()
 
-/** E89, E104: whether a value is a substitute of another copy of the library (the caller knows it is no face of this one). */
+/**
+ * E113 (R16V-3): the functions that `x.bind(...)` gave on a substitute of any copy of the library that marks them (see
+ * LibraryGuard.boundFunctions), these among them: kept on the guard that the copies share, so that a function bound from a
+ * substitute of another copy is no substitute either, which is found out without touching it.
+ */
+const boundFunctions: WeakSet<object> = ((): WeakSet<object> => {
+  const shared = libraryGuard.boundFunctions
+  if (shared instanceof WeakSet) return shared
+  const own = new WeakSet<object>()
+  try {
+    libraryGuard.boundFunctions = own
+  } catch { /* a guard that cannot take it: this copy's own */ }
+  return own
+})()
+
+/** E104, E113: whether a value is a function that `x.bind(...)` gave on a substitute (of any copy that marks them). */
+const isBoundFunction = (value: unknown): boolean => typeof value === 'function' && boundFunctions.has(value)
+
+/** E89, E104, E113: whether a value is a substitute of another copy of the library (the caller knows it is no face of this one). */
 const isOtherCopySubstitute = (value: unknown): value is Function =>
-  typeof value === 'function' && isSubstituteProxy(value) && !boundProxies.has(value)
+  typeof value === 'function' && isSubstituteProxy(value) && !boundFunctions.has(value)
 
 /*
  * E99 (R15FE-5): after a nested setup through a call with matchers (`io.to(Arg.any()).emit(Arg.all()).returns(true)`), or
@@ -1311,6 +1329,7 @@ const createBoundProxy = (face: Face, bindEntry: AutoEntry, thisArg: unknown, bo
     }
   })
   boundProxies.set(proxy, face) // E104
+  boundFunctions.add(proxy) // E113
   return proxy
 }
 
@@ -1434,7 +1453,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     // substitute itself needs it: the string assertion forms, configured calls and nested setups.
     const delegate = hasMember(mimicked.instance, key) ||
       !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
-    const value = delegate ? mimicked.instance[key] : undefined
+    const value = delegate ? readMimicked(state, mimicked.instance, key, chainCandidate, site) : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
     if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
       return handOutConfigured(fromMimicked(value, mimicked.instance, state), linkChain(state.addRecord('get', key, undefined, site), chainCandidate), state)
@@ -1446,6 +1465,22 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
   const entry = state.propertyEntry(key)
   entry.handOut(record)
   return entryProxy(entry)
+}
+
+/**
+ * E119 (R16V-4): a read of a member of the mimicked instance (see realGet). When the instance's getter throws, the read is
+ * recorded and noted as THREW, as a mimicked method that throws is (E103), so that a check through it is E88's usage
+ * error (E106); E101: without catching, so that the error goes on from where it was thrown.
+ */
+const readMimicked = (state: SubstituteState, instance: any, key: PropertyKey, chainCandidate: CallRecord | undefined, site: StackHolder): unknown => {
+  let read = false
+  try {
+    const value = instance[key]
+    read = true
+    return value
+  } finally {
+    if (!read) state.noteConfiguredAnswer(linkChain(state.addRecord('get', key, undefined, site), chainCandidate), THREW)
+  }
 }
 
 /**
@@ -2255,7 +2290,7 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
     const values = answer.values.map(value => formatValue(value, false)).join(', ')
     const bound = answer.method === 'returns' && answer.values.length === 1 ? boundProxies.get(answer.values[0]) : undefined
     if (bound !== undefined) instead = `Check the calls of the member it is bound from instead (for example ${boundMemberCheck(bound)})`
-    const why = bound !== undefined
+    const why = bound !== undefined || (answer.method === 'returns' && answer.values.length === 1 && isBoundFunction(answer.values[0]))
       ? ', a bound function, which is not a substitute'
       : answer.method === 'returns' && answer.values.length > 1
         ? ', and the value it answered is not a substitute' // (a sequence: the call got one of them)
