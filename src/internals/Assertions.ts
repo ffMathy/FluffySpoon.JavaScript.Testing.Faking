@@ -5,7 +5,7 @@ import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind, RecordLabels } from './SubstituteException'
 import { RecordLabelContext, SameArguments, codeMember, codePath, recordLabelContext, recordPath, sharedNotes } from './Paths'
 import { CallRecord } from './CallRecord'
-import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
+import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
 import { isSubstituteProxy } from '../shared'
 import { plural, truncateText } from './utilities'
@@ -474,8 +474,8 @@ export const cancelDeferredReportOf = (matcherStart: Function): void => {
   const read = frameOfStack(latest.site)
   const matcher = currentFrame(matcherStart)
   if (read === null || matcher === null || !sameExpression(read, matcher)) return
-  if (typeof read.line !== 'number' || read.line !== matcher.line ||
-    typeof read.column !== 'number' || typeof matcher.column !== 'number' || matcher.column <= read.column) return
+  // E125: the same line of the source, where Node.js has a source map (see CallSite.sameLineAfter)
+  if (!sameLineAfter(read, matcher)) return
   settle(latest)
   latestDeferred = undefined
 }

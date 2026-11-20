@@ -3,7 +3,7 @@ import { inspect, InspectOptions, types } from 'util'
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
-import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
+import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
@@ -379,9 +379,18 @@ const continuedChain = (candidate: CallRecord | undefined, current: () => Frame 
   return continuesExpression(candidate, from, current()) ? candidate : undefined
 }
 
-/** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
+/**
+ * Links a new record to the candidate if it continues the candidate's expression (the record has its frame). E126
+ * (R17-ADV-11): a candidate that handed out the substitute itself is linked for later, and whether the record continues
+ * its expression is decided only when a setup or a check follows the chain back (see CallRecord.linkToSelfHandOut), so
+ * that the calls of a fluent method read no frames.
+ */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
   if (candidate === undefined) return record
+  if (handedOutItself(candidate)) {
+    record.linkToSelfHandOut(candidate)
+    return record
+  }
   // (the candidate's frame first: it is the one read last, which is kept, see CallSite.frameOfStack)
   const from = candidate.frame
   if (continuesExpression(candidate, from, record.frame)) record.chainPrevious = candidate
@@ -391,14 +400,11 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
 /**
  * D25: whether the operation at `frame` continues the expression of `candidate` (at `from`), an adjacent hand-out. E111: a
  * hand-out of the substitute that was called itself (see handOutConfigured) only when the operation is on the same line,
- * after the call: such a substitute is where the next statement starts, too (`server.on('close', listener)`, then
- * `server.received(1).on('error', Arg.any())`), and a statement before it is no part of its expression (E39).
+ * after the call (see CallRecord.continuesSelfHandOut).
  */
 const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
-  if (!sameExpression(from, frame)) return false
-  if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return true
-  return from !== null && frame !== null && typeof from.line === 'number' && from.line === frame.line &&
-    typeof from.column === 'number' && typeof frame.column === 'number' && from.column < frame.column
+  if (!handedOutItself(candidate)) return sameExpression(from, frame)
+  return continuesSelfHandOut(from, frame)
 }
 
 const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHandOut()
@@ -571,13 +577,22 @@ const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, s
   face.noteConfiguredHandOut(record, owner, shared)
   // E111: the substitute itself (see continuesExpression)
   if ((face instanceof AutoEntry ? face.materializedState : face) === owner) {
-    record.handedOutItself = true
+    latestSelfHandOut = record.seq
     selfHandOutCount++
   }
 }
 
 /** E111: how many hand-outs of the substitute that was called itself were made (see continuesExpression), none as a rule. */
 let selfHandOutCount = 0
+/**
+ * E111, E126: the sequence number of the record of the latest such hand-out. A chain candidate is always the latest
+ * operation of all (an adjacent hand-out), so this tells whether it handed out the substitute itself, with no field on
+ * the records (the record of a fluent call is no larger than before E111) and no reference that keeps one alive (E127).
+ */
+let latestSelfHandOut = 0
+
+/** E111: whether `candidate`, an adjacent hand-out, handed out the substitute it was made on itself (see handOutShared). */
+const handedOutItself = (candidate: CallRecord): boolean => selfHandOutCount !== 0 && candidate.seq === latestSelfHandOut
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,

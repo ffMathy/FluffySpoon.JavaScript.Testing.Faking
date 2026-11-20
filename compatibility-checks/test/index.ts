@@ -215,6 +215,33 @@ test.describe('Verifies test runner compatibility', () => {
     }
   })
 
+  // Round 18 (R17FE-5, E125): tsx puts the whole file on one line; the line rules must still follow the source's lines
+  // (test-runners/tsx-lines). Each run must give what the same checks give with a statement per line.
+  test.describe('tsx', () => {
+    const documented = {
+      results: {
+        'map didNotReceive on the next line': 'throws: Call count mismatch in @Substitute.set',
+        'map received(1) on the next line': 'passes',
+        'mimicked on() then didNotReceive on the next line': 'throws: Call count mismatch in @Substitute.on',
+        'stored handle, didNotReceive on a later line': 'throws: Call count mismatch in @Substitute.emit',
+        'check through io.to(room-b) on one line': "throws: Call count mismatch in @Substitute.to('room-b').emit",
+        'check through io.to(room-b) over two lines': 'passes'
+      },
+      reported: ['Call count mismatch in @Substitute.m']
+    }
+    const runs = [
+      'node --import tsx test-runners/tsx-lines/checks.ts',
+      'node --require tsx/cjs test-runners/tsx-lines/checks.ts',
+      'node --import tsx test-runners/tsx-lines/checks.mts'
+    ]
+    for (const command of runs) {
+      test.it(`R17FE-5 the line rules follow the source's lines under tsx (${command})`, () => {
+        const output = execSync(command, { env: testRunnerEnvironment(), stdio: 'pipe' }).toString()
+        assert.deepStrictEqual(JSON.parse(output), documented)
+      })
+    }
+  })
+
   testRunners.forEach(testRunner => {
     test.describe(testRunner.name, () => {
       test.it(testRunner.title ?? 'reports the Substitute exception', () => {

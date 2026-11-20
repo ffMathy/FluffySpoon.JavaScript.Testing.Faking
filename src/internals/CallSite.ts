@@ -337,3 +337,112 @@ export const sameExpression = (a: Frame | null, b: Frame | null): boolean => {
   if (a === null || b === null) return a === b
   return a.file === b.file && a.enclosing === b.enclosing
 }
+
+/** What Node.js' module.findSourceMap gives (Node.js 12.17+ and 13.7+), as far as it is used here. */
+type SourceMapEntry = { generatedLine?: unknown, generatedColumn?: unknown, originalSource?: unknown, originalLine?: unknown }
+type SourceMapLike = { findEntry(lineOffset: number, columnOffset: number): SourceMapEntry | undefined }
+type FindSourceMap = (file: string) => SourceMapLike | undefined
+
+/** Node.js' module.findSourceMap, looked up when it is first needed (null: there is none). */
+let findSourceMapFunction: FindSourceMap | null | undefined
+
+const sourceMapFinder = (): FindSourceMap | null => {
+  if (findSourceMapFunction !== undefined) return findSourceMapFunction
+  let found: FindSourceMap | null = null
+  try {
+    const nodeModule = require('module')
+    if (typeof nodeModule?.findSourceMap === 'function') found = nodeModule.findSourceMap
+  } catch { /* a runtime without Node.js' module module: no source maps */ }
+  findSourceMapFunction = found
+  return found
+}
+
+/**
+ * E125: the file: URL of a file name as V8 gives it (an ES module's is one already), under which Node.js keeps its source
+ * map: findSourceMap turns a path into one each time, which costs more than the lookup itself. Kept per file.
+ */
+const urls = new Map<string, string>()
+const MAX_URLS = 1000
+
+const urlOf = (file: string): string => {
+  let url = urls.get(file)
+  if (url !== undefined) return url
+  url = file
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(file) || /^[a-z]:[\\/]/i.test(file)) {
+    try {
+      url = require('url').pathToFileURL(file).href as string
+    } catch { /* passed on as it is */ }
+  }
+  if (urls.size >= MAX_URLS) urls.clear()
+  urls.set(file, url)
+  return url
+}
+
+/**
+ * E125: the source map Node.js has for a file, or undefined: Node.js keeps one for a module it loaded while source maps
+ * were enabled (node --enable-source-maps, process.setSourceMapsEnabled, module.setSourceMapsSupport; tsx enables them)
+ * and the module's code names one. Asked anew each time (a test runner in watch mode can load a changed file again),
+ * which is cheap: Node.js keeps the parsed map with the module.
+ */
+const sourceMapOf = (file: unknown): SourceMapLike | undefined => {
+  if (typeof file !== 'string' || file === '') return undefined
+  const find = sourceMapFinder()
+  if (find === null) return undefined
+  try {
+    const map = find(urlOf(file))
+    return typeof map === 'object' && map !== null && typeof map.findEntry === 'function' ? map : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * E125: the source and line (0-based) that a source map gives for a position (1-based, as V8 reports it), or undefined.
+ * findEntry gives the mapping that starts last at or before the position. V8 can put an operation at a character that
+ * no mapping starts at: a property read of a chain at its dot (`.log` in `logger.received(2).log(...)`), where tsc and
+ * esbuild map the name after it. That character belongs to the mapping before it, which for a chain over several lines
+ * of the source is on the line before. So a mapping that starts one or two characters later (the name after `.` or
+ * `?.`) is taken first, then the one before it on the same line of the file that runs; one that starts on an earlier
+ * line of that file tells nothing about this line.
+ */
+const mappedLine = (map: SourceMapLike, line: number, column: number): SourceMapEntry | undefined => {
+  const at = (offset: number): SourceMapEntry | undefined => {
+    const entry = map.findEntry(line - 1, column - 1 + offset)
+    return typeof entry === 'object' && entry !== null && entry.generatedLine === line - 1 && typeof entry.originalLine === 'number' ? entry : undefined
+  }
+  try {
+    const before = at(0)
+    if (before !== undefined && before.generatedColumn === column - 1) return before
+    for (let offset = 1; offset <= 2; offset++) {
+      const after = at(offset)
+      if (after !== undefined && after.generatedColumn === column - 1 + offset) return after
+    }
+    return before
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether the operation at `to` comes after the one at `from` on the same line of the same file (the caller has checked
+ * that they are in the same function, see sameExpression): as V8 reports their positions, before source maps, and E125
+ * (R17FE-5), when V8 puts them on the same line, on the same line of the source too, where Node.js has a source map for
+ * the file. A transpiler can put several lines of the source on one line of its output: tsx (esbuild with
+ * minifyWhitespace) puts a whole file on one. Without a source map, two statements written on one line of the file that
+ * runs are on the same line.
+ * Only when the two lines are the same is the source map looked at, which is rare: the rules that ask this only ask it
+ * for a call that answered with the substitute it was made on (see the engine's continuesExpression) and for a matcher
+ * that threw a usage error (see Assertions' cancelDeferredReportOf).
+ */
+export const sameLineAfter = (from: Frame, to: Frame): boolean => {
+  const line = from.line
+  const fromColumn = from.column
+  const toColumn = to.column
+  if (typeof line !== 'number' || line !== to.line || typeof fromColumn !== 'number' || typeof toColumn !== 'number' || toColumn <= fromColumn) return false
+  const map = sourceMapOf(from.file)
+  if (map === undefined) return true
+  const fromSource = mappedLine(map, line, fromColumn)
+  const toSource = mappedLine(map, line, toColumn)
+  if (fromSource === undefined || toSource === undefined) return true
+  return fromSource.originalLine === toSource.originalLine && fromSource.originalSource === toSource.originalSource
+}
