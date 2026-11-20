@@ -339,7 +339,7 @@ export const sameExpression = (a: Frame | null, b: Frame | null): boolean => {
 }
 
 /** What Node.js' module.findSourceMap gives (Node.js 12.17+ and 13.7+), as far as it is used here. */
-type SourceMapEntry = { originalSource?: unknown, originalLine?: unknown }
+type SourceMapEntry = { generatedLine?: unknown, originalSource?: unknown, originalLine?: unknown }
 type SourceMapLike = { findEntry(lineOffset: number, columnOffset: number): SourceMapEntry | undefined }
 type FindSourceMap = (file: string) => SourceMapLike | undefined
 
@@ -375,11 +375,16 @@ const sourceMapOf = (file: unknown): SourceMapLike | undefined => {
   }
 }
 
-/** E125: the source and line (0-based) that a source map gives for a position (1-based, as V8 reports it), or undefined. */
+/**
+ * E125: the source and line (0-based) that a source map gives for a position (1-based, as V8 reports it), or undefined.
+ * findEntry gives the mapping that starts last at or before the position, which can be on an earlier line of the file
+ * that runs when the line has none so far (tsc maps `log` in `    .log(...)`, and V8 puts the read of it at the dot):
+ * then it tells nothing about this line.
+ */
 const mappedLine = (map: SourceMapLike, line: number, column: number): SourceMapEntry | undefined => {
   try {
     const entry = map.findEntry(line - 1, column - 1)
-    return typeof entry === 'object' && entry !== null && typeof entry.originalLine === 'number' ? entry : undefined
+    return typeof entry === 'object' && entry !== null && entry.generatedLine === line - 1 && typeof entry.originalLine === 'number' ? entry : undefined
   } catch {
     return undefined
   }
