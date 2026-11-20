@@ -1,4 +1,4 @@
-import { Frame, StackHolder, frameOfStack, stackText } from './CallSite'
+import { Frame, StackHolder, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 
 export type RecordKind = 'get' | 'set' | 'call'
 
@@ -38,18 +38,58 @@ export class CallRecord {
    * continues its expression then (see the engine's continuesExpression).
    */
   public handedOutItself?: boolean
+  /** The record of the previous step when this one continues an expression chain (`a.b().c`), see chainPrevious. */
+  private _chainPrevious: CallRecord | undefined
+  /**
+   * E126 (R17-ADV-11): the previous step when it is a hand-out of the substitute itself (handedOutItself), whose link is
+   * decided when it is first used (see chainPrevious and linkToSelfHandOut). (Left undeclared on other records.)
+   */
+  private _selfHandOut?: CallRecord
 
   constructor(
     public kind: RecordKind,
     public readonly key: PropertyKey,
     public args: any[] | undefined,
     /** The captured call site (CallSite.captureStack), taken by the trap of the operation. */
-    site: StackHolder,
-    /** The record of the previous step when this one continues an expression chain (`a.b().c`). */
-    public chainPrevious?: CallRecord
+    site: StackHolder
   ) {
+    this._chainPrevious = undefined
     this.seq = nextSequence()
     this._stack = site
+  }
+
+  /**
+   * The record of the previous step when this one continues an expression chain (`a.b().c`). E126: a link to a hand-out
+   * of the substitute itself is decided here, when a setup or a check first follows the chain back (see
+   * linkToSelfHandOut), from where both operations are (see continuesSelfHandOut).
+   */
+  public get chainPrevious(): CallRecord | undefined {
+    const candidate = this._selfHandOut
+    if (candidate !== undefined) {
+      this._selfHandOut = undefined
+      // (the candidate's frame first, as linkChain reads them)
+      const from = candidate.frame
+      if (continuesSelfHandOut(from, this.frame)) this._chainPrevious = candidate
+    }
+    return this._chainPrevious
+  }
+
+  public set chainPrevious(previous: CallRecord | undefined) {
+    if (this._selfHandOut !== undefined) this._selfHandOut = undefined
+    this._chainPrevious = previous
+  }
+
+  /**
+   * E126 (R17-ADV-11): this operation came right after a hand-out of the substitute itself (`candidate`, a fluent
+   * `return this` of a mimicked instance, `map.set(Arg.all()).returns(map)`), and continues its expression only when it
+   * is on the same line, after it (E111, see continuesSelfHandOut). Which it is, is decided only when a setup or a check
+   * follows the chain back (see chainPrevious): the calls of a fluent method (`emitter.on('a', f).on('b', f)`) read no
+   * stack frames until then, as before E111. (The frame of a read that is invoked later is then the invocation's, see
+   * convertToCall: for `sub.method(...)` both are at the same place.)
+   */
+  public linkToSelfHandOut(candidate: CallRecord): void {
+    this._chainPrevious = undefined
+    this._selfHandOut = candidate
   }
 
   /** The captured call site itself (E48: the stack of a report about this operation). */
@@ -97,6 +137,16 @@ export const retract = (record: CallRecord | undefined): void => {
     }
   }
 }
+
+/**
+ * E111 (R16-ADV-7): whether an operation at `frame` continues the expression of a hand-out of the substitute itself at
+ * `from` (handedOutItself): only on the same line, after it, in the same function (E125: the same line of the source,
+ * where Node.js has a source map, see CallSite.sameLineAfter). Such a substitute is where the next statement starts,
+ * too (`server.on('close', listener)`, then `server.received(1).on('error', Arg.any())`), and a statement before it is no
+ * part of its expression (E39). Without frames (Error.stackTraceLimit = 0) it never does.
+ */
+export const continuesSelfHandOut = (from: Frame | null, frame: Frame | null): boolean =>
+  from !== null && frame !== null && sameExpression(from, frame) && sameLineAfter(from, frame)
 
 /** D26: makes two records the member reading and the direct-call reading of one invocation. */
 export const pairReadings = (memberReading: CallRecord, directReading: CallRecord): void => {

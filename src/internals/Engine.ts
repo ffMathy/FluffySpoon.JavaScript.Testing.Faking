@@ -3,8 +3,8 @@ import { inspect, InspectOptions, types } from 'util'
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
-import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
-import { Frame, StackHolder, captureStack, currentFrame, sameExpression, sameLineAfter } from './CallSite'
+import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
+import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import {
@@ -379,9 +379,18 @@ const continuedChain = (candidate: CallRecord | undefined, current: () => Frame 
   return continuesExpression(candidate, from, current()) ? candidate : undefined
 }
 
-/** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
+/**
+ * Links a new record to the candidate if it continues the candidate's expression (the record has its frame). E126
+ * (R17-ADV-11): a candidate that handed out the substitute itself is linked for later, and whether the record continues
+ * its expression is decided only when a setup or a check follows the chain back (see CallRecord.linkToSelfHandOut), so
+ * that the calls of a fluent method read no frames.
+ */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
   if (candidate === undefined) return record
+  if (selfHandOutCount !== 0 && candidate.handedOutItself === true) {
+    record.linkToSelfHandOut(candidate)
+    return record
+  }
   // (the candidate's frame first: it is the one read last, which is kept, see CallSite.frameOfStack)
   const from = candidate.frame
   if (continuesExpression(candidate, from, record.frame)) record.chainPrevious = candidate
@@ -391,14 +400,11 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
 /**
  * D25: whether the operation at `frame` continues the expression of `candidate` (at `from`), an adjacent hand-out. E111: a
  * hand-out of the substitute that was called itself (see handOutConfigured) only when the operation is on the same line,
- * after the call: such a substitute is where the next statement starts, too (`server.on('close', listener)`, then
- * `server.received(1).on('error', Arg.any())`), and a statement before it is no part of its expression (E39).
+ * after the call (see CallRecord.continuesSelfHandOut).
  */
 const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
-  if (!sameExpression(from, frame)) return false
-  if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return true
-  // E125: the same line of the source, where Node.js has a source map (see CallSite.sameLineAfter)
-  return from !== null && frame !== null && sameLineAfter(from, frame)
+  if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return sameExpression(from, frame)
+  return continuesSelfHandOut(from, frame)
 }
 
 const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHandOut()

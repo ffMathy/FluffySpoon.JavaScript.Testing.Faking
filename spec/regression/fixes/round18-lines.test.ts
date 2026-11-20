@@ -4,6 +4,10 @@ import * as fs from 'fs'
 import * as os from 'os'
 import * as path from 'path'
 
+import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
+import * as CallSite from '../../../src/internals/CallSite'
+import { SubstituteException } from '../../../src/internals/SubstituteException'
+
 // Round 18: the lines, calls and record-path part of the round-17 findings (R17FE-5, R17-ADV-11, R17-ADV-3, R17V-3 =
 // R17-ADV-7), decided in the fix spec as E125-E128. The timing tests of E126 and E128 are in
 // round18-lines-hashing.test.ts (serial run).
@@ -167,4 +171,90 @@ test('R17FE-5 (E125) without a source map, statements on one line of the file th
   t.is(outcome.results['map received(1) on the next line'], "throws: Call count mismatch in @Substitute.set('b', 2).set")
   // and the usage error of a later statement cancels the report of the earlier check on that line
   t.deepEqual(outcome.reported, [])
+})
+
+// ---- E126 (R17-ADV-11): the calls of a mimicked fluent method read no stack frames -------------------------------------
+
+/** How many times the library reads the stack frame of an operation while `run` runs (CallSite.frameOfStack, currentFrame). */
+const framesReadBy = (run: () => void): number => {
+  const callSite = CallSite as any
+  const { frameOfStack, currentFrame } = callSite
+  let reads = 0
+  callSite.frameOfStack = (holder: unknown) => { reads++; return frameOfStack(holder) }
+  callSite.currentFrame = (start: unknown) => { reads++; return currentFrame(start) }
+  try {
+    run()
+  } finally {
+    callSite.frameOfStack = frameOfStack
+    callSite.currentFrame = currentFrame
+  }
+  return reads
+}
+
+const passes = (check: () => void): boolean => {
+  try {
+    check()
+    return true
+  } catch (error) {
+    if (error instanceof SubstituteException) return false
+    throw error
+  }
+}
+
+test.serial('R17-ADV-11 (E126) calls of a fluent method that answers the substitute itself read no stack frames, as at 8be3a70', t => {
+  const { EventEmitter } = require('events')
+  const fluent = Substitute.for<any>()
+  fluent[mimick]({ on() { return this } })
+  const emitter = Substitute.for<any>()
+  const instance = new EventEmitter()
+  instance.setMaxListeners(0)
+  emitter[mimick](instance)
+  const listener = () => { }
+  const res = Substitute.for<any>()
+  res.status(Arg.any()).returns(res)
+  const map = Substitute.for<any>()
+  map.set(Arg.all()).returns(map)
+  const reads = framesReadBy(() => {
+    for (let index = 0; index < 100; index++) {
+      fluent.on('a', index).on('b', index)
+      fluent.on('c', index)
+      emitter.on('a', listener).on('b', listener)
+      res.status(200).json(index)
+      map.set('k', index).set('l', index)
+    }
+  })
+  t.is(reads, 0)
+  t.notThrows(() => fluent.received(100).on('b', Arg.any()))
+  t.notThrows(() => emitter.received(100).on('a', listener))
+  t.notThrows(() => res.received(100).json(Arg.any()))
+  t.notThrows(() => map.received(1).set('l', 99))
+})
+
+test('R17-ADV-11 (E126) a link to a hand-out of the substitute itself is still decided by E111\'s line rule when a setup or a check uses it', t => {
+  // one line: the setup continues the call that answered map itself, which is not recorded (README)
+  const map = Substitute.for<any>()
+  map.set(Arg.all()).returns(map)
+  map.set('b', 2).get(Arg.any()).returns(5)
+  t.is(map.get('x'), 5)
+  t.notThrows(() => map.didNotReceive().set('b', 2))
+  // the next line: a check of map itself, which counts the test's own call
+  map.set('c', 3)
+  t.notThrows(() => map.received(1).set('c', 3))
+  t.false(passes(() => map.didNotReceive().set('c', 3)))
+
+  // a check through a concrete call on one line narrows, on a later line it counts every call (E111(b), E99)
+  const io = Substitute.for<any>()
+  io.to(Arg.any()).returns(io)
+  io.to('room-a').emit('m')
+  t.false(passes(() => io.to('room-b').received(1).emit('m')))
+  t.true(passes(() => io.to('room-b')[didNotReceive]().emit('m')))
+  const roomB = io.to('room-b')
+  t.true(passes(() => roomB.received(1).emit('m')))
+
+  // a mimicked fluent chain, checked through its own call on one line
+  const fluent = Substitute.for<any>()
+  fluent[mimick]({ on() { return this }, emit() { return true } })
+  fluent.on('a').emit('x')
+  t.true(passes(() => fluent.on('a')[received](1).emit('x')))
+  t.false(passes(() => fluent.on('b')[received](1).emit('x')))
 })
