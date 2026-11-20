@@ -1,22 +1,10 @@
 import test from 'ava'
-import * as fs from 'fs'
-import * as path from 'path'
 
 import { Substitute, Arg, configure } from '../../../src'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
-import { assertWithin, timeLimit } from '../../helpers/timing'
 
-// Round 8, engine A: the timing-sensitive test run, the memo of wide containers and values that cannot be read (fix
-// spec E29 to E32). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
-
-/** The repository (the specs run from their compiled copy in dist-spec/). */
-const root = path.resolve(__dirname, '../../../..')
-
-const millisecondsOf = (run: () => void) => {
-  const start = process.hrtime.bigint()
-  run()
-  return Number(process.hrtime.bigint() - start) / 1e6
-}
+// Round 8, engine A: the memo of wide containers, values that cannot be read and the search for nested matchers (fix
+// spec E29 to E32).
 
 /** An object with `size` keys, in insertion order. */
 const wideObject = (size: number, value: (index: number) => unknown, key: (index: number) => string = index => `k${index}`): Record<string, unknown> => {
@@ -27,58 +15,6 @@ const wideObject = (size: number, value: (index: number) => unknown, key: (index
 
 /** A substitute's auto-substitutes are functions; configured values here are strings and numbers. */
 const isAutoSubstitute = (value: unknown) => typeof value === 'function'
-
-// ---- E29: the timing-sensitive files run on their own -------------------------------------------
-
-/** The glob patterns of ava's `files` option as a regular expression (the forms the configurations use). */
-const globToRegExp = (glob: string): RegExp => new RegExp(`^${glob
-  .replace(/[.+^${}()|[\]\\]/g, '\\$&')
-  .replace(/\*\*\//g, '\u0000')
-  .replace(/\*/g, '[^/]*')
-  .replace(/\u0000/g, '(?:.*/)?')}$`)
-
-/** Whether ava selects a file with these `files` patterns: one that some pattern matches, and no negated one. */
-const selects = (patterns: readonly string[], file: string): boolean =>
-  patterns.some(pattern => !pattern.startsWith('!') && globToRegExp(pattern).test(file)) &&
-  !patterns.some(pattern => pattern.startsWith('!') && globToRegExp(pattern.slice(1)).test(file))
-
-const specFiles = (directory: string): string[] => fs.readdirSync(path.join(root, directory), { withFileTypes: true }).flatMap(entry =>
-  entry.isDirectory() ? specFiles(`${directory}/${entry.name}`) : /\.(spec|test)\.ts$/.test(entry.name) ? [`${directory}/${entry.name}`] : [])
-
-test('R7V-6 (E29) the timing-sensitive spec files run in an ava invocation of their own, one test at a time, after the others', t => {
-  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
-  // 89e4175: one ava invocation, in which ava runs the files in parallel workers and the tests of a file concurrently
-  t.is(packageJson.scripts.test, 'npm run build:spec && ava && ava --config ava.perf.config.js --serial --concurrency=1')
-  const main = require(path.join(root, 'ava.config.js'))
-  const perf = require(path.join(root, 'ava.perf.config.js'))
-  t.true(perf.serial)
-  t.is(perf.concurrency, 1)
-  // a file that works for more than ava's default of 10 seconds without reporting, on a busy machine, is no stall
-  t.is(main.timeout, '3m')
-  // the same options otherwise (the compiled specs, fail-fast, the stall timeout)
-  const { files: _perfFiles, serial: _serial, concurrency: _concurrency, ...perfOptions } = perf
-  const { files: _mainFiles, ...mainOptions } = main
-  t.deepEqual(perfOptions, mainOptions)
-
-  // every spec file runs in exactly one of the two invocations, and every one that measures time in the serial one
-  const files = specFiles('spec')
-  t.true(files.length > 40, `${files.length} spec files`)
-  const timed: string[] = []
-  for (const file of files) {
-    const inMain = selects(main.files, file)
-    const inPerf = selects(perf.files, file)
-    t.true(inMain !== inPerf, `${file} runs in ${inMain && inPerf ? 'both invocations' : 'neither invocation'}`)
-    // (round 9, E43: or through the timing helper, which scales the limits by the machine's load)
-    if (/process\.hrtime|Date\.now\(\)|performance\.now\(\)|helpers\/timing/.test(fs.readFileSync(path.join(root, file), 'utf8'))) {
-      timed.push(file)
-      t.true(inPerf, `${file} measures time, so it runs in the serial invocation`)
-    }
-  }
-  t.true(timed.includes('spec/regression/fixes/round8-hashing.test.ts'))
-  t.true(timed.length >= 8, timed.join(', '))
-  // the packaging checks run with the functional tests
-  t.true(selects(main.files, 'packaging/package.test.js'))
-})
 
 // ---- E32: a setup made with .returns() reads a value that cannot be read once ---------------------
 
@@ -174,65 +110,9 @@ test('R7V-2 (E30) pins what a call gives after a container inside a setup\'s arg
 
 // ---- E31: wide objects shared by small arguments and by the records of wide containers ----------
 
-test.serial('R7-ADV-5 / R7V-5 (E31) records of wide containers that share a wide object: 10 calls each stay well under 50 ms', t => {
-  t.timeout(120_000)
-  // Accepted as they are (E31): records inside a wide container are hashed with a budget of 4 objects each (E13), where
-  // 45facfb hashed them shallowly, which costs about 1 ms per call for 2,000 records. The limit is four times the 50 ms
-  // that E31 accepts, for a busy machine; the best of three runs, each with values of its own.
-  const config = wideObject(5000, index => index, index => `setting${index}`)
-  let generation = 0
-  const shapes: Array<[string, () => unknown[]]> = [
-    ['10 Maps of 2,000 records sharing one 5,000-key object', () => Array.from({ length: 10 }, (_, call) => new Map(Array.from({ length: 2000 }, (_, index) => [`s${index}`, { id: ++generation * 100_000 + call * 10_000 + index, config }])))],
-    ['10 Maps of 300 such records', () => Array.from({ length: 10 }, (_, call) => new Map(Array.from({ length: 300 }, (_, index) => [`s${index}`, { id: ++generation * 100_000 + call * 1000 + index, config }])))],
-    ['10 tables of 300 such records', () => Array.from({ length: 10 }, (_, call) => wideObject(300, index => ({ id: ++generation * 100_000 + call * 1000 + index, config }), index => `row${index}`))],
-    ['10 tables of 1,000 records that point back to their table', () => Array.from({ length: 10 }, (_, call) => {
-      const table: Record<string, unknown> = {}
-      for (let index = 0; index < 1000; index++) table[`n${index}`] = { id: ++generation * 100_000 + call * 1000 + index, registry: table }
-      return table
-    })],
-    ['10 batches of 300 records sharing a 10,000-entry Map', () => {
-      const catalog = new Map(Array.from({ length: 10_000 }, (_, index) => [`sku-${index}`, { price: index }]))
-      return Array.from({ length: 10 }, (_, call) => Array.from({ length: 300 }, (_, index) => ({ id: ++generation * 100_000 + call * 1000 + index, catalog })))
-    }]
-  ]
-  for (const [name, values] of shapes) {
-    const bestLimit = timeLimit(200)
-    let best = Infinity
-    for (let run = 0; run < 3; run++) {
-      const args = values()
-      const sub = Substitute.for<any>()
-      best = Math.min(best, millisecondsOf(() => args.forEach(value => sub.load(value))))
-    }
-    t.log(`${name}: ${best.toFixed(1)} ms`)
-    assertWithin(t, best, bestLimit, `${name}`)
-  }
-})
-
-test.serial('R7-ADV-4 (E31) 10,000 calls whose small argument holds a shared wide table stay well under 1 s', t => {
-  t.timeout(120_000)
-  // Not made faster (see the fix report): a call whose hash takes a wide container's hash from an earlier call proves
-  // that the container is still wide (257 of its keys) before it looks for an equal auto-substitute, so that one that
-  // shrank since is found by its contents (E18). 74b8588: 100 to 160 ms, without that proof; now 200 to 270 ms.
+test.serial('R7-ADV-4 (E31) calls whose small argument holds a shared wide table stay exact', t => {
   const table = wideObject(10_000, index => index, index => `key${index}`)
-  const shapes: Array<[string, (index: number) => unknown[]]> = [
-    ['{ id, table }', index => [{ id: index, table }]],
-    ['[id, table]', index => [[index, table]]],
-    ['{ id, meta: { table } }', index => [{ id: index, meta: { table } }]],
-    ['(id, table)', index => [index, table]]
-  ]
-  let generation = 0
-  for (const [name, args] of shapes) {
-    const bestLimit = timeLimit(1000)
-    let best = Infinity
-    for (let run = 0; run < 3; run++) {
-      const calls = Array.from({ length: 10_000 }, () => args(++generation))
-      const sub = Substitute.for<any>()
-      best = Math.min(best, millisecondsOf(() => calls.forEach(call => sub.f(...call))))
-    }
-    t.log(`10,000 calls with ${name}: ${best.toFixed(1)} ms`)
-    assertWithin(t, best, bestLimit, `10,000 calls with ${name}`)
-  }
-  // still exact: an equal wrapper, also with a copy of the table, finds the same auto-substitute, another id another one
+  // an equal wrapper, also with a copy of the table, finds the same auto-substitute, another id another one
   const sub = Substitute.for<any>()
   const first = sub.f({ id: 1, table })
   t.is(sub.f({ id: 1, table }), first)

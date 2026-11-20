@@ -6,7 +6,7 @@ import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 17: the calls-and-arguments part of the round-16 findings (R16-ADV-2, R16FE-5, R16-ADV-8, R16V-1), decided in
-// the fix spec as E109, E116, E117 and E118. The timing tests of E109 are in round17-calls-hashing.test.ts (serial run).
+// the fix spec as E109, E116, E117 and E118.
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 

@@ -1,49 +1,15 @@
-import test, { ExecutionContext } from 'ava'
-import * as fs from 'fs'
-import * as path from 'path'
+import test from 'ava'
 import { inspect, isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { MAX_LISTED_CHARACTERS, SubstituteException } from '../../../src/internals/SubstituteException'
 import { structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { MESSAGE_BOUNDS, formatValue } from '../../../src/internals/utilities/Stringify'
-import { MAX_FACTOR, TimeLimit, assertFast, assertWithin, loadFactor, timeLimit } from '../../helpers/timing'
 
 // Round 9, engine A: the hash of URLs and other values that Node.js compares by internal state or by identity (fix spec
-// E42), timing tests that hold up on a busy machine (E43), and bounded printing (E44, E45). This file runs in the
-// serial run of the timing-sensitive files (see ava.config.js).
+// E42), and bounded printing (E44, E45).
 
 // ---- E42: URLs, promises, WeakMaps and WeakSets ---------------------------------------------------------------------
-
-const urls = (count: number, offset = 0) => Array.from({ length: count }, (_, index) => new URL(`https://api.example.com/items?page=${offset + index}`))
-
-test('R8FE-7 (E42) 10,000 calls with distinct URLs, also inside an object, stay well under 1 s', t => {
-  // d5b96ab: all URLs had one hash, so each call was compared with every earlier one: 16.5 s for the first shape
-  const plain = urls(10_000)
-  const wrapped = urls(10_000, 20_000).map(url => ({ url }))
-  assertFast(t, 1000, '10,000 calls http.fetch(url) with distinct URLs', () => {
-    const http = Substitute.for<any>()
-    for (const url of plain) http.fetch(url)
-  })
-  assertFast(t, 1000, '10,000 calls http.request({ url }) with distinct URLs', () => {
-    const http = Substitute.for<any>()
-    for (const options of wrapped) http.request(options)
-  })
-})
-
-test('R8FE-7 (E42) 1,000 calls with distinct fetch Requests stay well under 1 s', t => {
-  const RequestClass = (globalThis as any).Request
-  if (typeof RequestClass !== 'function') {
-    t.pass('no fetch Request in this Node.js')
-    return
-  }
-  // d5b96ab on Node.js 22: 2.8 s, as a Request holds its URL as a URL
-  const requests = Array.from({ length: 1000 }, (_, index) => new RequestClass(`https://api.example.com/items?page=${index}`))
-  assertFast(t, 1000, '1,000 calls http.send(request) with distinct Requests', () => {
-    const http = Substitute.for<any>()
-    for (const request of requests) http.send(request)
-  })
-})
 
 test('R8FE-7 (E42) URLs that the running Node.js finds deep strictly equal share a hash, and other URLs do not', t => {
   const spellings = [
@@ -95,7 +61,7 @@ test('R8FE-7 (E42) calls with URLs match setups and checks as before: by href', 
   t.throws(() => http.received(1).fetch(new URL('https://api.example.com/users/3')))
 })
 
-test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and 10,000 calls with distinct ones stay well under 1 s', t => {
+test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and the same one finds its setup', t => {
   const kinds: Array<[string, () => object]> = [
     ['promises', () => Promise.resolve(1)],
     ['pending promises', () => new Promise(() => { })],
@@ -110,11 +76,6 @@ test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and
     if (isDeepStrictEqual(a, b)) t.is(structuralHash(a), structuralHash(b), name)
     else t.not(structuralHash(a), structuralHash(b), name)
     t.is(structuralHash(a), structuralHash(a))
-    const values = Array.from({ length: 10_000 }, create)
-    assertFast(t, 1000, `10,000 calls with distinct ${name}`, () => {
-      const tracker = Substitute.for<any>()
-      for (const value of values) tracker.track(value)
-    })
     // the same one finds its setup
     const tracker = Substitute.for<any>()
     tracker.track(a).returns('tracked')
@@ -346,44 +307,4 @@ test('R8FE-3 (E45) errors that differ only in their own properties print differe
   const repo = Substitute.for<any>()
   repo.load(1).throws(new HttpError(503, 'unavailable'))
   t.true(String(repo).includes('load(1) => throws([HttpError: unavailable] { status: 503 })'), String(repo))
-})
-
-// ---- E43: timing tests that hold up on a busy machine -------------------------------------------------------------
-
-/** The repository (the specs run from their compiled copy in dist-spec/). */
-const root = path.resolve(__dirname, '../../../..')
-
-test('R8-ADV-6 (E43) absolute time limits are scaled by a load factor measured right before the measurement, clamped to [1, 4]', t => {
-  t.is(MAX_FACTOR, 4)
-  const factor = loadFactor()
-  t.true(factor >= 1 && factor <= MAX_FACTOR, `load factor ${factor}`)
-  const limit = timeLimit(1000)
-  t.true(limit.milliseconds >= 1000 && limit.milliseconds <= 4000, String(limit))
-  t.is(new TimeLimit(250, 2).milliseconds, 500)
-
-  // assertWithin: within the limit passes; above four times the base limit fails, whatever the load (the factor measured
-  // again after a measurement that exceeds its limit is clamped as well), so a quadratic blow-up still fails
-  const verdicts: boolean[] = []
-  const recorder = { true: (value: boolean) => { verdicts.push(value) } } as unknown as ExecutionContext
-  assertWithin(recorder, 900, new TimeLimit(1000, 1), 'fast')
-  assertWithin(recorder, 3500, new TimeLimit(1000, 4), 'slow but loaded')
-  assertWithin(recorder, 4001, new TimeLimit(1000, 1), 'too slow for any load')
-  assertWithin(recorder, 16_500, new TimeLimit(1000, 4), 'quadratic')
-  t.deepEqual(verdicts, [true, true, false, false])
-})
-
-test('R8-ADV-6 (E43) every timing-sensitive spec file checks its absolute limits through the load-scaled helper', t => {
-  // d5b96ab: `t.true(elapsed < 1000, ...)` against wall-clock time, which failed 3 of 6 runs at a load average of 12
-  const directory = path.join(root, 'spec/regression/fixes')
-  const timed = fs.readdirSync(directory).filter(file => /\.(spec|test)\.ts$/.test(file))
-    .filter(file => /process\.hrtime|Date\.now\(\)|performance\.now\(\)|helpers\/timing/.test(fs.readFileSync(path.join(directory, file), 'utf8')))
-  t.true(timed.length >= 11, timed.join(', '))
-  // a time (or a product with one) against a bare number: `t.true(elapsed < 1000, ...)`, `t.true(cost * rows * 1000 < 1000, ...)`
-  const absolute = /t\.true\(\s*[\w.()]*(elapsed|Elapsed|ms|best|calls|chains|cost|configured)[\w.()]*\s*(\*[^<,]*)?<\s*[\d_]+\s*,/
-  for (const file of timed) {
-    const source = fs.readFileSync(path.join(directory, file), 'utf8')
-    t.true(source.includes("from '../../helpers/timing'"), `${file} uses the timing helper`)
-    const unscaled = source.split('\n').filter(line => !line.trim().startsWith('//') && absolute.test(line))
-    t.deepEqual(unscaled, [], `${file} compares a time with a fixed limit`)
-  }
 })

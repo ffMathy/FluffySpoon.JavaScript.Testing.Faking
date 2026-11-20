@@ -1,9 +1,8 @@
-// R6V-5 / R6TD-2 / T44 A substitute of a large concrete union (every lib.dom element type) type-checks about as fast
-// as in 2.0.1 before T42: its members whose variants declare different parameter lists (`addEventListener`,
-// `removeEventListener`, `remove`) get one set of signatures per distinct parameter list (T49), and the parameter lists
-// of the elements' listener methods differ only where their event maps differ, so there are a few of them, not one per
-// element. spec-types/R6V-5.R6TD-2.T44.check-cost.js (run by `npm run test:types:min-ts`) checks the cost of this file.
-// The setups and checks below must keep compiling.
+// R6V-5 / R6TD-2 / T44 A substitute of a large concrete union (every lib.dom element type) compiles: its members whose
+// variants declare different parameter lists (`addEventListener`, `removeEventListener`, `remove`) get one set of
+// signatures per distinct parameter list (T49), and the parameter lists of the elements' listener methods differ only
+// where their event maps differ, so there are a few of them, not one per element. The setups and checks below must keep
+// compiling.
 import { Substitute, Arg, configure, received } from '../src'
 
 type AnyElement = HTMLElementTagNameMap[keyof HTMLElementTagNameMap]

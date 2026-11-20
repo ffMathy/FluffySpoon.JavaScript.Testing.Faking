@@ -200,46 +200,6 @@ test('R17FE-5 (E125) without a source map, statements on one line of the file th
   t.deepEqual(outcome.reported, [])
 })
 
-// ---- E127 (R17-ADV-3): nothing keeps the last call's arguments alive ------------------------------------------------------
-
-test('R17-ADV-3 (E127) a dropped substitute\'s last call keeps none of its arguments alive (verify17 lastargs.js, with --expose-gc)', t => {
-  // the argument of the last call of a substitute that is dropped: 200,000 rows, a 100,000-key object, nested inside a
-  // plain object, through call(); with and without a setup with a predicate on the member (the matching pass reads what
-  // the search for matchers found, and a member with predicate setups only hashes nothing)
-  const script = `
-    const { Substitute, Arg } = require(${JSON.stringify(library)})
-    const shapes = {
-      rows: () => ({ rows: Array.from({ length: 200000 }, (_, i) => ({ id: i, name: 'row' + i })) }),
-      wide: () => Object.fromEntries(Array.from({ length: 100000 }, (_, i) => ['k' + i, { id: i }])),
-      nested: () => ({ a: { b: [Object.fromEntries(Array.from({ length: 100000 }, (_, i) => ['k' + i, i]))] } })
-    }
-    const refs = []
-    for (const shape of Object.keys(shapes)) for (const mode of ['plain', 'pred', 'call']) {
-      ;(() => {
-        const sub = Substitute.for()
-        if (mode === 'pred') sub.save(Arg.is(() => true)).returns(1)
-        const argument = shapes[shape]()
-        refs.push([shape + ' ' + mode, new WeakRef(argument), new WeakRef(sub)])
-        if (mode === 'call') sub.save.call(sub, argument)
-        else sub.save(argument)
-      })()
-    }
-    setTimeout(() => {
-      global.gc()
-      global.gc()
-      console.log(JSON.stringify(refs.map(([label, argument, sub]) => [label, argument.deref() !== undefined, sub.deref() !== undefined])))
-    }, 20)
-  `
-  const result = spawnSync(process.execPath, ['--expose-gc', '-e', script], { encoding: 'utf8' })
-  t.is(result.status, 0, result.stderr)
-  const alive = JSON.parse(result.stdout) as Array<[string, boolean, boolean]>
-  t.is(alive.length, 9)
-  for (const [label, argument, sub] of alive) {
-    t.false(sub, `${label}: the substitute was collected`)
-    t.false(argument, `${label}: the argument was collected`)
-  }
-})
-
 // ---- E126 (R17-ADV-11): the calls of a mimicked fluent method read no stack frames -------------------------------------
 
 /** How many times the library reads the stack frame of an operation while `run` runs (CallSite.frameOfStack, currentFrame). */

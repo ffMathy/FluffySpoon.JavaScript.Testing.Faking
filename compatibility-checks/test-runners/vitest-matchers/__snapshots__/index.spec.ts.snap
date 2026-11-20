@@ -20,7 +20,7 @@ exports[`E96 Arg matchers inside vitest's asymmetric matchers > Arg matchers and
 }
 `;
 
-exports[`R8 vitest snapshots and diffs of values that hold substitutes > E33 toMatchSnapshot finishes quickly and does not take substitutes for mock functions 1`] = `
+exports[`R8 vitest snapshots and diffs of values that hold substitutes > E33 toMatchSnapshot does not take substitutes for mock functions 1`] = `
 {
   "config": [Function],
   "context": {

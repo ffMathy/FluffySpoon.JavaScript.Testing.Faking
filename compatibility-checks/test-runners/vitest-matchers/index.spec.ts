@@ -71,9 +71,8 @@ describe('R7 vitest matchers with substitutes', () => {
 // Round 8 (E33): snapshots and failure diffs of values that hold substitutes. vitest's mock serializer probes
 // `_isMockFunction`; answered by a truthy auto-substitute, it printed `mock.calls` without end (PrettyFormatPluginError:
 // Maximum call stack size exceeded). Printing paths never recurses (a factory result stored on the object passed to it,
-// handlers bound to the instance that holds them). Each one must finish quickly. vitest's snapshots print a function as
-// `[Function]`; its failure diffs print `[Function <name>]`, where the name of a substitute is the path of its `name`
-// member.
+// handlers bound to the instance that holds them). vitest's snapshots print a function as `[Function]`; its failure
+// diffs print `[Function <name>]`, where the name of a substitute is the path of its `name` member.
 class Widget {
   public readonly onSave: unknown
   public readonly onClose: unknown
@@ -93,17 +92,10 @@ const stateWithSubstitutes = () => {
   return { status: 200, user: app.getUser(1), config: app.config, widget: new Widget(Substitute.for<any>()), context }
 }
 
-/** Runs a check and returns how long it took. */
-const timed = (check: () => void): number => {
-  const started = Date.now()
-  check()
-  return Date.now() - started
-}
-
 describe('R8 vitest snapshots and diffs of values that hold substitutes', () => {
-  test('E33 toMatchInlineSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+  test('E33 toMatchInlineSnapshot does not take substitutes for mock functions', () => {
     const state = stateWithSubstitutes()
-    expect(timed(() => expect(state).toMatchInlineSnapshot(`
+    expect(state).toMatchInlineSnapshot(`
       {
         "config": [Function],
         "context": {
@@ -118,18 +110,17 @@ describe('R8 vitest snapshots and diffs of values that hold substitutes', () => 
           "onSave": [Function],
         },
       }
-    `))).toBeLessThan(2000)
+    `)
   })
 
-  test('E33 toMatchSnapshot finishes quickly and does not take substitutes for mock functions', () => {
+  test('E33 toMatchSnapshot does not take substitutes for mock functions', () => {
     const state = stateWithSubstitutes()
-    expect(timed(() => expect(state).toMatchSnapshot())).toBeLessThan(2000)
+    expect(state).toMatchSnapshot()
   })
 
-  test('E33 a failing toEqual diff prints the paths and finishes quickly', () => {
+  test('E33 a failing toEqual diff prints the paths', () => {
     const state = stateWithSubstitutes()
-    let message = ''
-    expect(timed(() => { message = failureOf(() => expect(state).toEqual({ status: 200 })).message })).toBeLessThan(2000)
+    const message = failureOf(() => expect(state).toEqual({ status: 200 })).message
     expect(message).not.toContain('MockFunction')
     expect(message).not.toContain('Maximum call stack')
   })

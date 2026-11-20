@@ -5,7 +5,7 @@
 // the substitute's signatures (they take the type parameters' constraints). Its result has the type parameter as
 // `any` and no setup API (`Promise<any>`; for a return type that is the type parameter itself, `any`, which takes
 // every value unchecked). A signature that takes such calls first would cost every overloaded member of every
-// substitute type-check time (see spec-types/R6V-5.R6TD-2.T44.check-cost.js), so the forms below are the way:
+// substitute type-check time, so the forms below are the way:
 // `Arg.all()`, which takes what any overload returns (T76), a typed predicate or a matcher cast to the parameter type,
 // which take the overload that parameter type fits. The configure view takes the first overload that accepts the
 // arguments. Checks are not affected. A member with a single generic signature, or with generic overloads whose type

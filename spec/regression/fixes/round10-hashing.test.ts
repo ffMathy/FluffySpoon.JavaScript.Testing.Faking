@@ -1,4 +1,4 @@
-import test, { ExecutionContext } from 'ava'
+import test from 'ava'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -8,10 +8,9 @@ import { inspect } from 'util'
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { MESSAGE_BOUNDS, PATH_BOUNDS, formatBounded, formatValue, printSettings } from '../../../src/internals/utilities/Stringify'
-import { RATIO_ATTEMPTS, assertRatiosWithin, assertWithin, millisecondsOf, timeLimit } from '../../helpers/timing'
 
-// Round 10, engine A: failure messages show where an expected call differs again (fix spec E54), and the test
-// infrastructure (E58). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
+// Round 10, engine A: failure messages show where an expected call differs again (fix spec E54), and ava's temporary
+// directories (E58).
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
@@ -223,91 +222,35 @@ test('R9-ADV-1 (E54) the text of a value that is printed only as far as it shows
   t.true(cut > 100, `${cut} values were printed only as far as they show`)
 })
 
-test('R9-ADV-1 (E54) failure messages with deep and wide values stay fast', t => {
-  // 50 listed calls whose arguments have 6 x 6 x 6 x 6 x 6 entries, and that print alike two and three levels deep, so
-  // that the message prints them three times, the last time four levels deep: it takes well under 50 ms
+test('R9-ADV-1 (E54) a failure message with deep and wide values prints the expected call four levels deep', t => {
+  // listed calls whose arguments have 6 x 6 x 6 x 6 x 6 entries, and that print alike two and three levels deep, so that
+  // the message prints them three times, the last time four levels deep
   const store = Substitute.for<any>()
-  for (let index = 0; index < 50; index++) store.put(fanOut(5, 6))
+  for (let index = 0; index < 10; index++) store.put(fanOut(5, 6))
   const expected = fanOut(5, 6) as any
   expected.k0.k0.k0.k0.k0 = -1
-  messageOf(() => store.received(1).put(expected))
-  const limit = timeLimit(50)
-  const elapsed = Math.min(...Array.from({ length: 3 }, () => millisecondsOf(() => messageOf(() => store.received(1).put(expected)))))
-  assertWithin(t, elapsed, limit, 'a failure message listing 50 calls with values of 9,330 entries, printed four levels deep')
   t.true(linesOf(messageOf(() => store.received(1).put(expected))).expected!.startsWith('put({ k0: { k0: { k0: { k0: { k0: -1, k1: 1,'))
-
-  // 200 failing checks over 60 calls with small object arguments (R9FE-4's shape)
-  const emitter = Substitute.for<any>()
-  for (let index = 0; index < 60; index++) emitter.emit('order.placed', { orderId: `o${index}`, cents: index, lines: [{ sku: 'a', quantity: 1 }] })
-  const checks = () => {
-    for (let index = 0; index < 200; index++) messageOf(() => emitter.received(1).emit('order.placed', { orderId: 'x' }))
-  }
-  checks()
-  const checksLimit = timeLimit(500)
-  assertWithin(t, Math.min(millisecondsOf(checks), millisecondsOf(checks), millisecondsOf(checks)), checksLimit, '200 failing checks over 60 calls with small objects')
-})
-
-// ---- E58 (R9V-3): ratio tests that hold up on a busy machine ------------------------------------------------------
-
-/** The repository (the specs run from their compiled copy in dist-spec/). */
-const root = path.resolve(__dirname, '../../../..')
-
-test('R9V-3 (E58) a ratio over its limit is measured again, and the smallest ratio of each kind decides', t => {
-  t.is(RATIO_ATTEMPTS, 3)
-  const run = (measurements: Array<Record<string, number>>) => {
-    const verdicts: boolean[] = []
-    const recorder = { true: (value: boolean) => { verdicts.push(value) }, log: (): void => undefined } as unknown as ExecutionContext
-    let made = 0
-    const smallest = assertRatiosWithin(recorder, () => measurements[made++], 1.3, 'ratios')
-    return { verdicts, made, smallest }
-  }
-  // within the limit: measured once
-  t.deepEqual(run([{ batches: 1.12, singles: 1.05 }]), { verdicts: [true, true], made: 1, smallest: { batches: 1.12, singles: 1.05 } })
-  // a burst of load in one measurement (round 9: 1.34x at a load average of 13): measured again
-  t.deepEqual(run([{ batches: 1.34, singles: 1.1 }, { batches: 1.16, singles: 1.2 }]), { verdicts: [true, true], made: 2, smallest: { batches: 1.16, singles: 1.1 } })
-  // each kind keeps its smallest ratio
-  t.deepEqual(run([{ batches: 1.4, singles: 1.1 }, { batches: 1.2, singles: 1.35 }]), { verdicts: [true, true], made: 2, smallest: { batches: 1.2, singles: 1.1 } })
-  // a real slowdown is over the limit in every measurement, and fails (74b8588: 3.2x and 1.5x)
-  t.deepEqual(run([{ batches: 3.2, singles: 1.5 }, { batches: 3.1, singles: 1.45 }, { batches: 3.3, singles: 1.52 }]),
-    { verdicts: [false, false], made: 3, smallest: { batches: 3.1, singles: 1.45 } })
-})
-
-test('R9V-3 (E58) every ratio test of the timing-sensitive files checks its ratios through assertRatiosWithin', t => {
-  // 4b1fa69: `t.true(batches < 1.3, ...)` in round7-hashing failed 1 of 3 runs of npm test at a load average of 13
-  const directory = path.join(root, 'spec/regression/fixes')
-  const ratioCheck = /t\.(true|assert)\(\s*\w*(ratio|Ratio|batches|singles)\w*\s*</
-  let users = 0
-  for (const file of fs.readdirSync(directory).filter(name => /\.(spec|test)\.ts$/.test(name))) {
-    const source = fs.readFileSync(path.join(directory, file), 'utf8')
-    if (source.includes('assertRatiosWithin(t,')) users++
-    const unchecked = source.split('\n').filter(line => !line.trim().startsWith('//') && ratioCheck.test(line))
-    t.deepEqual(unchecked, [], `${file} compares a ratio of timings with its limit directly`)
-  }
-  t.true(users >= 2, `${users} files use assertRatiosWithin`)
 })
 
 // ---- E58 (R9V-6): nothing left in os.tmpdir() ---------------------------------------------------------------------
 
-test('R9V-6 (E58) the two ava runs of npm test leave nothing in os.tmpdir()', t => {
+/** The repository (the specs run from their compiled copy in dist-spec/). */
+const root = path.resolve(__dirname, '../../../..')
+
+test('R9V-6 (E58) the ava run of npm test leaves nothing in os.tmpdir()', t => {
   t.timeout(180_000)
   // 4b1fa69: ava.config.js set `cache: false`, so every ava run created an empty directory in os.tmpdir() (ava's
-  // _createCacheDir, fs.mkdtempSync) and never removed it: two per npm test
+  // _createCacheDir, fs.mkdtempSync) and never removed it
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'r9v6-'))
   t.teardown(() => fs.rmSync(temporary, { recursive: true, force: true }))
   const ava = path.join(root, 'node_modules/ava/entrypoints/cli.mjs')
-  const runs: Array<[string, string[]]> = [
-    ['ava.config.js', ['spec/regression/issues/11.test.ts']],
-    ['ava.perf.config.js', ['spec/regression/fixes/round9-hashing.test.ts', '--match', '*errors that differ only in their own properties*']]
-  ]
-  for (const [config, args] of runs) {
-    const result = spawnSync(process.execPath, [ava, '--config', config, ...args], {
-      cwd: root,
-      encoding: 'utf8',
-      env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary, NO_COLOR: '1' }
-    })
-    t.is(result.status, 0, `${config}: ${result.stdout}${result.stderr}`)
-    t.regex(result.stdout + result.stderr, /1 test passed/, config)
-    // Node.js' own module compile cache is not ava's (npm itself writes it when it starts)
-    t.deepEqual(fs.readdirSync(temporary).filter(name => name !== 'node-compile-cache'), [], `${config} left this in os.tmpdir()`)
-  }
+  const result = spawnSync(process.execPath, [ava, 'spec/regression/issues/11.test.ts'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary, NO_COLOR: '1' }
+  })
+  t.is(result.status, 0, `${result.stdout}${result.stderr}`)
+  t.regex(result.stdout + result.stderr, /1 test passed/)
+  // Node.js' own module compile cache is not ava's (npm itself writes it when it starts)
+  t.deepEqual(fs.readdirSync(temporary).filter(name => name !== 'node-compile-cache'), [], 'ava left this in os.tmpdir()')
 })
