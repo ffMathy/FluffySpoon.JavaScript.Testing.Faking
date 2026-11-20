@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, clearsSoFar } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { codeMember, pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
@@ -94,7 +94,7 @@ const functionToString = Function.prototype.toString
 const boundSourceText = functionToString.call(function () { /* empty */ }.bind(null))
 const isLibraryTarget = (value: Function): boolean => {
   try {
-    if (ownedTargetCount > 0 && ownedTargets.has(value)) return true
+    if (ownedTargets.has(value)) return true
     const name = Reflect.getOwnPropertyDescriptor(value, 'name')
     if (name === undefined || name.value !== TARGET_NAME) return false
     const length = Reflect.getOwnPropertyDescriptor(value, 'length')
@@ -550,10 +550,8 @@ const isOtherCopySubstitute = (value: unknown): value is Function =>
  * that answered them has matchers, or the mimicked instance answered them: the call has no setup of its own) are found,
  * and the check counts along the route of the expression (see concreteRoute), deciding from the answers noted for the
  * calls which calls the shared substitute was returned to (see throughCall). Such a hand-out is noted for the record
- * that made it (see configuredHandOuts). Nothing is noted for other calls before the first such hand-out: no cost when
- * no such substitute is involved.
+ * that made it (see configuredHandOuts).
  */
-let sharedHandOutCount = 0
 
 /** E99: whether what gave an answer (answerSource) gives it to every call that matches: a setup with matchers, or the mimicked instance. */
 const sharesAnswer = (source: Substitution | object | undefined): boolean =>
@@ -582,7 +580,6 @@ const continuesHandOutOf = (face: Face, record: CallRecord): boolean => {
  */
 const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, shared: boolean): void => {
   face.handOut(record)
-  if (shared) sharedHandOutCount++
   configuredHandOuts.set(record, { face, from: owner, shared })
   // E111: the substitute itself (see continuesExpression)
   if ((face instanceof AutoEntry ? face.materializedState : face) === owner) record.handedOutItself = true
@@ -630,7 +627,6 @@ const faceTargetPrototype = Object.create(Function.prototype, {
  * inherits from a substitute (E46) is never one of them.
  */
 const reprototyped = new WeakSet<object>()
-let reprototypedCount = 0
 
 /** The proxies of the substitutes themselves (an auto-substitute keeps its own, AutoEntry.proxy). */
 const rootProxies = new WeakMap<SubstituteState, object>()
@@ -643,7 +639,7 @@ const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? 
  * configured answer, an argument or a member's value) throws for it, and is simply not one (E14: matched by identity).
  */
 const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' && types.isProxy(value) &&
-  (hasFacePrototype(value) || (reprototypedCount > 0 && reprototyped.has(value)))
+  (hasFacePrototype(value) || reprototyped.has(value))
 
 const hasFacePrototype = (value: Function): boolean => {
   try {
@@ -661,10 +657,8 @@ const hasFacePrototype = (value: Function): boolean => {
  * the code under test defined, and the proxy's answers cannot conflict with them (a frozen target without own
  * properties constrains nothing; frozen `length` and `name` would bind what reading them answers). A defined property is
  * a real property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
- * Taking over is rare, so the hot path only checks a counter.
  */
 const ownedTargets = new WeakSet<object>()
-let ownedTargetCount = 0
 const hasOwnProperty = Object.prototype.hasOwnProperty
 
 const takeOver = (target: FaceTarget): void => {
@@ -672,10 +666,9 @@ const takeOver = (target: FaceTarget): void => {
   delete (target as any).length
   delete (target as any).name
   ownedTargets.add(target)
-  ownedTargetCount++
 }
 
-const isOwned = (target: FaceTarget): boolean => ownedTargetCount > 0 && ownedTargets.has(target)
+const isOwned = (target: FaceTarget): boolean => ownedTargets.has(target)
 
 /** Whether the code under test defined the property on the substitute (E25). */
 const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwned(target) && hasOwnProperty.call(target, property)
@@ -747,10 +740,7 @@ const faceHandler: ProxyHandler<FaceTarget> = {
   setPrototypeOf: function setPrototypeOf(target: FaceTarget, prototype: object | null) {
     if (!Reflect.setPrototypeOf(target, prototype)) throw notExtensibleError(target(), setPrototypeOf)
     const proxy = proxyOf(target())
-    if (proxy !== undefined && !reprototyped.has(proxy)) {
-      reprototyped.add(proxy)
-      reprototypedCount++
-    }
+    if (proxy !== undefined) reprototyped.add(proxy)
     return true
   },
   // E115: on a substitute that mimicks an object, the instance's member is deleted (a spy's restore, see defineOnInstance)
@@ -1074,7 +1064,7 @@ const faceContextFunction = (face: Face, context: ContextMethod, head: CallRecor
   // E111: the check view uses the hand-out up: the next statement does not continue its expression (a substitute that a
   // setup with matchers answers with itself, `io.to(Arg.any()).returns(io)`, is where the next statement starts as well)
   if (check) face.forgetHandOut(head!)
-  const subject = check && sharedHandOutCount > 0 ? () => concreteSubject(faceState(face), head) : undefined
+  const subject = check ? () => concreteSubject(faceState(face), head) : undefined
   return contextFunction(context, () => faceState(face), head, subject)
 }
 
@@ -1981,7 +1971,7 @@ const invoke = (
  */
 const callWithMatchers = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, head: CallRecord | undefined): any => {
   const stringAssertion = isStringAssertionKey(key)
-  const route = sharedHandOutCount > 0 && !stringAssertion ? concreteRoute(state, head) : undefined
+  const route = !stringAssertion ? concreteRoute(state, head) : undefined
   if (route !== undefined) return routedView(() => configureCall(state, key, specification), extendRoute(route, callStep(key, specification)), false)
   return configureCall(state, key, specification, stringAssertion)
 }
@@ -2260,7 +2250,7 @@ const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefi
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
   // (the call of received or didNotReceive continues the expression of the substitute it is a member of)
-  const subject = chainHead === undefined || sharedHandOutCount === 0 ? entry.parent : concreteSubject(entry.parent, chainHead.chainPrevious)
+  const subject = chainHead === undefined ? entry.parent : concreteSubject(entry.parent, chainHead.chainPrevious)
   const other = subject instanceof MatchedSubstitutes ? subject.open(entry.key as StringAssertionKey, count, stackStart) : undefined
   return { state: subject, count, other }
 }
@@ -2531,7 +2521,7 @@ type RouteStep = {
   matchesCall(actualArguments: readonly unknown[]): boolean
   /**
    * E99: when the step is the call of the check expression itself, and a concrete call that a setup with matchers (or the
-   * mimicked instance) answered with a substitute that it gives every call it matches (see sharedHandOutCount), that
+   * mimicked instance) answered with a substitute that it gives every call it matches (see handOutShared), that
    * substitute.
    */
   readonly shared?: SubstituteState
@@ -2605,7 +2595,7 @@ const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutSt
  * cycle) has a note for each of those hand-outs (see configuredHandOuts), so the route goes on past each.
  */
 const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): CheckRoute | undefined => {
-  if (head === undefined || sharedHandOutCount === 0) return undefined
+  if (head === undefined) return undefined
   const found: HandOutStep[] = []
   const answers: SubstituteState[] = []
   let top = 0
@@ -2928,7 +2918,7 @@ const followRoute = (route: CheckRoute, start: Function | undefined, follow: Fol
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index]
     const through = () => routePath(route, index + 1)
-    if (clearsSoFar() > 0) since = latestClear(checked, since)
+    since = latestClear(checked, since)
     checked = step.kind === 'get' ? throughRead(checked, step.key, through, start, follow, since) : throughCall(checked, step, through, start, follow, since)
     if (follow !== 'count') continue
     const foreign = checked.find(isForeign)
