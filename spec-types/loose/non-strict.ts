@@ -101,3 +101,18 @@ members.received(1).save(Arg.is(member => member.name?.startsWith('a')))
 members.save(Arg.is(async member => member.name === 'ann')).returns('x')
 // @ts-expect-error a thenable
 members.received(1).save(Arg.is(member => ({ then(resolve: (matches: boolean) => void) { resolve(true) } })))
+// R17TD-1 / T82 without strictFunctionTypes: after `Arg.all()` on overloads, a value typed as a union of implementations
+// fits `.mimicks()` only when each one does, as when it is assigned to the member itself.
+interface Row { id: number }
+interface Rows { remove(rows: Row[]): Promise<Row[]>; remove(row: Row): Promise<Row> }
+const rows = Substitute.for<Rows>()
+const takesEveryCall = (...args: any[]) => Promise.resolve({ id: 1 })
+declare const fits: typeof takesEveryCall | ((row: any) => Promise<Row>)
+rows.remove(Arg.all()).mimicks(fits)
+interface Keys { get(): string[]; get(key: string): string }
+const keys = Substitute.for<Keys>()
+declare const takesAKey: (() => string[]) | ((key: string) => string)
+// @ts-expect-error get() passes no key
+keys.get(Arg.all()).mimicks(takesAKey)
+// @ts-expect-error the same for a function assigned to the member
+const plainKeys: Keys['get'] = takesAKey
