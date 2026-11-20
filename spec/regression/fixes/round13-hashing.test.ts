@@ -12,7 +12,7 @@ const longArray = (length: number, item: (index: number) => unknown): unknown[] 
 }
 
 test('R12-ADV-1 (E74) a path label with a long array of errors or numbers prints its first items and how many more there are', t => {
-  // longer than ARRAY_KEYS_LIMIT (1,000), so that the array's other keys are not listed
+  // more than 1,000 items, as in R12-ADV-1
   const length = 2000
   const errors = longArray(length, index => new Error(`failed ${index}`))
   const numbers = longArray(length, index => index)

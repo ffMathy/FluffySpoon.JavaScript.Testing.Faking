@@ -280,26 +280,27 @@ test('R14FE-5 (E97) two copies of the package: each names the calls further down
     fluentRemedy('.setAttribute')), own)
 })
 
-test('R14FE-5 (E97) the search is bounded: a call beyond it is not named, and nearer ones are', t => {
-  // a chain far deeper than the search goes
+test('R14FE-5 (E97) the search finds calls however far down they are, the nearest first', t => {
+  // a chain 20,000 steps deep (its path is shown with its first and last steps, E35)
   let deep = Substitute.for<any>()
   const root = deep
   for (let index = 0; index < 20_000; index++) deep = deep.next(index)
   deep.end()
   const message = failureOf(t, () => root.received().end())
   t.true(message.includes('Expected to receive 1 or more property reads or method calls matching end, but received none.'), message)
-  t.false(message.includes('further down'), message)
+  const deepPath = '@Substitute.next(0).next(1).next(2).….next(19994).next(19995).next(19996).next(19997).next(19998).next(19999).end(...)'
+  t.true(message.includes(`end was not called on @Substitute itself, but on a substitute further down: ${deepPath}.`), message)
   root.next(0).end()
-  t.true(failureOf(t, () => root.received().end()).includes('but on a substitute further down: @Substitute.next(0).end(...).'))
+  t.true(failureOf(t, () => root.received().end()).includes(`but on substitutes further down: @Substitute.next(0).end(...) and ${deepPath}.`))
 
-  // a substitute with far more auto-substitutes than the search looks at: the first ones are looked at
+  // a substitute with 20,000 auto-substitutes: all of them are looked at
   const api = Substitute.for<any>()
   api.get(0).json()
   for (let index = 1; index < 20_000; index++) api.get(index)
   const wideMessage = failureOf(t, () => api.received().json())
   t.true(wideMessage.includes('json was not called on @Substitute itself, but on a substitute further down: @Substitute.get(0).json(...).'), wideMessage)
-  api.get(19_999).json() // beyond the search
-  t.true(failureOf(t, () => api.received().json()).includes('further down: @Substitute.get(0).json(...). '))
+  api.get(19_999).json()
+  t.true(failureOf(t, () => api.received().json()).includes('further down: @Substitute.get(0).json(...) and @Substitute.get(19999).json(...). '))
 
   // a long path is cut
   const wide = Substitute.for<any>()

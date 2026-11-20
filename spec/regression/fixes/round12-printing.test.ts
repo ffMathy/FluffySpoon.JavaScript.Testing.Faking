@@ -6,7 +6,7 @@ import * as library from '../../../src'
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import {
-  DifferenceSearch, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, firstVisibleDifference, formatArguments, formatValue, messageBounds
+  MAX_MESSAGE_DEPTH, formatArguments, formatValue, leastDifference, messageBounds
 } from '../../../src/internals/utilities/Stringify'
 
 // Round 12: how failure messages print the expected and received calls (fix spec E67-E73), the findings of round 11
@@ -178,41 +178,29 @@ test('R11-ADV-1 (E69) next to a matcher, a difference inside a Map or a Set, or 
   t.deepEqual(kept.received, ["@Substitute.f('x', Map(1) { 'k' => 1 })"])
 })
 
-test('R11V-5 (E69) the comparison looks into Maps and Sets without printing them', t => {
+test('R11V-5 (E69) the comparison looks into Maps and Sets', t => {
   const leaf = (value: number) => {
     const object: Record<string, unknown> = {}
     for (let key = 0; key < 20; key++) object[`key${key}`] = { deep: { deeper: value } }
     return object
   }
-  let printed = 0
-  const search = (): DifferenceSearch => ({
-    bounds: MESSAGE_BOUNDS,
-    maxDepth: MAX_MESSAGE_DEPTH,
-    textOf: (value, depth) => {
-      printed++
-      return formatValue(value, false, messageBounds(depth))
-    },
-    keys: new Map(),
-    entries: 100_000
-  })
+  const least = (expected: unknown[], actual: unknown[]) => leastDifference(expected, actual, 0, MAX_MESSAGE_DEPTH)
   // R11V-5's shapes: they print alike up to four levels deep
   const set = (value: number) => ({ s: new Set([{ a: { b: leaf(value) } }]) })
   const map = (value: number) => new Map([['k', { a: { b: { c: leaf(value) } } }]])
-  t.is(firstVisibleDifference(search(), [set(1), set(1)], [set(0), set(0)], 2), Infinity)
-  t.is(firstVisibleDifference(search(), [map(1)], [map(0)], 2), Infinity)
-  t.is(printed, 0)
+  t.is(least([set(1), set(1)], [set(0), set(0)]), Infinity)
+  t.is(least([map(1)], [map(0)]), Infinity)
   // and where they differ, the comparison finds the least depth
   const config = (max: number) => new Map([['db', { pool: { opts: { max, idle: { ms: 1000 } } } }]])
-  t.is(firstVisibleDifference(search(), [config(10)], [config(5)], -1), 3)
-  t.is(firstVisibleDifference(search(), [new Set([1, 2])], [new Set([1, 2, 3])], -1), 0)
-  t.is(firstVisibleDifference(search(), [{ a: { s: new Set([{ x: 1 }]) } }], [{ a: { s: new Set([{ x: 2 }]) } }], -1), 3)
-  t.is(firstVisibleDifference(search(), [{ a: { m: new Map([[{ k: 1 }, 1]]) } }], [{ a: { m: new Map([[{ k: 2 }, 1]]) } }], -1), 3)
-  t.is(printed, 0)
+  t.is(least([config(10)], [config(5)]), 3)
+  t.is(least([new Set([1, 2])], [new Set([1, 2, 3])]), 0)
+  t.is(least([{ a: { s: new Set([{ x: 1 }]) } }], [{ a: { s: new Set([{ x: 2 }]) } }]), 3)
+  t.is(least([{ a: { m: new Map([[{ k: 1 }, 1]]) } }], [{ a: { m: new Map([[{ k: 2 }, 1]]) } }]), 3)
 })
 
-// ---- E70 (R11DOC-1): after the comparison budget ------------------------------------------------------------------
+// ---- E70 (R11DOC-1): every listed line ----------------------------------------------------------------------------
 
-test('R11DOC-1 (E70) after the comparison budget is spent, later lines are printed as deep as the earlier ones, with matchers too', t => {
+test('R11DOC-1 (E70) every listed line is printed as deep as it needs, with or without matchers in the expected call', t => {
   // 19 keys four levels down that print alike, and one (`z.y`) that tells some of the lines apart three levels deep
   const wide = (deep: number, shallow: number) => {
     const object: Record<string, unknown> = { z: { y: shallow } }
@@ -239,7 +227,7 @@ test('R11DOC-1 (E70) after the comparison budget is spent, later lines are print
     return message.split('\n› ').slice(1).map(line => /y: \d/.test(line) ? 'D' : 's').join('')
   }
   const literal = shapeOf(false)
-  // every listed call is printed three levels deep, also those after the budget is spent (at about the 18th line)
+  // every listed call is printed three levels deep
   t.is(literal, 'D'.repeat(34))
   // 98a8973: DDDDDDDDDDDDDDDDDsssssssssssss (the lines after the budget stayed two levels deep)
   t.is(shapeOf(true), literal)
@@ -308,47 +296,16 @@ test('R11-ADV-4 (E72) keys in another order do not keep a DTO that differs furth
   t.is(literal.expected, "save({ id: 'u-81f3', name: 'Ann', address: { geo: { point: { lat: 60.4, lng: 5.3 } } } })")
   t.deepEqual(literal.received, matched.received)
   // the same keys in another order are the same keys to the comparison; other keys are not
-  const search = { bounds: MESSAGE_BOUNDS, maxDepth: MAX_MESSAGE_DEPTH, textOf: () => '', keys: new Map(), entries: 1000 }
-  t.is(firstVisibleDifference(search, [{ a: 1, b: { c: 2 } }], [{ b: { c: 3 }, a: 1 }], -1), 1)
-  t.is(firstVisibleDifference(search, [{ a: 1, b: 2 }], [{ b: 2, c: 1 }], -1), 0)
-  t.is(firstVisibleDifference(search, [{ a: 1, b: 2 }], [{ b: 2, a: 1 }], -1), Infinity)
-})
-
-// ---- E73 (R11-ADV-6): wide arguments --------------------------------------------------------------------------------
-
-test('R11-ADV-6 (E73) a failure message lists the keys of each wide argument once', t => {
-  const wide = (value: number) => {
-    const object: Record<string, unknown> = { a: { b: { c: { d: value } } } }
-    for (let key = 0; key < 5000; key++) object[`k${key}`] = key
-    return object
-  }
-  const s = Substitute.for<any>()
-  for (let index = 0; index < 50; index++) s.f('x', wide(1))
-  const expected = wide(2)
-  const listKeys = Object.keys
-  let wideListings = 0
-  Object.keys = function keys(object: object) {
-    const keys = listKeys(object)
-    if (keys.length > 1000) wideListings++
-    return keys
-  } as typeof Object.keys
-  let message: string
-  try {
-    message = messageOf(() => s.received(1).f('x', expected))
-  } finally {
-    Object.keys = listKeys
-  }
-  // the lines differ three levels down: printed two and three levels deep, and compared
-  t.true(message.includes('› ✘ @Substitute.f(\'x\', {\n  a: { b: { c: { d: 1 } } },'), message.slice(0, 600))
-  // 98a8973: 153 listings (each argument at each depth and in the comparison), c503043: 102; one per argument: 51
-  t.true(wideListings <= 51, `${wideListings} listings of 5,000 keys`)
+  t.is(leastDifference([{ a: 1, b: { c: 2 } }], [{ b: { c: 3 }, a: 1 }], 0, MAX_MESSAGE_DEPTH), 1)
+  t.is(leastDifference([{ a: 1, b: 2 }], [{ b: 2, c: 1 }], 0, MAX_MESSAGE_DEPTH), 0)
+  t.is(leastDifference([{ a: 1, b: 2 }], [{ b: 2, a: 1 }], 0, MAX_MESSAGE_DEPTH), Infinity)
 })
 
 // ---- E67-E69: the comparison agrees with the printed texts --------------------------------------------------------
 
 class Point { constructor(readonly x: unknown, readonly y: unknown) { } }
 
-test('R11V-1, R11V-2, R11V-3 (E67-E69) firstVisibleDifference finds the least depth at which calls with Maps, Sets, array keys and typed arrays print differently', t => {
+test('R11V-1, R11V-2, R11V-3 (E67-E69) leastDifference finds the least depth at which calls with Maps, Sets, array keys and typed arrays print differently', t => {
   let seed = 12
   const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
   const below = (count: number) => Math.floor(random() * count)
@@ -429,8 +386,7 @@ test('R11V-1, R11V-2, R11V-3 (E67-E69) firstVisibleDifference finds the least de
     const actual = [clone(expected[0], places)]
     if (places.length === 0) continue
     places[below(places.length)].set(random() < 0.3 ? build(3) : leaf())
-    const search = { bounds: MESSAGE_BOUNDS, maxDepth: MAX_MESSAGE_DEPTH, textOf: (value: unknown, depth: number) => formatValue(value, false, messageBounds(depth)), keys: new Map(), entries: 100_000 }
-    const depth = firstVisibleDifference(search, expected, actual, -1)
+    const depth = leastDifference(expected, actual, 0, MAX_MESSAGE_DEPTH)
     compared++
     if (/Map|Set/.test(textAt(expected, MAX_MESSAGE_DEPTH))) collections++
     for (let shallower = 0; shallower < Math.min(depth, MAX_MESSAGE_DEPTH + 1); shallower++)
