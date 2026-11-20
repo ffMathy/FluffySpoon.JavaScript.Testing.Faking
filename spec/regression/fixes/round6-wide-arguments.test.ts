@@ -55,8 +55,8 @@ test.serial('R5V-1 (E13) distinct wide objects with the same keys are told apart
 })
 
 /**
- * Each limit: calls with distinct objects of `size` keys, on both sides of 256 (wide containers), 1,025 (families) and
- * 65,536 (a sample of the values above). `prefix` gives each run key sets of its own.
+ * Each limit: calls with distinct objects of `size` keys, on both sides of 256, 1,025 and 65,536 keys (the limits that
+ * earlier versions treated wide objects by). `prefix` gives each run key sets of its own.
  */
 const eachLimit = (t: ExecutionContext, prefix: string) => {
   for (const size of [255, 256, 257, 1024, 1025, 1026, 4096, 4097, 65_535, 65_536, 65_537]) {
@@ -69,7 +69,7 @@ const eachLimit = (t: ExecutionContext, prefix: string) => {
   }
 }
 
-test.serial('R5-ADV-1 (E13) objects on both sides of each limit (256, 1,025 and 65,536 keys) hash alike in another key order', t => {
+test.serial('R5-ADV-1 (E13) objects on both sides of each limit (256, 1,025 and 65,536 keys) are the same argument in another key order', t => {
   eachLimit(t, 'w')
 })
 
@@ -86,7 +86,7 @@ test.serial('R5-ADV-1 (E13) 50 normalized-state actions with a nested 5,000-entr
 
 test.serial('R5-ADV-1 (E13) distinct Sets of records are told apart', t => {
   // still exact: equal copies (in another order) find the same auto-substitute, a record that differs anywhere (also
-  // deeper than the budget of an entry looks) another one
+  // three levels down) another one
   const sub = Substitute.for<any>()
   const table = () => new Set(Array.from({ length: 300 }, (_, key) => ({ id: key, deep: { deeper: { deepest: 1 } } })))
   const first = sub.put(table())
@@ -127,7 +127,7 @@ test.serial('R5-ADV-1 (E13) Maps and Sets on both sides of each limit (256 and 6
   }
 })
 
-test.serial('R5TD-2 (E13) a wide object passed again and again is listed once: calls with one shared table of 300 to 10,000 keys', t => {
+test.serial('R5TD-2 (E13) a wide object passed again and again: calls with one shared table of 300 to 10,000 keys find their auto-substitutes and are counted', t => {
   for (const size of [300, 1000, 10_000]) {
     const messages = wideObject(size, key => `text ${key}`, key => `message.key.${key}`)
     const translations = Substitute.for<any>()
@@ -193,20 +193,20 @@ test.serial('R5V-2 (E14) values that cannot be read are matched by identity', t 
   t.not(sub.p(proxy), sub.p(Proxy.revocable({}, {}).proxy))
 })
 
-test.serial('R5V-1 (E13) more key sets than there are families: 30 calls with same-size objects whose keys differ', t => {
+test.serial('R5V-1 (E13) 30 calls with same-size objects whose keys differ are told apart', t => {
   const values = Array.from({ length: 30 }, (_, call) => wideObject(5000, key => key, key => `k${call}_${key}`))
   const sub = Substitute.for<any>()
   const results = values.map(value => sub.put(value))
   values.forEach((value, index) => t.is(sub.put(shuffledCopy(value, index)), results[index]))
   t.is(new Set(results).size, values.length)
 
-  // a matcher in an object with as many keys as a family is found (as in any object): the call is a setup
+  // a matcher in an object with 5,000 other keys is found (as in any object): the call is a setup
   const withMatcher = { ...wideObject(5000, key => key), extra: Arg.any() }
   const store = Substitute.for<any>()
   store.put(withMatcher).returns('configured')
   t.is(store.put({ ...withMatcher, extra: 1 }), 'configured')
 })
 
-test.serial('R5-ADV-1 (E13) objects on both sides of each limit hash alike in another key order, also once every family is taken', t => {
+test.serial('R5-ADV-1 (E13) objects on both sides of each limit are the same argument in another key order, also after many other wide objects', t => {
   eachLimit(t, 'x')
 })

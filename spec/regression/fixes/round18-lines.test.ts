@@ -7,8 +7,8 @@ import * as path from 'path'
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 
-// Round 18: the lines, calls and record-path part of the round-17 findings (R17FE-5, R17-ADV-11, R17-ADV-3, R17V-3 =
-// R17-ADV-7), decided in the fix spec as E125-E128. E128 (not met, see the report) has no test here.
+// Round 18: the lines, calls and record-path part of the round-17 findings (R17FE-5, R17-ADV-11, R17V-3 = R17-ADV-7),
+// decided in the fix spec as E125-E128. E127 (R17-ADV-3, memory) and E128 (not met, see the report) have no test here.
 
 const library = path.resolve(__dirname, '../../../src/index.js')
 

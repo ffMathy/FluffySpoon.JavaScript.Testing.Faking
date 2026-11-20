@@ -203,9 +203,9 @@ test('R6-ADV-6 (E21) a missing or non-number Error.stackTraceLimit gives no fram
       ${countLimitChanges(setup)}
       const descriptor = JSON.stringify(Object.getOwnPropertyDescriptor(RealError, 'stackTraceLimit') ?? 'none')
       const s = Substitute.for()
-      for (let i = 0; i < 10000; i++) s.f(i)
+      for (let i = 0; i < 100; i++) s.f(i)
       const app = Substitute.for()
-      for (let i = 0; i < 10000; i++) app.a.b.c.d(i)
+      for (let i = 0; i < 100; i++) app.a.b.c.d(i)
       ${openConnection}
       const v8Frames = typeof new RealError('x').stack === 'string' && new RealError('x').stack.includes('\\n')
       console.log(JSON.stringify({

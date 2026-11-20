@@ -69,7 +69,7 @@ test('R4-ADV-2 (E9) wide objects and Maps shared by many values, or passed again
   t.is(api.fetch(request), 'two')
 })
 
-test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container once, and into a wide one too', t => {
+test('R4-ADV-2 (E9) the search for nested matchers finds them in a shared container and in a wide one', t => {
   const shared = { role: Arg.any('string') }
   const repository = Substitute.for<any>()
   repository.save([{ user: shared }, { user: shared }]).returns('saved')
