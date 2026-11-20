@@ -327,10 +327,20 @@ const captureSchedule = (): Schedule => {
  */
 export const deferredReports: { schedule: Schedule } = { schedule: captureSchedule() }
 
-/** Stops a deferred property assertion from being thrown (the access turned out to be a method assertion). */
+/**
+ * Stops a deferred property assertion from being thrown (the access turned out to be a method assertion). E110 (R16V-2):
+ * and lets go of what its report would have shown, which a check through a call or a route holds a lot of: a report is
+ * kept until its microtask runs, so a loop of checks kept every one of them until the loop ended.
+ */
 export const settle = (deferred: DeferredAssertion | undefined): void => {
-  if (deferred !== undefined) deferred.settled = true
+  if (deferred === undefined) return
+  deferred.settled = true
+  deferred.error = settledReport
+  if ((deferred as PendingReport).applies !== undefined) (deferred as PendingReport).applies = undefined
 }
+
+/** E110: the report of a deferred assertion that was settled (see settle): it is never thrown. */
+const settledReport = (): SubstituteException => SubstituteException.generic('A settled check has nothing to report.')
 
 /**
  * The property-style half of `sub.received(n).member`. At this point it is not known yet whether the

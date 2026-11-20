@@ -399,26 +399,28 @@ const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHan
  *
  * E81, E88, E89: what the call or (E106) the read answered is noted, for checks through a call with matchers (see
  * throughCall and throughRead). E99: a call answered with a substitute that a setup with matchers (or the mimicked
- * instance) gives every matching call is noted as such (see sharedHandOuts).
+ * instance) gives every matching call is noted as such, with the hand-out (see handOutShared). E111 (R16-ADV-7): such a
+ * call hands out the substitute that was called itself, too (`io.to(Arg.any()).returns(io)`, a mimicked `return this`),
+ * so that a check through it in the same expression (`io.to('room-b').received(1).emit(...)`) goes through that call.
  */
 const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteState): T => {
+  const source = takeAnswerSource()
   if (isFaceProxy(value)) {
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined) {
-      if ((face instanceof AutoEntry ? face.materializedState : face) !== owner) {
-        face.handOut(record)
-        if (record.kind === 'call' && sharesAnswer(answerSource)) noteSharedHandOut(record, owner)
-      }
+      const shared = record.kind === 'call' && sharesAnswer(source)
+      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner) handOutShared(face, record, owner, shared)
       owner.noteConfiguredAnswer(record, face)
     }
-  } else owner.noteConfiguredAnswer(record, otherAnswer(value))
+  } else owner.noteConfiguredAnswer(record, otherAnswer(value, source))
   return value
 }
 
 /** E106: notes what a read answered, as handOutConfigured does, for a value it does not hand out (see deferredRead). */
 const noteReadAnswer = (state: SubstituteState, record: CallRecord, value: unknown): void => {
+  const source = takeAnswerSource()
   const face = isFaceProxy(value) ? (value as any)[INTERNAL] as Face | undefined : undefined
-  state.noteConfiguredAnswer(record, face ?? otherAnswer(value))
+  state.noteConfiguredAnswer(record, face ?? otherAnswer(value, source))
 }
 
 /**
@@ -427,13 +429,27 @@ const noteReadAnswer = (state: SubstituteState, record: CallRecord, value: unkno
  * handOutConfigured does for other calls, so that a check through a call with matchers under either reading
  * (`api.getUser(Arg.any())[received](1).save()`, `client.rpc.call('getUser', Arg.any())[received](1).save()`) counts the
  * calls of that substitute, however the code under test made the call. It hands nothing out (the call/apply path never
- * did). E88, E89: a value that is not a substitute of this copy is noted as handOutConfigured notes it. Returns the value.
+ * did), except E111 (R16-ADV-5) a substitute that a setup with matchers (or the mimicked instance) shares, as
+ * handOutConfigured does, from the reading that answered (`directAnswered`: the direct one), so that a check through
+ * a concrete call made so (`rpc.call('getUser', 2).received(1).save()`, `io.to.call(io, 'room-b')[received](1).emit()`)
+ * goes through that call (see concreteRoute). E88, E89: a value that is not a substitute of this copy is noted as
+ * handOutConfigured notes it. Returns the value.
  */
-const noteHelperAnswer = <T>(value: T, memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState): T => {
-  const answer: object | undefined = isFaceProxy(value) ? (value as any)[INTERNAL] as Face | undefined : otherAnswer(value)
+const noteHelperAnswer = <T>(
+  value: T, memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState,
+  directAnswered: boolean
+): T => {
+  const source = takeAnswerSource()
+  const isFace = isFaceProxy(value)
+  const face = isFace ? (value as any)[INTERNAL] as Face | undefined : undefined
+  const answer: object | undefined = isFace ? face : otherAnswer(value, source)
   if (answer !== undefined) {
     memberState.noteConfiguredAnswer(memberRecord, answer)
     if (directRecord !== undefined && directRecord.kind === 'call') directState.noteConfiguredAnswer(directRecord, answer)
+  }
+  if (face !== undefined && sharesAnswer(source)) {
+    if (!directAnswered) handOutShared(face, memberRecord, memberState, true)
+    else if (directRecord !== undefined && directRecord.kind === 'call') handOutShared(face, directRecord, directState, true)
   }
   return value
 }
@@ -454,18 +470,27 @@ const CONFIGURED: object = Object.freeze({ answeredBy: 'a configured value' })
 
 /**
  * E88: what gave the configured answer that was given last: its setup (set by execute once it has its value, after the
- * setup's own code ran, which can give answers of its own) or MIMICKED (see fromMimicked). Read right after the answer.
+ * setup's own code ran, which can give answers of its own) or MIMICKED (see fromMimicked). Read right after the answer,
+ * and E110 (the docs agent's E99 retention) taken then (see takeAnswerSource): a setup kept here would keep its values
+ * alive, and a substitute among them the records it handed out last, until the next configured answer anywhere.
  */
 let answerSource: Substitution | object | undefined
+
+/** E110: what gave the configured answer that was given last (see answerSource), which is forgotten here. */
+const takeAnswerSource = (): Substitution | object | undefined => {
+  const source = answerSource
+  answerSource = undefined
+  return source
+}
 
 /**
  * E88, E89: what a call answered with a value that is not a substitute of this copy is noted with: a function that is a
  * proxy (it may be a substitute of another copy, which the check finds out, see throughCall; nothing is asked of it here,
- * on every call), or else what gave the value. E104: a function bound from a substitute of this copy (see boundProxies)
- * is no substitute: what gave it.
+ * on every call), or else what gave the value (`source`, see answerSource). E104: a function bound from a substitute of
+ * this copy (see boundProxies) is no substitute: what gave it.
  */
-const otherAnswer = (value: unknown): object =>
-  typeof value === 'function' && types.isProxy(value) && !boundProxies.has(value) ? value : answerSource ?? CONFIGURED
+const otherAnswer = (value: unknown, source: Substitution | object | undefined): object =>
+  typeof value === 'function' && types.isProxy(value) && !boundProxies.has(value) ? value : source ?? CONFIGURED
 
 /**
  * E104 (R15-ADV-8): the functions that `x.bind(...)` gave on a substitute of this copy (see createBoundProxy), with the
@@ -484,21 +509,28 @@ const isOtherCopySubstitute = (value: unknown): value is Function =>
  * a setup with matchers that returns a substitute, every matching call answers the same substitute (NSubstitute's
  * semantics). A check through a CONCRETE call (`io.to('room-b').received(1).emit(...)`) cannot count that substitute's
  * calls as if they all came through that call. So the calls of a check expression that such a setup answered (the setup
- * that answered them has matchers, or the mimicked instance answered them: the call has no setup of its own) are noted
- * here, with the substitute they were made on, and the check counts along the route of the expression (see
- * concreteRoute), deciding from the hand-out notes which calls the shared substitute was returned to (see throughCall).
- * Nothing is noted for other calls: no cost when no such substitute is involved.
+ * that answered them has matchers, or the mimicked instance answered them: the call has no setup of its own) are found,
+ * and the check counts along the route of the expression (see concreteRoute), deciding from the answers noted for the
+ * calls which calls the shared substitute was returned to (see throughCall).
+ * E110 (R16V-2, the docs agent's E99 retention): such a hand-out is noted with the substitute handed out, for its latest
+ * hand-out only (see SubstituteState.ConfiguredHandOut), not per call: no cost per call, and nothing that keeps the
+ * substitute the call was made on alive once it is dropped. Nothing is noted for other calls before the first such
+ * hand-out: no cost when no such substitute is involved.
  */
-const sharedHandOuts = new WeakMap<CallRecord, SubstituteState>()
 let sharedHandOutCount = 0
 
 /** E99: whether what gave an answer (answerSource) gives it to every call that matches: a setup with matchers, or the mimicked instance. */
 const sharesAnswer = (source: Substitution | object | undefined): boolean =>
   source === MIMICKED || (source instanceof Substitution && source.args !== undefined && hasMatchers(source.args))
 
-const noteSharedHandOut = (record: CallRecord, owner: SubstituteState): void => {
-  sharedHandOuts.set(record, owner)
-  sharedHandOutCount++
+/**
+ * E39, E99, E110: `record` (of `owner`) hands out the substitute `face` as a configured value, which `shared` says a setup
+ * with matchers or the mimicked instance gives every call that it matches (see ConfiguredHandOut).
+ */
+const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, shared: boolean): void => {
+  face.handOut(record)
+  if (shared) sharedHandOutCount++
+  face.noteConfiguredHandOut(record, owner, shared)
 }
 
 /*
@@ -1137,7 +1169,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     } finally {
       if (!answered) noteHelperThrew(memberRecord, memberState, directRecord, direct.state, direct.key)
     }
-    if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state)
+    if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state, directHashes !== undefined)
     if (directRecord !== undefined) {
       // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf). E91: only when the
       // invocation can be a wrapper's (see wrapperThis); otherwise the member reading's own auto-substitute, below.
@@ -1515,7 +1547,7 @@ const invoke = (
  */
 const callWithMatchers = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, head: CallRecord | undefined): any => {
   const stringAssertion = isStringAssertionKey(key)
-  const route = sharedHandOutCount > 0 && !stringAssertion ? concreteRoute(head) : undefined
+  const route = sharedHandOutCount > 0 && !stringAssertion ? concreteRoute(state, head) : undefined
   if (route !== undefined) return routedView(() => configureCall(state, key, specification), extendRoute(route, callStep(key, specification)), false)
   return configureCall(state, key, specification, stringAssertion)
 }
@@ -1592,7 +1624,7 @@ const callOrConstruct = (fn: Function, thisArg: unknown, args: any[], self: Self
  * uncaught error points there, not into the library.
  */
 const noteThrew = (state: SubstituteState, key: PropertyKey, record: CallRecord): void => {
-  const source = answerSource as Substitution | object | undefined
+  const source = takeAnswerSource()
   state.noteConfiguredAnswer(record, source instanceof Substitution && source.method === 'throws' && source.key === key ? source : THREW)
 }
 
@@ -1602,7 +1634,7 @@ const noteThrew = (state: SubstituteState, key: PropertyKey, record: CallRecord)
  * call), else THREW, for the record of each reading given.
  */
 const noteHelperThrew = (memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState, directKey: PropertyKey): void => {
-  const source = answerSource as Substitution | object | undefined
+  const source = takeAnswerSource()
   const note = source instanceof Substitution && source.method === 'throws' && (source.key === memberRecord.key || source.key === directKey) ? source : THREW
   memberState.noteConfiguredAnswer(memberRecord, note)
   if (directRecord !== undefined && directRecord.kind === 'call') directState.noteConfiguredAnswer(directRecord, note)
@@ -1940,8 +1972,9 @@ const assertionMember = (state: CheckSubject, key: PropertyKey, count: ExpectedC
   }
   const unsupported = (property: PropertyKey, start: Function): never => {
     if (deferred !== undefined && !deferred.settled) {
+      const error = deferred.error()
       settle(deferred)
-      throw deferred.error()
+      throw error
     }
     throw SubstituteException.generic(
       `Cannot use "${keyToString(property)}" on the assertion ${state.path}.${describeCount(count)}.${memberLabel(key)}: ` +
@@ -2042,10 +2075,11 @@ type RouteStep = {
   readonly argumentList: readonly unknown[] | undefined
   matchesCall(actualArguments: readonly unknown[]): boolean
   /**
-   * E99: the call of the check expression itself, when it is a concrete call that a setup with matchers (or the mimicked
-   * instance) answered with a substitute that it gives every call it matches (see sharedHandOuts).
+   * E99: when the step is the call of the check expression itself, and a concrete call that a setup with matchers (or the
+   * mimicked instance) answered with a substitute that it gives every call it matches (see sharedHandOutCount), that
+   * substitute.
    */
-  readonly shared?: CallRecord
+  readonly shared?: SubstituteState
 }
 type CheckRoute = { readonly origin: SubstituteState, readonly steps: readonly RouteStep[] }
 
@@ -2054,8 +2088,11 @@ const callStep = (key: PropertyKey, specification: RecordedArguments): RouteStep
   ({ kind: 'call', key, argumentList: specification.value, matchesCall: actualArguments => specification.matches(actualArguments) })
 const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute => ({ origin: route.origin, steps: [...route.steps, step] })
 
-/** E99: the step of a record of a check expression: its read, or its call with the arguments it was made with. */
-const concreteStep = (record: CallRecord): RouteStep => {
+/**
+ * E99: the step of a record of a check expression: its read, or its call with the arguments it was made with (`shared`:
+ * the substitute that it answered, when a setup with matchers or the mimicked instance shares that, see RouteStep).
+ */
+const concreteStep = (record: CallRecord, shared: SubstituteState | undefined): RouteStep => {
   if (record.kind !== 'call') return memberStep(record.key)
   const args: readonly unknown[] = record.args ?? []
   return {
@@ -2063,7 +2100,7 @@ const concreteStep = (record: CallRecord): RouteStep => {
     key: record.key,
     argumentList: args,
     matchesCall: actualArguments => RecordedArguments.literalsEqual(args, actualArguments),
-    shared: sharedHandOuts.has(record) ? record : undefined
+    shared
   }
 }
 
@@ -2084,36 +2121,66 @@ const routePath = (route: CheckRoute, steps = route.steps.length): string => {
 const MAX_EXPRESSION_STEPS = 1000
 
 /**
- * E99 (R15FE-5): the route of a check expression that went through a concrete call whose answer a setup with matchers
- * shares (`io.to('room-b')` after `io.to(Arg.any()).emit(Arg.all()).returns(true)`, see sharedHandOuts), from the topmost
- * such call down to where the check is opened, along the records of the expression (`head`: the record that handed out
- * the substitute the check is opened on). Undefined when the expression went through no such call: the check then counts
- * the calls of that substitute, as always.
+ * E110: what a record of a check expression handed out (`answered`, the substitute the next step of the expression was
+ * made on, or the one the check is opened on) tells about it: the substitute it was made on (`owner`), the record that is
+ * its step (D26/E82: the direct reading of a call/apply invocation, see below), and whether a setup with matchers (or the
+ * mimicked instance) shares that answer. Undefined when that is not known any more (the configured value was handed out
+ * again since), so that the route stops there.
  */
-const concreteRoute = (head: CallRecord | undefined): CheckRoute | undefined => {
+type HandOutStep = { readonly record: CallRecord, readonly owner: SubstituteState, readonly shared: boolean }
+
+const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutStep | undefined => {
+  const entry = answered.owner
+  // a configured value, noted with the substitute that answered it (see handOutShared)
+  const configured = (entry ?? answered).configuredHandOut(record)
+  if (configured !== undefined) return { record, owner: configured.from, shared: configured.shared }
+  if (entry === undefined) return undefined
+  // an auto-substitute, of the substitute that the call or the read was made on (E99: that of a nested setup through a
+  // call with matchers is one that every call matching it gets). E82: the auto-substitute of the direct call, which a
+  // call/apply invocation hands out from its member reading, is that of its direct reading (which comes right before it).
+  const twin = record.twin
+  const step = twin !== undefined && twin === record.chainPrevious && twin.key === entry.key && record.key !== entry.key ? twin : record
+  return { record: step, owner: entry.parent, shared: entry.specifiesMatchers }
+}
+
+/**
+ * E99 (R15FE-5): the route of a check expression that went through a concrete call whose answer a setup with matchers
+ * shares (`io.to('room-b')` after `io.to(Arg.any()).emit(Arg.all()).returns(true)`), from the topmost such call down to
+ * where the check is opened, along the records of the expression (`head`: the record that handed out `state`, the
+ * substitute the check is opened on). Undefined when the expression went through no such call: the check then counts
+ * the calls of that substitute, as always.
+ * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf), with nothing noted per
+ * call. The records of the expression, which the check has retracted, are then forgotten where they are the latest of
+ * their member (see SubstituteState.dropRetracted), so that later checks do not look at them again.
+ */
+const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): CheckRoute | undefined => {
   if (head === undefined || sharedHandOutCount === 0) return undefined
-  const records: CallRecord[] = []
-  let origin: SubstituteState | undefined
+  const found: HandOutStep[] = []
+  const answers: SubstituteState[] = []
   let top = 0
-  for (let record: CallRecord | undefined = head; record !== undefined && records.length < MAX_EXPRESSION_STEPS; record = record.chainPrevious) {
-    // D26: a call/apply invocation is one step, its direct reading (which comes right before the member reading)
-    if (record.twin !== undefined && record.twin === record.chainPrevious) continue
-    records.push(record)
-    const owner = sharedHandOuts.get(record)
-    if (owner !== undefined) {
-      origin = owner
-      top = records.length
-    }
+  let answered = state
+  for (let record: CallRecord | undefined = head; record !== undefined && found.length < MAX_EXPRESSION_STEPS;) {
+    const step = handOutStepOf(answered, record)
+    if (step === undefined) break
+    found.push(step)
+    answers.push(answered)
+    if (step.shared) top = found.length
+    answered = step.owner
+    const made = step.record
+    // D26: a call/apply invocation is one step (its direct reading comes right before its member reading)
+    record = made.twin !== undefined && made.twin === made.chainPrevious ? made.twin.chainPrevious : made.chainPrevious
   }
-  if (origin === undefined) return undefined
+  if (top === 0) return undefined
   const steps: RouteStep[] = []
-  for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(records[index]))
-  return { origin, steps }
+  for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(found[index].record, found[index].shared ? answers[index] : undefined))
+  // (from the bottom up: each is the latest record of its member then)
+  for (const step of found) step.owner.dropRetracted(step.record)
+  return { origin: found[top - 1].owner, steps }
 }
 
 /** E99: what a check opened on `state` counts, when its expression reached `state` from `head` (see concreteRoute). */
 const concreteSubject = (state: SubstituteState, head: CallRecord | undefined): CheckSubject => {
-  const route = concreteRoute(head)
+  const route = concreteRoute(state, head)
   return route === undefined ? state : new MatchedSubstitutes(route)
 }
 
@@ -2293,35 +2360,45 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
     if (isForeign(item)) continue
     const at = recordedAt(item, step.key)
     if (at === undefined) continue
-    const configured = at.state.configuredAnswers(at.key)
     if (follow === 'list' && step.shared !== undefined) {
-      const answer = configured?.get(step.shared)
-      if (answer instanceof AutoEntry || answer instanceof SubstituteState) answered.add(checkedOf(answer))
+      answered.add(checkedOf(step.shared))
       continue
     }
+    // E110: one pass over the received calls, with what each answered by position (no map of them)
+    const records = at.state.receivedRecordsOf(at.key)
+    const answers = at.state.configuredAnswersByPosition(at.key)
+    const sharing = step.shared !== undefined && follow === 'count'
     let shared: Set<object> | undefined
-    for (const record of at.state.recordsFor(at.key)) {
-      if (record.kind !== 'call' || !step.matchesCall(record.args ?? [])) continue
-      const answer = configured?.get(record)
+    // E99: the calls that do not match the step and answered a substitute, which may be one that matching calls answered
+    let others: number[] | undefined
+    for (let position = 0; position < records.length; position++) {
+      const record = records[position]
+      if (record.retracted || record.kind !== 'call') continue
+      const answer = answers === undefined ? undefined : answers[position]
+      if (!step.matchesCall(record.args ?? [])) {
+        if (sharing && (answer instanceof AutoEntry || answer instanceof SubstituteState)) (others ?? (others = [])).push(position)
+        continue
+      }
       if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
       else if (answer instanceof AutoEntry || answer instanceof SubstituteState) {
         answered.add(checkedOf(answer))
-        if (step.shared !== undefined) (shared ?? (shared = new Set())).add(answer)
+        if (sharing) (shared ?? (shared = new Set())).add(answer)
       }
       // E89: a proxy that is a substitute of another copy (E104: not a function bound from one of this copy)
       else if (isOtherCopySubstitute(answer)) answered.add(answer)
       else if (follow === 'count') throw notSubstituteError(through(), at.state, record, answer, start)
     }
-    if (shared === undefined || follow !== 'count') continue
+    if (shared === undefined || others === undefined) continue
     // E99: the calls that do not match the step, which a substitute that matching calls answered was returned to as well
-    const others: CallRecord[] = []
+    const returnedTo: CallRecord[] = []
     let sharedAnswer: object | undefined
-    for (const [record, answer] of configured!) {
-      if (record.retracted || record.kind !== 'call' || !shared.has(answer) || step.matchesCall(record.args ?? [])) continue
+    for (const position of others) {
+      const answer = answers![position]!
+      if (!shared.has(answer)) continue
       if (sharedAnswer === undefined) sharedAnswer = answer
-      if (answer === sharedAnswer) others.push(record)
+      if (answer === sharedAnswer) returnedTo.push(records[position])
     }
-    if (sharedAnswer !== undefined) throw sharedSubstituteError(through(), at.state, step, sharedAnswer, others, start)
+    if (sharedAnswer !== undefined) throw sharedSubstituteError(through(), at.state, step, sharedAnswer, returnedTo, start)
   }
   return answered.items
 }
@@ -2393,10 +2470,12 @@ const delegateCheck = (foreign: any, context: 'received' | 'didNotReceive', coun
  */
 class MatchedSubstitutes implements SeveralSubstitutes {
   /**
-   * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitute that each record listed so far belongs to, for this use of the check
-   * view only (see use), so that a report made from it and thrown later (D9) names them, and another use counts afresh.
-   * (Created when records are first listed: the check itself, before a use, lists none.)
+   * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitutes whose records were listed so far, with those records, for this use
+   * of the check view only (see use), so that a report made from it and thrown later (D9) names each record's substitute,
+   * and another use counts afresh. (Created when records are first listed: the check itself, before a use, lists none.)
+   * E110: which substitute a record belongs to is only looked up when a message shows it (see ownerOf).
    */
+  private _listed?: { readonly checked: Checked, records: readonly CallRecord[] }[]
   private _owners?: Map<CallRecord, Checked>
 
   constructor(private readonly route: CheckRoute, private _end?: RouteEnd) { }
@@ -2469,23 +2548,46 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * has the same owner.)
    */
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined): CallRecord[] {
-    const owners = this._owners ?? (this._owners = new Map())
-    const records: CallRecord[] = []
+    const listed = this._listed ?? (this._listed = [])
+    let records: CallRecord[] | undefined
+    let several = false
     for (const checked of checkedList) {
       if (isForeign(checked)) continue
       const at = recordedAt(checked, key)
       if (at === undefined) continue
-      for (const record of at.state.recordsFor(at.key)) {
-        if (except !== undefined && except.has(record)) continue
-        owners.set(record, checked)
-        records.push(record)
+      let own = at.state.recordsFor(at.key)
+      if (except !== undefined) own = own.filter(record => !except.has(record))
+      if (own.length === 0) continue
+      // (a check lists the records of the same member again when it is invoked, see assertionMember)
+      const known = listed.find(group => group.checked === checked)
+      if (known !== undefined) known.records = own
+      else listed.push({ checked, records: own })
+      if (records === undefined) records = own
+      else {
+        if (!several) records = [...records]
+        several = true
+        for (const record of own) records.push(record)
       }
     }
-    return checkedList.length > 1 ? records.sort((a, b) => a.seq - b.seq) : records
+    this._owners = undefined
+    if (records === undefined) return []
+    return several ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
-    const owner = this._owners?.get(record)
+    const listed = this._listed
+    if (listed === undefined || listed.length === 0) return undefined
+    let owner: Checked | undefined
+    // (the records listed are those of one substitute, as a rule)
+    if (listed.length === 1) owner = listed[0].checked
+    else {
+      let owners = this._owners
+      if (owners === undefined) {
+        owners = this._owners = new Map()
+        for (const { checked, records } of listed) for (const own of records) owners.set(own, checked)
+      }
+      owner = owners.get(record)
+    }
     return owner === undefined || isForeign(owner) ? undefined : owner
   }
 }
