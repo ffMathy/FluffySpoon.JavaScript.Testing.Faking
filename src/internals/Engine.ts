@@ -2835,9 +2835,12 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitutes whose records were listed so far, with those records, for this use
    * of the check view only (see use), so that a report made from it and thrown later (D9) names each record's substitute,
    * and another use counts afresh. (Created when records are first listed: the check itself, before a use, lists none.)
-   * E110: which substitute a record belongs to is only looked up when a message shows it (see ownerOf).
+   * E110: while the records listed are those of one substitute (`_first`), as a rule, nothing is kept per record. E121
+   * (R17V-2): once those of another substitute are listed, each record's substitute is kept in a map (`_owners`, with
+   * those of `_first`), so that listing the records of many substitutes costs O(1) per record, as at cd1bf29.
    */
-  private _listed?: { readonly checked: Checked, records: readonly CallRecord[] }[]
+  private _first?: Checked
+  private _firstRecords?: readonly CallRecord[]
   private _owners?: Map<CallRecord, Checked>
 
   constructor(private readonly route: CheckRoute, private _end?: RouteEnd) { }
@@ -2910,7 +2913,6 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * has the same owner.)
    */
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined): CallRecord[] {
-    const listed = this._listed ?? (this._listed = [])
     let records: CallRecord[] | undefined
     let several = false
     for (const checked of checkedList) {
@@ -2920,10 +2922,7 @@ class MatchedSubstitutes implements SeveralSubstitutes {
       let own = at.state.recordsFor(at.key)
       if (except !== undefined) own = own.filter(record => !except.has(record))
       if (own.length === 0) continue
-      // (a check lists the records of the same member again when it is invoked, see assertionMember)
-      const known = listed.find(group => group.checked === checked)
-      if (known !== undefined) known.records = own
-      else listed.push({ checked, records: own })
+      this.noteOwner(checked, own)
       if (records === undefined) records = own
       else {
         if (!several) records = [...records]
@@ -2931,25 +2930,31 @@ class MatchedSubstitutes implements SeveralSubstitutes {
         for (const record of own) records.push(record)
       }
     }
-    this._owners = undefined
     if (records === undefined) return []
     return several ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
-  public ownerOf(record: CallRecord): { readonly path: string } | undefined {
-    const listed = this._listed
-    if (listed === undefined || listed.length === 0) return undefined
-    let owner: Checked | undefined
-    // (the records listed are those of one substitute, as a rule)
-    if (listed.length === 1) owner = listed[0].checked
-    else {
-      let owners = this._owners
-      if (owners === undefined) {
-        owners = this._owners = new Map()
-        for (const { checked, records } of listed) for (const own of records) owners.set(own, checked)
+  /** E121: notes that `records` (listed now) belong to `checked` (see _first). */
+  private noteOwner(checked: Checked, records: readonly CallRecord[]): void {
+    let owners = this._owners
+    if (owners === undefined) {
+      // (a check lists the records of the same member again when it is invoked, see assertionMember)
+      if (this._first === undefined || this._first === checked) {
+        this._first = checked
+        this._firstRecords = records
+        return
       }
-      owner = owners.get(record)
+      owners = this._owners = new Map()
+      for (const record of this._firstRecords!) owners.set(record, this._first)
+      this._firstRecords = undefined
     }
+    for (const record of records) owners.set(record, checked)
+  }
+
+  public ownerOf(record: CallRecord): { readonly path: string } | undefined {
+    // (the records listed are those of one substitute, as a rule)
+    const owners = this._owners
+    const owner = owners === undefined ? this._first : owners.get(record)
     return owner === undefined || isForeign(owner) ? undefined : owner
   }
 }
