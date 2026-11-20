@@ -208,7 +208,7 @@ test('R16-ADV-8 (E117) a nested predicate that throws is still a non-match, and 
   const other = Substitute.for<any>()
   other.load({ id: Arg.any() }).returns('loaded')
   t.not(other.load(value), 'loaded')
-  t.is(reads, 2, 'as at d417925 and 8be3a70: once by the comparison with the setup, once by the hash (E102)')
+  t.is(reads, 1, 'once, by the comparison with the setup (E102)')
 })
 
 // ---- E118 (R16V-1): a revoked function proxy is not one of the library's proxies -----------------------------------

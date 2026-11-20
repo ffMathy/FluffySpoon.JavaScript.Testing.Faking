@@ -360,15 +360,16 @@ test('R:RT-8 / D4 / D15 indexing literal substitutions does not change which sub
   t.true(types.isProxy(values.f(() => 1)))
   t.true(types.isProxy(values.f(1, null)))
 
-  // amended D15 (round 3): mutating an argument object after the setup is not supported, except that the same
-  // object still matches; a fresh object equal to the mutated one no longer does, nor one equal to the original
+  // amended D15 (round 3): mutating an argument object after the setup is not supported; the setup's argument is
+  // compared as it is now: the same object still matches, and so does a fresh object equal to the mutated one (as in
+  // 1.x), but not one equal to the original
   const repository = Substitute.for<any>()
   const user = { name: 'a', tags: ['x'] }
   repository.save(user).returns('saved')
   user.name = 'b'
   user.tags.push('y')
   t.is(repository.save(user), 'saved')
-  t.true(types.isProxy(repository.save({ name: 'b', tags: ['x', 'y'] })))
+  t.is(repository.save({ name: 'b', tags: ['x', 'y'] }), 'saved')
   t.true(types.isProxy(repository.save({ name: 'a', tags: ['x'] })))
   // ... and the most recent of several matching literal substitutions wins
   const copy = { name: 'b', tags: ['x', 'y'] }

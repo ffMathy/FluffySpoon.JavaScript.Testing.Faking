@@ -2,13 +2,11 @@ import test, { ExecutionContext } from 'ava'
 import { isDeepStrictEqual } from 'util'
 
 import { Substitute, Arg, configure } from '../../../src'
-import { hashArguments, refinedStructuralHash, structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { RecordedArguments } from '../../../src/internals/RecordedArguments'
 import { assertWithin, timeLimit } from '../../helpers/timing'
 
-// Round 6: the structural hash of wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13) and of values that cannot
-// be read (R5V-2; E14). The tests run in order: which wide objects were hashed before matters for how fast a hash is
-// (see "families" in ArgumentHash), never for its result. The values are created beforehand: only the calls are timed.
+// Round 6: wide objects, Maps and Sets (R5V-1, R5-ADV-1, R5TD-2; E13) and values that cannot be read (R5V-2; E14) as
+// arguments. The values are created beforehand: only the calls are timed.
 
 const millisecondsOf = (run: () => void) => {
   const start = process.hrtime.bigint()
@@ -89,14 +87,13 @@ const eachLimit = (t: ExecutionContext, prefix: string) => {
     const elapsed = timeCalls(values)
     t.log(`${calls} calls with distinct ${size}-key objects: ${elapsed.toFixed(1)} ms`)
     assertWithin(t, elapsed, elapsedLimit, `${calls} calls with distinct ${size}-key objects`)
-    // a copy in another key order hashes alike, also without families
-    t.is(structuralHash(shuffledCopy(values[1], size)), structuralHash(values[1]), `${size} keys`)
-    t.is(refinedStructuralHash(shuffledCopy(values[1], size)), refinedStructuralHash(values[1]), `${size} keys (refined)`)
+    // a copy in another key order is the same argument
+    const sub = Substitute.for<any>()
+    t.is(sub.put(shuffledCopy(values[1], size)), sub.put(values[1]), `${size} keys`)
   }
 }
 
 test.serial('R5-ADV-1 (E13) objects on both sides of each limit (256, 1,025 and 65,536 keys) cost about the same per key', t => {
-  // the first wide key sets of this file: each one starts a family (see ArgumentHash)
   eachLimit(t, 'w')
 })
 
@@ -186,11 +183,12 @@ test.serial('R5-ADV-1 (E13) Maps and Sets on both sides of each limit (256 and 6
     const elapsed = timeCalls(maps) + timeCalls(sets)
     t.log(`${count} Maps and ${count} Sets with ${size} entries: ${elapsed.toFixed(1)} ms`)
     assertWithin(t, elapsed, elapsedLimit, `${count} Maps and ${count} Sets with ${size} entries`)
-    t.not(structuralHash(maps[1]), structuralHash(maps[2]), `Maps of ${size}`)
-    t.not(structuralHash(sets[1]), structuralHash(sets[2]), `Sets of ${size}`)
-    // equal ones, in another insertion order, hash alike
-    t.is(structuralHash(new Map([...maps[1]].reverse())), structuralHash(maps[1]), `Map of ${size}`)
-    t.is(structuralHash(new Set([...sets[1]].reverse())), structuralHash(sets[1]), `Set of ${size}`)
+    const sub = Substitute.for<any>()
+    t.not(sub.put(maps[1]), sub.put(maps[2]), `Maps of ${size}`)
+    t.not(sub.put(sets[1]), sub.put(sets[2]), `Sets of ${size}`)
+    // equal ones, in another insertion order, are the same argument
+    t.is(sub.put(new Map([...maps[1]].reverse())), sub.put(maps[1]), `Map of ${size}`)
+    t.is(sub.put(new Set([...sets[1]].reverse())), sub.put(sets[1]), `Set of ${size}`)
   }
 })
 
@@ -281,12 +279,9 @@ test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,0
   t.is(sub.p(proxy), sub.p(proxy))
   t.is(sub.p([proxy]), sub.p([proxy]))
   t.not(sub.p(proxy), sub.p(Proxy.revocable({}, {}).proxy))
-  t.is(hashArguments([1, first]), hashArguments([1, first]))
-  t.not(structuralHash(first), structuralHash(second))
 })
 
 test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with same-size objects whose keys differ', t => {
-  // the key sets after the last family are listed and hashed with every key (see ArgumentHash)
   const values = Array.from({ length: 100 }, (_, call) => wideObject(5000, key => key, key => `k${call}_${key}`))
   const elapsedLimit = timeLimit(1000)
   const elapsed = timeCalls(values)
@@ -296,7 +291,6 @@ test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with s
   const results = values.map(value => sub.put(value))
   values.forEach((value, index) => t.is(sub.put(shuffledCopy(value, index)), results[index]))
   t.is(new Set(results).size, values.length)
-  values.slice(0, 20).forEach((value, index) => t.is(refinedStructuralHash(shuffledCopy(value, index)), refinedStructuralHash(value)))
 
   // a matcher in an object with as many keys as a family is found (as in any object): the call is a setup
   const withMatcher = { ...wideObject(5000, key => key), extra: Arg.any() }
@@ -306,6 +300,5 @@ test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with s
 })
 
 test.serial('R5-ADV-1 (E13) objects on both sides of each limit cost about the same per key, also once every family is taken', t => {
-  // the tests above took every family: these wide objects are hashed with every key, listed once
   eachLimit(t, 'x')
 })
