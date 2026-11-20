@@ -554,14 +554,6 @@ const equivalentNested = (a: unknown, b: unknown, depth = 0): boolean => {
   }
 }
 
-/** Whether two expected arguments without nested matchers are the same, matchers compared as matchers. */
-const equivalentArgument = (a: unknown, b: unknown): boolean => {
-  const aIsMatcher = isArgumentMatcher(a)
-  const bIsMatcher = isArgumentMatcher(b)
-  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && equivalentMatchers(a, b)
-  return literalEquals(a, b)
-}
-
 /**
  * An argument list. Either the actual arguments of a call, or the expected arguments of a setup or an
  * assertion (a specification), which may contain Arg matchers.
@@ -797,14 +789,13 @@ export class RecordedArguments {
     const a = this._value
     const b = other._value
     if (a === undefined || b === undefined) return a === b
-    const plain = this._matcherContainers === undefined && other._matcherContainers === undefined
     const length = Math.max(a.length, b.length)
     for (let index = 0; index < length; index++) {
       if (index >= a.length || index >= b.length) {
         if ((index < a.length ? a[index] : b[index]) !== undefined) return false
         continue
       }
-      if (!(plain ? equivalentArgument(a[index], b[index]) : equivalentNested(a[index], b[index]))) return false
+      if (!equivalentNested(a[index], b[index])) return false
     }
     return true
   }
