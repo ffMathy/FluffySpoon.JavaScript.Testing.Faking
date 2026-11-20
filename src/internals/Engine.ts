@@ -550,10 +550,21 @@ const rootProxies = new WeakMap<SubstituteState, object>()
 
 const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? face.proxy : rootProxies.get(face)
 
-/** Whether the value is a substitute or an auto-substitute of this copy of the library (see above). */
-const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' &&
-  ((Object.getPrototypeOf(value) === faceTargetPrototype && types.isProxy(value)) ||
-    (reprototypedCount > 0 && reprototyped.has(value)))
+/**
+ * Whether the value is a substitute or an auto-substitute of this copy of the library (see above). E118 (R16V-1): only a
+ * proxy can be one, and its prototype is read in a guard: a revoked proxy (a pooled connection revoked on release, as a
+ * configured answer, an argument or a member's value) throws for it, and is simply not one (E14: matched by identity).
+ */
+const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' && types.isProxy(value) &&
+  (hasFacePrototype(value) || (reprototypedCount > 0 && reprototyped.has(value)))
+
+const hasFacePrototype = (value: Function): boolean => {
+  try {
+    return Object.getPrototypeOf(value) === faceTargetPrototype
+  } catch {
+    return false
+  }
+}
 
 /*
  * E25: Object.freeze / seal / preventExtensions and Object.defineProperty work on a substitute. The target of its proxy
@@ -914,14 +925,9 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
     const entry = face
-    const stringCheck = entry.kind === 'call' && isStringAssertionKey(entry.key)
-    // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
-    if (stringCheck) useStringCheck(entry)
+    if (entry.kind === 'call' && isStringAssertionKey(entry.key)) return stringCheckMember(entry, property, chainHead, stackStart)
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
-
-    // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion.
-    if (stringCheck) return stringCheckMember(entry, property, chainHead(), stackStart)
   }
 
   // D26: call/apply/bind, unless the member with that name is configured as a property, or the substitute mimicks
@@ -942,8 +948,14 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
 }
 
 /** `sub.received(n).member` (see faceGet; a function of its own, which keeps faceGet small for the hot path). */
-const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: CallRecord | undefined, stackStart: Function): any => {
-  const assertion = resolveStringAssertion(entry, chainHead, stackStart)
+const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: () => CallRecord | undefined, stackStart: Function): any => {
+  // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
+  const opening = useStringCheck(entry)
+  const method = substitutionMethodOf(property)
+  if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
+  // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion. E116: its
+  // expression is the one of the call that opened it (see useStringCheck).
+  const assertion = resolveStringAssertion(entry, opening ?? chainHead(), stackStart)
   return assertion.other !== undefined ? assertion.other[property] : assertionMember(useOf(assertion.state), property, assertion.count, stackStart)
 }
 
@@ -960,8 +972,8 @@ const faceContextFunction = (face: Face, context: ContextMethod, head: CallRecor
 const faceSet = (face: Face, property: PropertyKey, value: unknown, stackStart: Function): void => {
   const candidate = adjacentHandOut(face)
   if (face instanceof AutoEntry && face.kind === 'call' && isStringAssertionKey(face.key)) {
-    useStringCheck(face)
-    const assertion = resolveStringAssertion(face, continuedChain(candidate, frameAt(stackStart)), stackStart)
+    const opening = useStringCheck(face)
+    const assertion = resolveStringAssertion(face, opening ?? continuedChain(candidate, frameAt(stackStart)), stackStart)
     if (assertion.other !== undefined) assertion.other[property] = value
     else assertSet(useOf(assertion.state), property, value, assertion.count, stackStart)
     return
@@ -986,8 +998,8 @@ const faceApply = (face: Face, self: Self, args: any[], stackStart: Function, si
   if (face.kind === 'get') return invoke(face.parent, face.key, args, stackStart, TAKE_PENDING_READ, undefined, self, site, face)
   // D11 / D26: `fn.received(n)` followed by an invocation asserts a direct call, like a member access after it does
   if (isStringAssertionKey(face.key)) {
-    useStringCheck(face)
-    const assertion = resolveStringAssertion(face, continuedChain(face.adjacentHandOut(), frameAt(stackStart)), stackStart)
+    const opening = useStringCheck(face)
+    const assertion = resolveStringAssertion(face, opening ?? continuedChain(face.adjacentHandOut(), frameAt(stackStart)), stackStart)
     if (assertion.other !== undefined) assertion.other(...args)
     else assertDirectCall(useOf(assertion.state), args, assertion.count, stackStart)
     return undefined
@@ -1672,6 +1684,8 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
  * it is used. E56: one per call, because calls with the same arguments hand out the same auto-substitute (D2).
  */
 const danglingStringChecks = new WeakMap<AutoEntry, DeferredAssertion[]>()
+/** E116: the call that opened the check of each of those reports (see useStringCheck). */
+const openingCalls = new WeakMap<DeferredAssertion, CallRecord>()
 /** E48: the members called received or didNotReceive that a check named, per substitute (see deferStringCheck). */
 const checkedAssertionMembers = new WeakMap<SubstituteState, Set<PropertyKey>>()
 
@@ -1686,6 +1700,7 @@ const deferStringCheck = (state: SubstituteState, key: StringAssertionKey, args:
   }
   const deferred = deferDanglingCheck(state, 'string', count, record.site, () =>
     !record.retracted && !configuresMember(state, key) && checkedAssertionMembers.get(state)?.has(key) !== true)
+  openingCalls.set(deferred, record)
   const pending = danglingStringChecks.get(entry)
   if (pending === undefined) danglingStringChecks.set(entry, [deferred])
   else pending.push(deferred)
@@ -1701,16 +1716,29 @@ const isValidCount = (count: unknown): boolean => count === undefined || (typeof
  * told apart from another view of the same call, so its use settles the latest pending report as well: every view
  * that is used settles a report, so no view that is used is reported, while a view used twice can leave a dangling
  * one unreported.
+ *
+ * E116 (R16FE-5): returns the call that opened the check whose report it settles (`sub.received(1)`, `received` called
+ * on the substitute it checks). The reads and calls that led to that call in the same expression (D25: same function,
+ * adjacent) are linked to it when it is recorded, so they belong to the check wherever the check is completed: a helper
+ * that returns `io.to(room).received(1)` for its caller to complete leaves no call of `to(room)` behind, as the same
+ * check written inline does (and E99 counts through it alike). Undefined when no report is pending (a view used once
+ * more, or after the microtask that settles the reports): then the use decides as before, by its own frame.
  */
-const useStringCheck = (entry: AutoEntry): void => {
+const useStringCheck = (entry: AutoEntry): CallRecord | undefined => {
   const reports = danglingStringChecks.get(entry)
-  if (reports === undefined) return
+  if (reports === undefined) return undefined
   // (reports that were due by now are settled: they were thrown, or did not apply)
   let pending = 0
   for (const report of reports) if (!report.settled) reports[pending++] = report
   reports.length = pending
-  if (pending > 0) settle(reports.pop())
+  let opening: CallRecord | undefined
+  if (pending > 0) {
+    const report = reports.pop()!
+    settle(report)
+    opening = openingCalls.get(report)
+  }
   if (reports.length === 0) danglingStringChecks.delete(entry)
+  return opening
 }
 
 /** E48: notes that a check named a member called received or didNotReceive (see deferStringCheck). */

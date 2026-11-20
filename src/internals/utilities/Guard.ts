@@ -57,6 +57,23 @@ export type ArgumentLook = {
   budget: number
   /** The look under way when this one began (a real call made by code that a matcher runs, see Look). */
   outer: ArgumentLook | undefined
+  /*
+   * E109 (R16-ADV-2): optional, so that a look opened by an earlier version of the library, which every copy walks, still
+   * works (see Look).
+   */
+  /** The arguments that the search for matchers found to hold no substitute (a bit per argument), see Look. */
+  clear?: number
+  /** For those of them that are containers, the items that the walk would have listed in them, by position. */
+  clearItems?: number[]
+  /**
+   * How often the walk met something that keeps it from vouching that the containers under way hold no substitute: a
+   * substitute, or what the bounds left out (see Look).
+   */
+  vague?: number
+  /** The containers walked so far that the walk could not vouch for, or has not finished yet (created by the first). */
+  unclear?: Set<object>
+  /** How many walks of this look are under way (one that comes back while another lists a container, see Look). */
+  walks?: number
 }
 
 const GUARD_KEY = Symbol.for('@fluffy-spoon/substitute:guard')
