@@ -156,8 +156,10 @@ const FLUENT_METHODS_SHOWN = 3
  * (`sub.to('room-a').compress(Arg.all()).returns(sub.to('room-a'))`: written with the matchers, the call in returns()
  * would be a setup, not that substitute). When the path cannot be written as code (a symbol that is not registered, or
  * more than FLUENT_PATH_CHARACTERS characters), the remedy is worded without it. Arguments are written as paths print
- * them, so those that do not print as code (functions, matchers of a substitute shared by several calls, values that are
- * cut) are written by hand.
+ * them. E132 (R17-ADV-5): the check remedy is code only when every argument on its path prints as code that gives an
+ * equal value (see Paths.codePath); otherwise it names the substitute as messages print it, to be reached with the same
+ * arguments. In the fluent remedy, arguments that do not print as code (functions, values that are cut) are written by
+ * hand.
  */
 const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: ExpectedCount): string | undefined => {
   if (key === SELF) return undefined
@@ -205,22 +207,28 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   const received = `received(${count === undefined ? '' : count})`
   if (steps.some(step => step.kind !== 'call' || step.specifiesMatchers)) {
     // E112: written as code, with the call a shared substitute was handed out to when there was one (see codePath)
-    const expression = codePath(place.owner, context, false, FLUENT_PATH_CHARACTERS)
+    const expression = codePath(place.owner, context, false, FLUENT_PATH_CHARACTERS, true)
     const member = codeMember(key)
-    if (expression === undefined || member === undefined) {
+    // E132 (R17-ADV-5): arguments that are not code (see codePath): the path as messages print it, without code
+    if (typeof expression !== 'string' && expression.notCode === 'arguments' && member !== undefined) {
+      return `${lead} To check calls there, check that substitute, ${truncateText(recordPathOf(place, context), FLUENT_PATH_CHARACTERS)}, ` +
+        `reached with the same arguments, with ${received} on it; its arguments cannot be written as code.`
+    }
+    if (typeof expression !== 'string' || member === undefined) {
       return `${lead} To check calls there, check that substitute itself, with ${received} on it; its path cannot be ` +
         `written as code (a symbol that is not registered with Symbol.for(), or more than ${FLUENT_PATH_CHARACTERS} characters).`
     }
     return `${lead} To check calls there, check that substitute: ${expression}.${received}${member}(...)`
   }
   // every step is a call: each of those methods (once each, from the top) returns the checked substitute (E112: written
-  // as code, with the call that a shared substitute was handed out to, the first of several: all of them answered it)
-  const parent = state.owner === undefined ? 'sub' : codePath(state.owner, context, true, FLUENT_PATH_CHARACTERS)
+  // as code, with the call that a shared substitute was handed out to, the first of several: all of them answered it;
+  // its arguments as paths print them, E132 is for the check remedy above)
+  const parent = state.owner === undefined ? 'sub' : codePath(state.owner, context, true, FLUENT_PATH_CHARACTERS, false)
   const methods: PropertyKey[] = []
   for (let index = steps.length - 1; index >= 0; index--) if (!methods.includes(steps[index].key)) methods.push(steps[index].key)
   const shown = methods.slice(0, FLUENT_METHODS_SHOWN)
   const members = shown.map(method => method === SELF ? '' : codeMember(method))
-  if (parent === undefined || members.some(member => member === undefined)) {
+  if (typeof parent !== 'string' || members.some(member => member === undefined)) {
     return `${lead} A call that is not configured answers a new substitute. For a fluent API, make ` +
       `${methods.length === 1 ? 'the method' : 'each method on the way'} return the substitute it is called on (a setup ` +
       `with Arg.all() whose value is that substitute) or mimick an instance whose methods return this.`
