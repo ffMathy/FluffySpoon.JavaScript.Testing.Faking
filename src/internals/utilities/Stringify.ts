@@ -285,10 +285,11 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  * - Orders that matching ignores do not count: the keys of objects (E72: a DTO built as `{ ...input, id }` is printed as
  *   deep as a difference further down needs), the entries of Maps and Sets (a Set of tags or a Map of headers built in
  *   another order), and the own properties of errors and functions (E78). (Each line prints in its own order.)
- * So the expected arguments are printed with their matchers replaced by the received values at their places, both calls
- * with the keys and entries of their values in a fixed order (util.inspect's `sorted` option, and compactError's; Node.js
- * 10.0 to 10.11 do not know the option: there, keys and entries are in the order in which they print), and the texts
- * are compared. Getters are not run.
+ * - E68: nor does a difference that the lines do not show, beyond the characters a value is cut after.
+ * So the expected arguments are printed with their matchers replaced by the received values at their places, and the
+ * two calls print differently where both their texts differ: as they print, and with the keys and entries of their
+ * values in a fixed order (util.inspect's `sorted` option, and compactError's; Node.js 10.0 to 10.11 do not know the
+ * option: there, keys and entries are in the order in which they print). Getters are not run.
  */
 
 /** The expected arguments with their matchers replaced by the received values at their places (see above). */
@@ -328,10 +329,10 @@ const withReceivedValues = (expected: readonly unknown[], actual: readonly unkno
   return result
 }
 
-/** The text of arguments as the comparison prints them (see above), `depth` levels deep. */
-const comparisonText = (args: readonly unknown[], depth: number): string => {
+/** The texts of arguments that the comparison compares (see above), `depth` levels deep: as they print, and sorted. */
+const comparisonTexts = (args: readonly unknown[], depth: number): [string, string] => {
   const bounds = messageBounds(depth)
-  return formatArguments(args, false, bounds, value => formatValue(value, false, bounds, true))
+  return [formatArguments(args, false, bounds), formatArguments(args, false, bounds, value => formatValue(value, false, bounds, true))]
 }
 
 /**
@@ -342,7 +343,11 @@ const comparisonText = (args: readonly unknown[], depth: number): string => {
 export const leastDifference = (expected: readonly unknown[], actual: readonly unknown[], from: number, to: number): number => {
   try {
     const compared = withReceivedValues(expected, actual)
-    for (let depth = from; depth <= to; depth++) if (comparisonText(compared, depth) !== comparisonText(actual, depth)) return depth
+    for (let depth = from; depth <= to; depth++) {
+      const [printed, sorted] = comparisonTexts(compared, depth)
+      const [actualPrinted, actualSorted] = comparisonTexts(actual, depth)
+      if (printed !== actualPrinted && sorted !== actualSorted) return depth
+    }
   } catch {
     return from
   }
