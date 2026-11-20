@@ -419,6 +419,9 @@ const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHan
  * instance) gives every matching call is noted as such, with the hand-out (see handOutShared). E111 (R16-ADV-7): such a
  * call hands out the substitute that was called itself, too (`io.to(Arg.any()).returns(io)`, a mimicked `return this`),
  * so that a check through it in the same expression (`io.to('room-b').received(1).emit(...)`) goes through that call.
+ * E122 (R17-ADV-1): and so does any other call or read that answers the substitute itself (`room.self().returns(room)`,
+ * `room.me.returns(room)`) when it continues an expression that handed that substitute out (`io.to('b').self()`), so that
+ * a check further down (`io.to('b').self().received(1).emit(...)`) goes on through to('b').
  */
 const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteState): T => {
   const source = takeAnswerSource()
@@ -426,7 +429,9 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined) {
       const shared = record.kind === 'call' && sharesAnswer(source)
-      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner) handOutShared(face, record, owner, shared)
+      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner || face.continuesConfiguredHandOut(record)) {
+        handOutShared(face, record, owner, shared)
+      }
       owner.noteConfiguredAnswer(record, face)
     }
   } else owner.noteConfiguredAnswer(record, otherAnswer(value, source))

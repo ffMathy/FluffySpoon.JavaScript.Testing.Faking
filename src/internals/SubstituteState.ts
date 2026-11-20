@@ -329,6 +329,11 @@ export class AutoEntry {
   public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
     return configuredHandOutOf(this._configuredHandOut, record)
   }
+
+  /** E122: whether `record` continues the expression of the latest configured hand-out of this entry's proxy. */
+  public continuesConfiguredHandOut(record: CallRecord): boolean {
+    return continuesNotes(this._configuredHandOut, record)
+  }
 }
 
 /**
@@ -390,6 +395,11 @@ const configuredHandOutNoted = (
   notes.shared = shared
   return notes
 }
+
+/** E122: whether `record` continues the expression of the latest of `notes` (see continuesHandOut). */
+const continuesNotes = (notes: HandOutNotes | undefined, record: CallRecord): boolean =>
+  notes !== undefined && record.chainPrevious !== undefined &&
+  continuesHandOut(Array.isArray(notes) ? notes[notes.length - 1].record : notes.record, record)
 
 /** E110, E122: the note of `notes` for the hand-out that `record` made, if there is one (the latest first). */
 const configuredHandOutOf = (notes: HandOutNotes | undefined, record: CallRecord): ConfiguredHandOut | undefined => {
@@ -717,6 +727,11 @@ export class SubstituteState {
   /** E110, E122: the configured hand-out of this substitute that `record` made, if it is one of the latest expression. */
   public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
     return configuredHandOutOf(this._configuredHandOut, record)
+  }
+
+  /** E122: whether `record` continues the expression of the latest configured hand-out of this substitute. */
+  public continuesConfiguredHandOut(record: CallRecord): boolean {
+    return continuesNotes(this._configuredHandOut, record)
   }
 
   public get mimicked(): { instance: any } | undefined {

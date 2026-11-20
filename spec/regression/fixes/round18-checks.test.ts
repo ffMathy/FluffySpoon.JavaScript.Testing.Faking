@@ -152,6 +152,39 @@ test('R17-ADV-1 (E122) socket.io and fastify: to() and code()/header() answering
   expectCounts(t, "mimicked: db.call(undefined, 'orders').where('id', 1)", 0, (form, count) => db.call(undefined, 'orders').where('id', 1)[form.key](...form.args(count)).first())
 })
 
+test('R17-ADV-1 (E122) a setup without matchers that answers the substitute itself, below a shared step, narrows too (twice.js C, D)', t => {
+  // a concrete call answering the substitute itself: room.self().returns(room)
+  const io = Substitute.for<any>()
+  const room = Substitute.for<any>()
+  io.to(Arg.any()).returns(room)
+  room.self().returns(room)
+  io.to('a').self().emit('m') // the code under test
+  // (5c41ddc: the route stopped at self(), and every call of room counted)
+  expectCounts(t, "io.to('b').self()", 0, (form, count) => io.to('b').self()[form.key](...form.args(count)).emit('m'))
+  expectCounts(t, "io.to('a').self()", 1, (form, count) => io.to('a').self()[form.key](...form.args(count)).emit('m'))
+  t.is(io.to('z').self(), room)
+
+  // a read answering the substitute itself: room.me.returns(room)
+  const bus = Substitute.for<any>()
+  const channel = Substitute.for<any>()
+  bus.to(Arg.any()).returns(channel)
+  channel.me.returns(channel)
+  bus.to('a').me.emit('m') // the code under test
+  expectCounts(t, "bus.to('b').me", 0, (form, count) => bus.to('b').me[form.key](...form.args(count)).emit('m'))
+  expectCounts(t, "bus.to('a').me", 1, (form, count) => bus.to('a').me[form.key](...form.args(count)).emit('m'))
+
+  // E39 stays: without a hand-out further up, a setup that answers the substitute itself hands nothing out, and the next
+  // statement on the same line does not take the call with it
+  const map = Substitute.for<any>()
+  map.set('b', 2).returns(map)
+  const answered = map.set('b', 2); t.notThrows(() => map.received(1).set('b', 2))
+  t.is(answered, map)
+  // and checks of the substitutes themselves count every call
+  t.notThrows(() => room.received(1).emit('m'))
+  t.notThrows(() => io.received(1).to('a'))
+  t.notThrows(() => room.received(2).self()) // (the code's and the identity check's)
+})
+
 test('R17-ADV-2 (E122) the finding: a substitute handed out twice in one expression (a cycle) keeps the top step of the route', t => {
   const io = Substitute.for<any>()
   const room = Substitute.for<any>()
