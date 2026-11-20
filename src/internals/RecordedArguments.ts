@@ -388,11 +388,48 @@ const holdsNestedMatcher = (container: object): boolean => {
 
 /**
  * E109: the arguments of the last search for matchers of a call (containsMatchers), which of them hold no substitute (a
- * bit for each), and how many items and keys it listed in those (see clearArgumentsOf).
+ * bit for each), and how many items and keys it listed in those (see clearArgumentsOf). E127 (R17-ADV-3): the arguments
+ * are kept only until the call reads what the search found (see clearArgumentsOf), and at most until the end of the
+ * synchronous run they were searched in (see forgetScanLater), so that nothing keeps them alive once the substitute
+ * that was called, and they, are dropped: most calls never read it (no setup with matchers on the member).
  */
 let scannedArguments: readonly unknown[] | undefined
 let clearArguments = 0
 const scannedItems: number[] = []
+
+/** E127: whether the arguments of the last search are to be forgotten (see forgetScanLater). */
+let forgetScheduled = false
+
+const forgetScan = (): void => {
+  forgetScheduled = false
+  scannedArguments = undefined
+  // and the keys of wide objects that the search listed for the hash, which a call that hashes nothing never takes
+  // (a member with setups with matchers only), see ArgumentHash's listings
+  forgetListings()
+}
+
+/**
+ * E127: a microtask, from the queueMicrotask found when the library was loaded (fake timers installed later do not delay
+ * it), or process.nextTick on Node.js 10, which has no queueMicrotask.
+ */
+const scheduleForget: ((callback: () => void) => void) | undefined = (() => {
+  if (typeof queueMicrotask === 'function') {
+    const microtask = queueMicrotask
+    return (callback: () => void) => { microtask(callback) }
+  }
+  if (typeof process !== 'undefined' && process !== null && typeof process.nextTick === 'function') {
+    const nextTick = process.nextTick
+    return (callback: () => void) => { nextTick.call(process, callback) }
+  }
+  return undefined
+})()
+
+/** E127: forgets the arguments of the last search at the end of the current synchronous run (one microtask for all of its calls). */
+const forgetScanLater = (): void => {
+  if (forgetScheduled || scheduleForget === undefined) return
+  forgetScheduled = true
+  scheduleForget(forgetScan)
+}
 
 /** The plain containers in `value` that hold a matcher somewhere inside, for a specification. */
 const collectMatcherContainers = (value: unknown, found: Set<object>, visited: Set<object>): boolean => {
@@ -650,6 +687,7 @@ export class RecordedArguments {
     }
     scannedArguments = rawArguments
     clearArguments = clear
+    forgetScanLater()
     return false
   }
 
@@ -662,7 +700,10 @@ export class RecordedArguments {
    * many items and keys the search listed in each (for the look's budget), by position. 0 for other arguments.
    */
   static clearArgumentsOf(rawArguments: readonly unknown[]): number {
-    return rawArguments === scannedArguments ? clearArguments : 0
+    if (rawArguments !== scannedArguments) return 0
+    // E127: read once, by the call's own matching pass
+    scannedArguments = undefined
+    return clearArguments
   }
 
   /** E109: the items and keys that the search listed in each of the arguments that clearArgumentsOf tells about. */
