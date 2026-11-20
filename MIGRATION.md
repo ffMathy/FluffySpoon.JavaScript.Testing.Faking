@@ -369,7 +369,7 @@ Checks that fail later (these two, and a property-style `sub.received(2).member`
 
 Literal arguments are compared with deep strict equality (`util.isDeepStrictEqual`), as before: own enumerable properties and prototypes. `#private` fields and other internal state are invisible to it, so all instances of a class that keeps its state only in `#private` fields are equal to each other. Use the same instance, or `Arg.is()`, for such classes (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
-What changed: an argument object that you change after using it in a setup only matches that setup when the same object is passed again. Before, a new object equal to the changed one matched as well. Create the setup with the object as the code under test will pass it, or with a matcher. Objects that change after they were passed in a call that is not a setup are not affected: the library remembers the hash of a large object (with more than 256 keys or entries) from the first time it is passed, but that does not change which setup it matches, so such an object still matches a setup made with an equal object, before or after the change (see [How arguments are compared](README.md#how-arguments-are-compared)). Whether a new array or object around an argument object that changed after the setup matches the setup is not specified.
+Setups and received calls keep the argument objects themselves and compare them as they are at the time of each call or check, as before. So an argument object that you change after using it in a setup matches calls with an object equal to its new contents (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
 <!-- docs-check: uses=migration-calculator -->
 ```typescript
@@ -383,7 +383,7 @@ repository.save(user).returns('saved')
 user.name = 'bob'
 
 console.log(repository.save(user)) // prints saved
-console.log(repository.save({ name: 'bob' }) === 'saved') // prints false
+console.log(repository.save({ name: 'bob' })) // prints saved
 ```
 
 ### Omitted arguments

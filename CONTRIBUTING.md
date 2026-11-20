@@ -92,40 +92,12 @@ npm test
 ```
 
 `npm test` runs `npm run build:spec`, which compiles the specs together with the sources they import into
-`dist-spec/`, and then ava twice. It never writes into `dist/`, so running the tests (or interrupting them) cannot
-leave a broken or missing `dist/` behind for publishing or for `npm link`.
+`dist-spec/`, and then ava once, over `spec/**/*.spec.ts`, `spec/**/*.test.ts` and `packaging/**/*.test.js`. It
+never writes into `dist/`, so running the tests (or interrupting them) cannot leave a broken or missing `dist/` behind
+for publishing or for `npm link`.
 
-The first ava run (`ava`, configured by `ava.config.js`) runs every test file except the timing-sensitive ones, with
-ava's usual parallelism. The timing-sensitive files are the spec files with performance limits (timings, and ratios
-of timings), listed once as `timingSensitive` in `ava.config.js`: `spec/regression/fixes/*hashing*.test.ts`,
-`spec/regression/fixes/performance.test.ts`, `spec/regression/fixes/round5.test.ts`,
-`spec/regression/fixes/round8.test.ts` and `spec/regression/fixes/ported-from-a.spec.ts`. The second run,
-`ava --config ava.perf.config.js --serial --concurrency=1`, runs only those, one test at a time, so that other test
-files cannot slow them down. Tests that compare timings take the median of several interleaved rounds, and check
-the ratios with `assertRatiosWithin()` from `spec/helpers/timing.ts`: a measurement whose ratio is over its limit is
-made again, up to three measurements in all (`RATIO_ATTEMPTS`), and the smallest ratio of each kind decides, so that
-load that comes and goes during one measurement does not fail the test, while a real slowdown, which is over the limit
-in every measurement, still does. Every measurement is logged. A test in
-`spec/regression/fixes/round10-hashing.test.ts` checks that no timing-sensitive file compares a ratio of timings with
-its limit directly. Absolute limits (such as 10,000 calls in under 1 s) are checked with `timeLimit()` and
-`assertWithin()` from
-`spec/helpers/timing.ts`. Right before the measurement, the helper times a fixed CPU-bound workload in the same
-process, and scales the limit by that time over the workload's time on an idle machine (`IDLE_WORKLOAD_MS`, 9 ms),
-clamped to between 1 and 4 (`MAX_FACTOR`). If a measurement exceeds its limit, it is judged once more against the
-larger of that factor and one measured right after it. A busy machine slows the workload as much as the test, so the
-limit grows with the load, while an algorithmic regression still fails, as no limit grows beyond 4 times. Every check
-logs its time, limit and factor. A measurement of a single run, which one scheduling stall can slow down, takes the
-best of three runs after a warm-up (`bestOfThree()`); in `spec/regression/fixes/performance.test.ts`, both halves of
-the test of 8,000 setups (literal ones, and ones through `configure()`) do so on fresh substitutes, and a test there
-checks that one stalled run does not decide. A new timing test must use the helper: a test in
-`spec/regression/fixes/round9-hashing.test.ts` checks that no timing-sensitive file compares a time with a fixed
-number. To reproduce a busy machine, start the busy loops (for example `node -e 'for (;;) {}'`, 12 of them for 4
-cores) in the same shell session as `npm test`: Linux groups the processes of a session for scheduling (autogroup),
-so loops started in another terminal barely slow the tests down. Both runs
-have a stall timeout of 3 minutes (ava's default of 10 seconds is too short for the packaging checks and the long
-serial tests on a busy machine). A new spec file that measures time must be added to `timingSensitive`: a test in
-`spec/regression/fixes/round8-hashing.test.ts` checks that every spec file that reads a clock or imports
-`spec/helpers/timing.ts` runs in the second run, and that every spec file runs in exactly one of the two.
+The run has a stall timeout of 3 minutes (ava's default of 10 seconds is too short for the packaging checks, which pack
+a copy of the repository before their first test).
 
 The tests are of two kinds:
 
@@ -144,20 +116,13 @@ No test leaves files in the temporary directory (`os.tmpdir()`). A run leaves on
 (`node-compile-cache/`, which npm, npx and tsc write when they start, on Node.js 22.1 and newer; set
 `NODE_COMPILE_CACHE` to another directory, or `NODE_DISABLE_COMPILE_CACHE=1`, to keep it out). ava keeps its cache in
 `node_modules/.cache/ava`, where (outside CI) it notes the test files that failed, so that its next run starts with
-them; a test in `spec/regression/fixes/round10-hashing.test.ts` checks that the two ava runs leave nothing in
+them; a test in `spec/regression/fixes/round10-printing.test.ts` checks that the ava run leaves nothing in
 `os.tmpdir()`.
 
 To run a single file or test, use ava's options after building the specs, for example:
 
 ```sh
 npm run build:spec && npx ava spec/regression/returns.spec.ts --match '*order*'
-```
-
-A timing-sensitive file needs the second configuration, because the first one leaves it out (plain `npx ava <file>`
-runs nothing for it):
-
-```sh
-npm run build:spec && npx ava --config ava.perf.config.js spec/regression/fixes/performance.test.ts
 ```
 
 ### Type tests
@@ -190,28 +155,9 @@ raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the docum
 For each of these versions, it also compiles `spec-types/declaration-emit/R13TD-1.T73.check-views.ts` against the
 built typings with `declaration` and `emitDeclarationOnly`, into its temporary directory, which it removes afterwards
 (printed as `ok   typescript@3.6 (declaration emit of check views)`).
-Afterwards the same script runs two more checks with the TypeScript of this repository:
-
-- `spec-types/TD-10.T32.jsdoc.js` checks that the public API in the built typings carries documentation comments
-  (editor quick info). It fails when one of them is missing.
-- `spec-types/R6V-5.R6TD-2.T44.check-cost.js` checks the type-check cost of a substitute of a large union: it
-  compiles `spec-types/R6V-5.R6TD-2.T44.element-union.ts` (a substitute of the union of all lib.dom element types)
-  against the built typings and fails when that needs more type instantiations than its budget,
-  `INSTANTIATION_BUDGET` in the script: 470,000 (469,928 with TypeScript 5.9.2 now, so 72 to spare: a change to the
-  typings that adds work for every member fails it). Instantiation counts are deterministic, unlike timings. A change
-  to the typings that needs more must make them cheaper, or raise the budget in the same change with a reason in the
-  script's header. To run it alone: `npm run build && node spec-types/R6V-5.R6TD-2.T44.check-cost.js`.
-
-  The budget covers TypeScript 5.9 only. On older TypeScript, large unions cost more, and that cost is accepted as it
-  is (README, "Typing limitations"). Check times measured on Node.js 22 with `strict` and `skipLibCheck`, best of 3 on
-  an otherwise idle machine (the README's numbers): the T44 fixture takes 4.1 s on TypeScript 3.6, 3.6 s on 4.2, 4.7 s
-  on 4.5, 2.9 s on 5.9 and 1.4 s on 7.0, and a file with a few setups and checks on the same union 2.6 s, 2.5 s,
-  3.4 s, 1.9 s and 1.0 s; a substitute of a union of 60 interfaces whose methods have different parameter lists takes
-  30 s on 3.6 and 37 s on 4.2 (those versions merge the signatures of each variant's members in quadratic time, and
-  the per-arity signatures of such methods multiply them), 4.5 s on 4.5, 4.0 s on 5.9 and 1.6 s on 7.0; a few setups
-  on Node.js' `EventEmitter<Events>` (`@types/node` 18) take 0.32 to 0.40 s on 4.8 to 5.9 and 0.05 s on 7.0, mostly
-  for its generic methods, whose signatures are built when the substitute is compared with `EventEmitter`. A change to
-  the typings should not make these slower; compare before and after on TypeScript 3.6 and 5.9.
+Afterwards the same script runs `spec-types/TD-10.T32.jsdoc.js` with the TypeScript of this repository: it checks
+that the public API in the built typings carries documentation comments (editor quick info), and fails when one of
+them is missing.
 
 ### Documentation examples
 
@@ -337,10 +283,10 @@ exceptions: they are expected to pass, as is the vitest-matchers suite.
 
 `.github/workflows/nodejs.yml` runs on every push and pull request:
 
-- **test**: `npm ci`, `npm run build`, `npm test` (both ava runs), `npm run test:types --if-present` and
+- **test**: `npm ci`, `npm run build`, `npm test`, `npm run test:types --if-present` and
   `npm run test:docs` on every supported Node.js LTS line (22, 24 and 26).
 - **types-min-ts**: `npm run test:types:min-ts`: the built typings with the oldest supported TypeScript (3.6) and
-  with 4.3, the documentation comments of the public API, and the type-check cost budget, on the development
+  with 4.3, and the documentation comments of the public API, on the development
   Node.js version.
 - **compatibility**: the compatibility checks against the packed package on the same Node.js versions.
 - **minimum-node**: packs the package and smoke-tests it (`packaging/smoke/`) on the oldest supported Node.js
