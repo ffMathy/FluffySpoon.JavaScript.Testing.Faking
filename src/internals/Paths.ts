@@ -1,4 +1,4 @@
-import { inspect } from 'util'
+import { inspect, types } from 'util'
 
 import { SELF, keyToString } from './Constants'
 import { PATH_BOUNDS, formatBounded, withPrintGuard } from './utilities'
@@ -247,19 +247,82 @@ export const codeMember = (key: PropertyKey): string | undefined => {
 }
 
 /**
+ * E132 (R17-ADV-5): whether an argument, printed as paths print it (see pathArguments), is code that gives an equal value
+ * (deep strict equality, as setups and checks compare): a primitive other than a symbol (a bigint prints with its `n`),
+ * or a plain array or object (of Array.prototype or Object.prototype) printed in full, whose items and values are such
+ * primitives or empty plain arrays and objects (paths print one level deep). Not code: functions and substitutes,
+ * symbols, matchers, class instances, Dates, Maps, Sets, errors, buffers and typed arrays, URLs, objects with a null
+ * prototype, accessors, symbol or non-enumerable keys, holes, proxies, and whatever printing cuts (strings of more than
+ * maxStringLength characters, more items or keys than are printed, a text of more than `characters` characters).
+ */
+const isCodeArgument = (value: unknown): boolean =>
+  isCodeValue(value, true) && (isPrimitive(value) || formatBounded(value, PATH_BOUNDS, false).length <= PATH_BOUNDS.characters)
+
+const isCodeValue = (value: unknown, top: boolean): boolean => {
+  switch (typeof value) {
+    case 'string':
+      return value.length <= PATH_BOUNDS.maxStringLength && (!top || inspect(value).length <= PATH_BOUNDS.characters)
+    case 'number':
+    case 'boolean':
+    case 'undefined':
+    case 'bigint':
+      return true
+    case 'object':
+      break
+    default: // symbols, functions (substitutes among them)
+      return false
+  }
+  if (value === null) return true
+  try {
+    if (types.isProxy(value)) return false
+    const prototype = Object.getPrototypeOf(value)
+    const keys = Reflect.ownKeys(value)
+    if (Array.isArray(value)) {
+      // (the keys of an array are its items and `length`: fewer with holes, more with keys of its own)
+      if (prototype !== Array.prototype || keys.length !== value.length + 1) return false
+      if (!top) return value.length === 0
+      return value.length <= PATH_BOUNDS.maxArrayLength && value.every((_item, index) => isCodeProperty(value, index))
+    }
+    if (prototype !== Object.prototype) return false
+    if (!top) return keys.length === 0
+    return keys.length <= PATH_BOUNDS.keys && keys.every(key => typeof key === 'string' && key !== '__proto__' && isCodeProperty(value, key))
+  } catch {
+    return false // a value that cannot be looked at
+  }
+}
+
+/** E132: an own enumerable data property whose value is code one level down (see isCodeValue). */
+const isCodeProperty = (container: object, key: PropertyKey): boolean => {
+  const descriptor = Reflect.getOwnPropertyDescriptor(container, key)
+  return descriptor !== undefined && descriptor.enumerable === true && 'value' in descriptor && isCodeValue(descriptor.value, false)
+}
+
+/** E132: why a path cannot be written as code (see codePath). */
+export type NotCode = { readonly notCode: 'member' | 'arguments' | 'length' }
+const NOT_CODE_MEMBER: NotCode = { notCode: 'member' }
+const NOT_CODE_ARGUMENTS: NotCode = { notCode: 'arguments' }
+const NOT_CODE_LENGTH: NotCode = { notCode: 'length' }
+
+/**
  * E112: the path of an auto-substitute written as code, from the root substitute (`sub`) down to `leaf`, with every member
  * (no `…` for a long one, unlike pathPieces) and the arguments of calls as paths print them (see pathArguments). A call
  * that a substitute shared by a nested setup through a call with matchers was handed out to is written as that call when
  * there was one such call (see recordPieces), or, with `firstHandOut`, as the first of several (they all answered the
- * same substitute). Undefined when a member cannot be written as code (see codeMember), or when the path is longer than
- * `limit` characters. Built only for a failure message.
+ * same substitute). Not code (see NotCode) when a member cannot be written as code (see codeMember), else, E132 (with
+ * `codeArguments`), when an argument does not print as code that gives an equal value (see isCodeArgument; the matchers
+ * of a call with matchers among them), else when the path is longer than `limit` characters. Built only for a failure
+ * message.
  */
-export const codePath = (leaf: PathEntry | undefined, context: RecordLabelContext, firstHandOut: boolean, limit: number): string | undefined => {
+export const codePath = (
+  leaf: PathEntry | undefined, context: RecordLabelContext, firstHandOut: boolean, limit: number, codeArguments: boolean
+): string | NotCode => {
   const pieces: string[] = []
   let length = 3 // `sub`
+  let notCode: NotCode | undefined
   for (let entry = leaf; entry !== undefined; entry = entry.parent.owner) {
     const member = entry.key === SELF ? '' : codeMember(entry.key)
-    if (member === undefined) return undefined
+    if (member === undefined) return NOT_CODE_MEMBER
+    if (notCode === NOT_CODE_ARGUMENTS) continue
     let piece = member
     if (entry.kind === 'call') {
       let args = entry.argumentList
@@ -267,13 +330,19 @@ export const codePath = (leaf: PathEntry | undefined, context: RecordLabelContex
         const { calls } = handOuts(entry, context)
         if (calls.length === 1 || (firstHandOut && calls.length > 1)) args = calls[0].args
       }
-      piece += pathArguments(args, entry)
+      const values = args ?? []
+      if (codeArguments && (values.length > PATH_BOUNDS.maxArrayLength || !values.every(isCodeArgument))) {
+        notCode = NOT_CODE_ARGUMENTS
+        continue
+      }
+      if (notCode === undefined) piece += pathArguments(args, entry)
     }
+    if (notCode !== undefined) continue
     length += piece.length
-    if (length > limit) return undefined
-    pieces.push(piece)
+    if (length > limit) notCode = NOT_CODE_LENGTH
+    else pieces.push(piece)
   }
-  return `sub${pieces.reverse().join('')}`
+  return notCode ?? `sub${pieces.reverse().join('')}`
 }
 
 /*

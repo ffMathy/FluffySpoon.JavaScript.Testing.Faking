@@ -406,9 +406,11 @@ test('R16FE-4 (E115) Object.defineProperty and delete on a mimicked substitute g
   t.false('b' in real)
   t.deepEqual(Object.keys(sub), ['a'])
 
-  // without `configurable`, as on the instance
+  // without `configurable`, a new key is not configurable, as on any object (round 18, E130: R17-ADV-8): defined on the
+  // substitute itself, as below
   Object.defineProperty(sub, 'c', { value: 3, enumerable: true })
-  t.is(real.c, 3)
+  t.false('c' in real)
+  t.is(sub.c, 3)
   // a non-configurable property cannot be reported for the instance: it is defined on the substitute itself (E25)
   Object.defineProperty(sub, 'd', { value: 4, configurable: false })
   t.false('d' in real)
@@ -592,13 +594,14 @@ test('R16-ADV-6 (E112) shared substitutes: returned to several calls, the fluent
   const nested = followRemedy(t, s => s.code(404).send(1), s => s.received(1).send(1), '(1)', { arrange: nestedArrange })
   t.true(nested.includes('check that substitute: sub.code(404).received(1).send(...)'), nested)
 
-  // returned to several calls: the call with matchers, whose matchers are written by hand (as the README says)
+  // returned to several calls: the call with matchers, whose matchers are written by hand (round 18, E132: R17-ADV-5,
+  // matchers do not print as code, so the remedy names the substitute as messages print it, without code)
   const sub = Substitute.for<any>()
   nestedArrange(sub)
   sub.code(404).send(1)
   sub.code(500).ok()
   const message = failureOf(t, () => sub.received(1).send(1))
-  t.true(fluentHintOf(message).includes('check that substitute: sub.code(Arg.any{any}).received(1).send(...)'), message)
+  t.true(fluentHintOf(message).includes('check that substitute, @Substitute.code(Arg.any{any}), reached with the same arguments, with received(1) on it'), message)
   t.notThrows(() => sub.code(Arg.any()).received(1).send(1))
 
   // unshared, as before
