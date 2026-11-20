@@ -2613,7 +2613,8 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
   let how: string
   // E104: what to check instead of a function bound from a substitute's member
   let instead = 'Check that value directly instead (for example user.received(1).save(), for a substitute user that it holds or resolves to)'
-  if (answer instanceof Substitution) {
+  // (E124: what answered is a function, a revoked proxy among them, or one of the library's own objects, see isFaceAnswer)
+  if (typeof answer === 'object' && answer instanceof Substitution) {
     const values = answer.values.map(value => formatValue(value, false)).join(', ')
     const bound = answer.method === 'returns' && answer.values.length === 1 ? boundProxies.get(answer.values[0]) : undefined
     if (bound !== undefined) instead = `Check the calls of the member it is bound from instead (for example ${boundMemberCheck(bound)})`
@@ -2732,8 +2733,17 @@ const undeterminedRouteError = (route: CheckRoute, record: CallRecord, answered:
   )
 }
 
+/**
+ * E124 (R17V-1, R17-ADV-6): whether what a call or a read answered (as noted, see SubstituteState.noteConfiguredAnswer) is
+ * a substitute of this copy: its AutoEntry or SubstituteState. Every other object noted is the library's own (a setup, or
+ * MIMICKED, THREW, CONFIGURED); a function is a value that answered, which may be any proxy, a revoked one too, so it is
+ * never asked for its prototype (instanceof would throw for a revoked proxy).
+ */
+const isFaceAnswer = (answer: unknown): answer is AutoEntry | SubstituteState =>
+  typeof answer === 'object' && (answer instanceof AutoEntry || answer instanceof SubstituteState)
+
 /** E99: a substitute that calls answered, as messages show it. */
-const printAnswer = (answer: object): string => answer instanceof AutoEntry || answer instanceof SubstituteState ? answer.path : formatValue(answer, false)
+const printAnswer = (answer: object): string => isFaceAnswer(answer) ? answer.path : formatValue(answer, false)
 
 /**
  * How a route is followed: 'count' for what a check counts (E88, E89 and E99 usage errors are thrown), 'list' (E99) for
@@ -2773,11 +2783,11 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
       if (record.retracted || record.kind !== 'call' || record.seq <= since) continue
       const answer = answers === undefined ? undefined : answers[position]
       if (!step.matchesCall(record.args ?? [])) {
-        if (sharing && (answer instanceof AutoEntry || answer instanceof SubstituteState)) (others ?? (others = [])).push(position)
+        if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(position)
         continue
       }
       if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
-      else if (answer instanceof AutoEntry || answer instanceof SubstituteState) {
+      else if (isFaceAnswer(answer)) {
         answered.add(checkedOf(answer))
         if (sharing) (shared ?? (shared = new Set())).add(answer)
       }
@@ -2818,7 +2828,7 @@ const throughRead = (checked: readonly Checked[], key: PropertyKey, through: () 
         if (record.kind !== 'get' || record.seq <= since) continue
         const answer = configured.get(record)
         if (answer === undefined) continue
-        if (answer instanceof AutoEntry || answer instanceof SubstituteState) answered.add(checkedOf(answer))
+        if (isFaceAnswer(answer)) answered.add(checkedOf(answer))
         else if (isOtherCopySubstitute(answer)) answered.add(answer)
         else if (follow === 'count') throw notSubstituteError(through(), state, record, answer, start)
       }

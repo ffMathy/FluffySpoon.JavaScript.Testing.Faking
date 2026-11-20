@@ -263,3 +263,60 @@ test('R17-ADV-12 (E123) a clear further up a longer route, a clear of the substi
   plainIo.to('a').emit('m')
   expectCounts(t, "no clear: to('a')", 2, (form, count) => plainIo.to('a')[form.key](...form.args(count)).emit('m'))
 })
+
+// ---- E124 (R17V-1 = R17-ADV-6): a revoked proxy as a matching call's or read's answer is E88's usage error ----------
+
+/** A revoked proxy of a function or of an object. */
+const revoked = (kind: 'function' | 'object'): any => {
+  const { proxy, revoke } = Proxy.revocable(kind === 'function' ? function connection() { } : {}, {})
+  revoke()
+  return proxy
+}
+
+test('R17V-1 (E124) the finding: a check through a call with matchers, or a member step, answered by a revoked proxy is E88\'s usage error in every form', t => {
+  for (const kind of ['function', 'object'] as const) {
+    // verify17/regv17-w/mine/r17v1.js: the pool revokes the connection on release
+    const { proxy: connection, revoke } = Proxy.revocable(kind === 'function' ? function connection() { } : {}, {})
+    const pool = Substitute.for<any>()
+    pool.acquire(Arg.any()).returns(connection)
+    pool.acquire('db') // the code under test
+    revoke()
+    // (5c41ddc: TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked, for a function)
+    expectUsageError(t, `${kind}: acquire(Arg.any())`, (form, count) => pool.acquire(Arg.any())[form.key](...form.args(count)).query())
+    const message = failureOf(t, () => pool.acquire(Arg.any()).received(1).query())
+    t.true(message.startsWith("Cannot check through @Substitute.acquire(Arg.any{any}): the received call @Substitute.acquire('db'), which it matches, "), message)
+    t.true(message.includes('<Revoked Proxy>'), message)
+
+    // a member step whose read answered a revoked proxy
+    const api = Substitute.for<any>()
+    api.session(Arg.any()).conn.returns(revoked(kind))
+    void api.session(1).conn // the code under test
+    expectUsageError(t, `${kind}: session(Arg.any()).conn`, (form, count) => api.session(Arg.any()).conn[form.key](...form.args(count)).query())
+  }
+})
+
+test('R17V-1 (E124) a revoked function proxy from mimicks(), next to a substitute answer, and through a concrete call', t => {
+  // e118b.js f: mimicks() answers a revoked function proxy
+  const factory = Substitute.for<any>()
+  const proxy = revoked('function')
+  factory.make(Arg.any()).mimicks(() => proxy)
+  factory.make(1)
+  expectUsageError(t, 'mimicks()', (form, count) => factory.make(Arg.any())[form.key](...form.args(count))())
+
+  // e118b.js j: one matching call answered a substitute, another a revoked function proxy
+  const mixed = Substitute.for<any>()
+  mixed.make(1).returns(Substitute.for<any>())
+  mixed.make(Arg.is((value: number) => value === 2)).returns(revoked('function'))
+  mixed.make(1)
+  mixed.make(2)
+  expectUsageError(t, 'a substitute and a revoked proxy', (form, count) => mixed.make(Arg.any())[form.key](...form.args(count))())
+  // only the call answered by the substitute: a check as usual
+  t.notThrows(() => mixed.make(Arg.is((value: number) => value === 1))[received](0)())
+
+  // a concrete call (E99) whose shared answer is a revoked function proxy: the code reads it like any revoked proxy
+  const shared = Substitute.for<any>()
+  shared.make(Arg.any()).returns(revoked('function'))
+  t.throws(() => shared.make(1)[received](1)(), { instanceOf: TypeError })
+  // and a direct check of the call is unaffected
+  t.notThrows(() => shared.received(1).make(1))
+})
