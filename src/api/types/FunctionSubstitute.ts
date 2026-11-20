@@ -436,17 +436,38 @@ type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
 // their types from `OverloadsContextualImplementation`.
 type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], R> =
   V extends 'assertion' ? void :
-  V extends 'configure' ? ConfigurationResult<R, AllOverloadsImplementation<TOverloads, R>> :
-  SubstitutionResult<R, AllOverloadsImplementation<TOverloads, R>>
-type AllOverloadsImplementation<TOverloads extends any[], R> = OverloadsImplementation<
-  OverloadsContextualImplementation<OverloadArgumentLists<TOverloads[number]>, R>,
+  V extends 'configure' ? ConfigurationResult<R, (this: OverloadsImplementation<TOverloads, R>) => R> :
+  SubstitutionResult<R, (this: OverloadsImplementation<TOverloads, R>) => R>
+/**
+ * `.mimicks()` of a setup that takes the calls of several overloads (`TOverloads`, see `Overloads`), each with the
+ * value `R` (R16FE-1, T80): an implementation fits when it can stand in for each of them (an intersection of one
+ * function type per overload), as a function assigned to the overloaded member itself does, so it may leave out
+ * trailing parameters. `OverloadsContextualImplementation` is one signature that every such implementation fits,
+ * which types its parameters from the context on every TypeScript version (TypeScript 4.2 and older give a function
+ * passed for an intersection of function types no contextual type: an untyped parameter would be implicitly `any`).
+ * (The type parameters' constraints are only computed for a call of `.mimicks()`. The setup result carries the
+ * overloads in the `this` type of its implementation type, see `OverloadsImplementation`: TypeScript computes such
+ * results for many members of some substitutes, a TypeORM `Repository` among them, also where `.mimicks()` is not
+ * used, and computing what `.mimicks()` takes up front, or carrying the overloads in an object type, cost a substitute
+ * of `Repository` 10% to 28% more type instantiations on TypeScript 5.0.)
+ */
+export type OverloadsMimicksFunction<TOverloads, R> =
+  <TImplementation extends OverloadsContextual<TOverloads, R>, TMore extends OverloadsContextual<TOverloads, R>[]>(
+    implementation: TImplementation & ImplementationFits<TImplementation, EachOverloadImplementation<TOverloads, R>>,
+    ...implementations: TMore & ImplementationFits<TMore, EachOverloadImplementation<TOverloads, R>[]>) => void
+type ImplementationFits<TImplementation, TEach> = TImplementation extends TEach ? unknown : TEach
+type OverloadsContextual<TOverloads, R> = TOverloads extends any[] ?
+  OverloadsContextualImplementation<OverloadArgumentLists<TOverloads[number]>, R> :
+  never
+type EachOverloadImplementation<TOverloads, R> = TOverloads extends any[] ? (
   OverloadImplementation<TOverloads[0], R> & OverloadImplementation<TOverloads[1], R> &
   OverloadImplementation<TOverloads[2], R> & OverloadImplementation<TOverloads[3], R> &
   OverloadImplementation<TOverloads[4], R> & OverloadImplementation<TOverloads[5], R> &
-  OverloadImplementation<TOverloads[6], R> & OverloadImplementation<TOverloads[7], R>>
+  OverloadImplementation<TOverloads[6], R> & OverloadImplementation<TOverloads[7], R>) :
+  never
 type OverloadImplementation<TOverload, R> =
   TOverload extends Overload<infer A, any> ? ([A] extends [never] ? unknown : (...args: A) => R) : unknown
-// One signature that every implementation of the overloads fits (see `OverloadsImplementation`), with the parameter
+// One signature that every implementation of the overloads fits (see `OverloadsMimicksFunction`), with the parameter
 // types of all overloads at each position (`(args_0: Row[] | Row, args_1?: { chunk?: number })`), and as many
 // required parameters as the overload that requires the fewest. It is a method's signature, whose parameters
 // TypeScript compares both ways even with `strictFunctionTypes`: an overloaded function (`real.remove`), which fits
