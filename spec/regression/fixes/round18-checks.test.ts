@@ -203,9 +203,9 @@ test('R17-ADV-2 (E122) the finding: a substitute handed out twice in one express
   expectCounts(t, "io.to('b').back(1)", 0, (form, count) => io.to('b').back(1)[form.key](...form.args(count)).emit('n'))
 })
 
-test('R17-ADV-2 (E122) a route whose upper part is no longer known is a usage error, never a check of its lower part', t => {
+test('R17-ADV-2 (E122) a route that another expression handed the same substitute out in the middle of is still followed', t => {
   // to() runs a function that hands the same io out from another substitute (another expression) while the check
-  // expression goes through io: the expression's own hand-out of io is no longer known
+  // expression goes through io: the expression's own hand-out of io is noted for its record, so the check counts
   const io = Substitute.for<any>()
   const room = Substitute.for<any>()
   const other = Substitute.for<any>()
@@ -216,8 +216,9 @@ test('R17-ADV-2 (E122) a route whose upper part is no longer known is a usage er
   })
   room.back(Arg.any()).returns(io)
   io.to('a').back(1).to('a').emit('m') // the code under test
-  const message = failureOf(t, () => io.to('b').back(1).to('a').received(1).emit('m'))
-  t.true(message.startsWith("Cannot check through @Substitute.to('a'): before it, the expression went through back(1)"), message)
+  expectCounts(t, "io.to('b').back(1).to('a')", 0, (form, count) => io.to('b').back(1).to('a')[form.key](...form.args(count)).emit('m'))
+  t.true(failureOf(t, () => io.to('b').back(1).to('a').received(1).emit('m')).includes('but received none.'))
+  expectCounts(t, "io.to('a').back(1).to('a')", 1, (form, count) => io.to('a').back(1).to('a')[form.key](...form.args(count)).emit('m'))
   // direct checks still count
   t.notThrows(() => room.received(1).emit('m'))
 })

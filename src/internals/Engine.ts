@@ -424,7 +424,7 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined) {
       const shared = record.kind === 'call' && sharesAnswer(source)
-      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner || face.continuesConfiguredHandOut(record)) {
+      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner || continuesHandOutOf(face, record)) {
         handOutShared(face, record, owner, shared)
       }
       owner.noteConfiguredAnswer(record, face)
@@ -549,11 +549,9 @@ const isOtherCopySubstitute = (value: unknown): value is Function =>
  * calls as if they all came through that call. So the calls of a check expression that such a setup answered (the setup
  * that answered them has matchers, or the mimicked instance answered them: the call has no setup of its own) are found,
  * and the check counts along the route of the expression (see concreteRoute), deciding from the answers noted for the
- * calls which calls the shared substitute was returned to (see throughCall).
- * E110 (R16V-2, the docs agent's E99 retention): such a hand-out is noted with the substitute handed out, for its latest
- * hand-out only (see SubstituteState.ConfiguredHandOut), not per call: no cost per call, and nothing that keeps the
- * substitute the call was made on alive once it is dropped. Nothing is noted for other calls before the first such
- * hand-out: no cost when no such substitute is involved.
+ * calls which calls the shared substitute was returned to (see throughCall). Such a hand-out is noted for the record
+ * that made it (see configuredHandOuts). Nothing is noted for other calls before the first such hand-out: no cost when
+ * no such substitute is involved.
  */
 let sharedHandOutCount = 0
 
@@ -562,13 +560,30 @@ const sharesAnswer = (source: Substitution | object | undefined): boolean =>
   source === MIMICKED || (source instanceof Substitution && source.args !== undefined && hasMatchers(source.args))
 
 /**
- * E39, E99, E110: `record` (of `owner`) hands out the substitute `face` as a configured value, which `shared` says a setup
- * with matchers or the mimicked instance gives every call that it matches (see ConfiguredHandOut).
+ * E39, E99: what a record handed out as a configured value: the substitute (`face`), the substitute that answered with it
+ * (`from`, the record's own) and whether that answer is shared (E99: a setup with matchers, or the mimicked instance,
+ * gives it every call that it matches), so that a check through it finds where its expression came from (see
+ * concreteRoute), step by step (E122: also past a substitute that the expression handed out again, a self-returning
+ * builder or a cycle).
+ */
+type ConfiguredHandOut = { readonly face: Face, readonly from: SubstituteState, readonly shared: boolean }
+const configuredHandOuts = new WeakMap<CallRecord, ConfiguredHandOut>()
+
+/** E122: whether `record` continues an expression that handed out `face` as a configured value (see handOutConfigured). */
+const continuesHandOutOf = (face: Face, record: CallRecord): boolean => {
+  for (let previous = record.chainPrevious; previous !== undefined; previous = previous.chainPrevious)
+    if (configuredHandOuts.get(previous)?.face === face) return true
+  return false
+}
+
+/**
+ * E39, E99: `record` (of `owner`) hands out the substitute `face` as a configured value, which `shared` says a setup with
+ * matchers or the mimicked instance gives every call that it matches (see ConfiguredHandOut).
  */
 const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, shared: boolean): void => {
   face.handOut(record)
   if (shared) sharedHandOutCount++
-  face.noteConfiguredHandOut(record, owner, shared)
+  configuredHandOuts.set(record, { face, from: owner, shared })
   // E111: the substitute itself (see continuesExpression)
   if ((face instanceof AutoEntry ? face.materializedState : face) === owner) record.handedOutItself = true
 }
@@ -2533,20 +2548,12 @@ type RouteStep = {
    */
   readonly shared?: SubstituteState
 }
-/**
- * `undetermined` (E122): the route of a check through a concrete call (see concreteRoute) went up through a record that
- * handed out a substitute as a configured value, which is no longer known to have come from where (that substitute was
- * handed out since by another expression), with the substitute it handed out: the check is a usage error then.
- */
-type CheckRoute = {
-  readonly origin: SubstituteState, readonly steps: readonly RouteStep[], readonly undetermined?: { readonly record: CallRecord, readonly answered: SubstituteState }
-}
+type CheckRoute = { readonly origin: SubstituteState, readonly steps: readonly RouteStep[] }
 
 const memberStep = (key: PropertyKey): RouteStep => ({ kind: 'get', key, argumentList: undefined, matchesCall: () => false })
 const callStep = (key: PropertyKey, specification: RecordedArguments): RouteStep =>
   ({ kind: 'call', key, argumentList: specification.value, matchesCall: actualArguments => specification.matches(actualArguments) })
-const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute =>
-  ({ origin: route.origin, steps: [...route.steps, step], undetermined: route.undetermined })
+const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute => ({ origin: route.origin, steps: [...route.steps, step] })
 
 /**
  * E99: the step of a record of a check expression: its read, or its call with the arguments it was made with (`shared`:
@@ -2590,23 +2597,19 @@ const routePath = (route: CheckRoute, steps = route.steps.length): string => {
   return path
 }
 
-/** E99: at most this many records of a check expression are looked at, from where the check is opened up. */
-const MAX_EXPRESSION_STEPS = 1000
-
 /**
  * E110: what a record of a check expression handed out (`answered`, the substitute the next step of the expression was
  * made on, or the one the check is opened on) tells about it: the substitute it was made on (`owner`), the record that is
  * its step (D26/E82: the direct reading of a call/apply invocation, see below), and whether a setup with matchers (or the
- * mimicked instance) shares that answer. Undefined when that is not known any more (the configured value was handed out
- * again since), so that the route stops there.
+ * mimicked instance) shares that answer. Undefined when the record did not hand it out, so that the route stops there.
  */
 type HandOutStep = { readonly record: CallRecord, readonly owner: SubstituteState, readonly shared: boolean }
 
 const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutStep | undefined => {
   const entry = answered.owner
-  // a configured value, noted with the substitute that answered it (see handOutShared)
-  const configured = (entry ?? answered).configuredHandOut(record)
-  if (configured !== undefined) return { record, owner: configured.from, shared: configured.shared }
+  // a configured value, noted for the record that handed it out (see handOutShared)
+  const configured = configuredHandOuts.get(record)
+  if (configured !== undefined && configured.face === (entry ?? answered)) return { record, owner: configured.from, shared: configured.shared }
   if (entry === undefined) return undefined
   // an auto-substitute, of the substitute that the call or the read was made on (E99: that of a nested setup through a
   // call with matchers is one that every call matching it gets). E82: the auto-substitute of the direct call, which a
@@ -2626,9 +2629,7 @@ const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutSt
  * call. The records of the expression, which the check has retracted, are then forgotten where they are the latest of
  * their member (see SubstituteState.dropRetracted), so that later checks do not look at them again.
  * E122 (R17-ADV-1, R17-ADV-2): a substitute that the expression handed out several times (a self-returning builder, a
- * cycle) has a note for each of those hand-outs (see SubstituteState.HandOutNotes), so the route goes on past each. A
- * record above a step that E99 narrows whose hand-out is no longer known (see CheckRoute.undetermined) makes the check a
- * usage error rather than a check of the route below it, which could pass wrongly.
+ * cycle) has a note for each of those hand-outs (see configuredHandOuts), so the route goes on past each.
  */
 const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): CheckRoute | undefined => {
   if (head === undefined || sharedHandOutCount === 0) return undefined
@@ -2636,14 +2637,9 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   const answers: SubstituteState[] = []
   let top = 0
   let answered = state
-  let undetermined: CheckRoute['undetermined']
-  for (let record: CallRecord | undefined = head; record !== undefined && found.length < MAX_EXPRESSION_STEPS;) {
+  for (let record: CallRecord | undefined = head; record !== undefined;) {
     const step = handOutStepOf(answered, record)
-    if (step === undefined) {
-      // (a substitute itself is handed out as a configured value only, which is noted, see handOutShared)
-      if (top > 0 && answered.owner === undefined) undetermined = { record, answered }
-      break
-    }
+    if (step === undefined) break
     found.push(step)
     answers.push(answered)
     if (step.shared) top = found.length
@@ -2657,7 +2653,7 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(found[index].record, found[index].shared ? answers[index] : undefined))
   // (from the bottom up: each is the latest record of its member then)
   for (const step of found) step.owner.dropRetracted(step.record)
-  return { origin: found[top - 1].owner, steps, undetermined }
+  return { origin: found[top - 1].owner, steps }
 }
 
 /** E99: what a check opened on `state` counts, when its expression reached `state` from `head` (see concreteRoute). */
@@ -2831,23 +2827,6 @@ const sharedSubstituteError = (
 }
 
 /**
- * E122: a check through a concrete call whose expression went, further up, through a call (`record`) that handed out the
- * substitute `answered` as a configured value, while where that call was made is no longer known (`answered` was handed
- * out since, by another expression): which calls came through the route cannot be told. A usage error, naming the call.
- */
-const undeterminedRouteError = (route: CheckRoute, record: CallRecord, answered: SubstituteState, start: Function | undefined) => {
-  const call = record.kind === 'call' ? `${memberLabel(record.key)}${formatArguments(record.args ?? [], false)}` : memberLabel(record.key)
-  return SubstituteException.generic(
-    `Cannot check through ${routePath(route)}: before it, the expression went through ${call}, which answered ` +
-    `${printAnswer(answered)}, and which call that was, and so which calls came through the expression, cannot be told ` +
-    `any more (${printAnswer(answered)} was handed out by another expression since). Check the calls of each substitute ` +
-    `directly instead (for example ${asExpression(route.origin.path)}.received(1)${stepText(route.steps[0])}), or check a ` +
-    `concrete call in an expression of its own.`,
-    start
-  )
-}
-
-/**
  * E124 (R17V-1, R17-ADV-6): whether what a call or a read answered (as noted, see SubstituteState.noteConfiguredAnswer) is
  * a substitute of this copy: its AutoEntry or SubstituteState. Every other object noted is the library's own (a setup, or
  * MIMICKED, THREW, CONFIGURED); a function is a value that answered, which may be any proxy, a revoked one too, so it is
@@ -2976,7 +2955,6 @@ const latestClear = (checked: readonly Checked[], since: number): number => {
  * such a substitute itself still counts them (its own records are cleared by clearing it).
  */
 const followRoute = (route: CheckRoute, start: Function | undefined, follow: Follow = 'count'): RouteEnd => {
-  if (route.undetermined !== undefined && follow === 'count') throw undeterminedRouteError(route, route.undetermined.record, route.undetermined.answered, start)
   let checked: Checked[] = [checkedOf(route.origin)]
   let since = 0
   const steps = route.steps
