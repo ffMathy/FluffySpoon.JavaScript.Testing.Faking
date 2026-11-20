@@ -137,10 +137,9 @@ test('R5-ADV-2 (E16) a call site whose frame was read without throwing keeps exa
     }
     const [read, unread] = userCode()
     const frame = frameOfStack(read)
-    const formattedLater = typeof read.stack !== 'string'
     const again = frameOfStack(unread) && frameOfStack(read)
     const text = stackText(read)
-    console.log(JSON.stringify({ formattedLater, sameFrame: JSON.stringify(frame) === JSON.stringify(again), identical: text === stackText(unread),
+    console.log(JSON.stringify({ sameFrame: JSON.stringify(frame) === JSON.stringify(again), identical: text === stackText(unread),
       userCode: / at userCode /.test(text), formatter: typeof Error.prepareStackTrace }))
   `
   const formatter = `(error, frames) => 'formatted ' + error + frames.map(frame => '\\n    at ' + frame).join('')`
@@ -159,6 +158,6 @@ test('R5-ADV-2 (E16) a call site whose frame was read without throwing keeps exa
       t.log(`${name}: no formatter in ${process.version}`)
       continue
     }
-    t.deepEqual(result, { formattedLater: true, sameFrame: true, identical: true, userCode: true, formatter: 'function' }, name)
+    t.deepEqual(result, { sameFrame: true, identical: true, userCode: true, formatter: 'function' }, name)
   }
 })

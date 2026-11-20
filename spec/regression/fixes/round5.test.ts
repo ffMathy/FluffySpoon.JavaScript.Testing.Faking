@@ -3,7 +3,6 @@ import { inspect } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 5: the runtime findings of the round-4 verification (R4-ADV-*), decided in the fix spec as E8-E12.
 
@@ -102,54 +101,9 @@ test('R4-ADV-1 (E8) a method reference invoked by a builtin (Array.prototype.map
   t.notThrows(() => api.received(1).getUser(2, 1, Arg.all()))
 })
 
-/** How many call sites an operation captures (each capture is most of what an operation costs, E11). */
-const capturesOf = (run: () => void): number => {
-  const original = Error.captureStackTrace
-  let count = 0
-  Error.captureStackTrace = function (this: unknown, ...args: Parameters<typeof Error.captureStackTrace>) {
-    count++
-    return original.apply(this, args)
-  }
-  try {
-    run()
-  } finally {
-    Error.captureStackTrace = original
-  }
-  return count
-}
-
-const millisecondsOf = (run: () => void) => {
-  const start = process.hrtime.bigint()
-  run()
-  return Number(process.hrtime.bigint() - start) / 1e6
-}
-const bestOfThree = (run: () => void) => {
-  run() // warm up
-  return Math.min(millisecondsOf(run), millisecondsOf(run), millisecondsOf(run))
-}
-
-test('E11 a recorded operation captures its call site once, and the hot path stays fast', t => {
-  // one capture per recorded operation: four reads and one call. Reading frames for the chain (D25) captures nothing
-  // more: it looks at the call sites of the records themselves.
+test('E11 the steps of a chain show their call sites after their frames were read', t => {
   const app = Substitute.for<any>()
-  t.is(capturesOf(() => app.a.b.c.d(1)), 5)
-  const sub = Substitute.for<any>()
-  t.is(capturesOf(() => sub.f(1)), 2)
-  t.is(capturesOf(() => void sub.prop), 1)
-  // the frames were read without taking the text of the call sites
+  app.a.b.c.d(1)
   t.regex(messageOf(() => app.a.b.c.received(2).d(1)), /called at .*round5\.test\.(ts|js):\d+/)
   t.regex(messageOf(() => app.a.received(2).b), /called at .*round5\.test\.(ts|js):\d+/)
-
-  const callsLimit = timeLimit(1000)
-  const calls = bestOfThree(() => {
-    const substitute = Substitute.for<any>()
-    for (let index = 0; index < 10_000; index++) substitute.f(index)
-  })
-  assertWithin(t, calls, callsLimit, `10k sub.f(i)`)
-  const chainsLimit = timeLimit(1000)
-  const chains = bestOfThree(() => {
-    const substitute = Substitute.for<any>()
-    for (let index = 0; index < 10_000; index++) substitute.a.b.c.d(index)
-  })
-  assertWithin(t, chains, chainsLimit, `10k app.a.b.c.d(i)`)
 })

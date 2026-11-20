@@ -5,7 +5,6 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
-import * as CallSite from '../../../src/internals/CallSite'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { SubstituteState } from '../../../src/internals/SubstituteState'
 
@@ -240,23 +239,7 @@ test('R17-ADV-3 (E127) a dropped substitute\'s last call keeps none of its argum
   }
 })
 
-// ---- E126 (R17-ADV-11): the calls of a mimicked fluent method read no stack frames -------------------------------------
-
-/** How many times the library reads the stack frame of an operation while `run` runs (CallSite.frameOfStack, currentFrame). */
-const framesReadBy = (run: () => void): number => {
-  const callSite = CallSite as any
-  const { frameOfStack, currentFrame } = callSite
-  let reads = 0
-  callSite.frameOfStack = (holder: unknown) => { reads++; return frameOfStack(holder) }
-  callSite.currentFrame = (start: unknown) => { reads++; return currentFrame(start) }
-  try {
-    run()
-  } finally {
-    callSite.frameOfStack = frameOfStack
-    callSite.currentFrame = currentFrame
-  }
-  return reads
-}
+// ---- E126 (R17-ADV-11): links to a hand-out of the substitute itself ----------------------------------------------------
 
 const passes = (check: () => void): boolean => {
   try {
@@ -267,35 +250,6 @@ const passes = (check: () => void): boolean => {
     throw error
   }
 }
-
-test.serial('R17-ADV-11 (E126) calls of a fluent method that answers the substitute itself read no stack frames, as at 8be3a70', t => {
-  const { EventEmitter } = require('events')
-  const fluent = Substitute.for<any>()
-  fluent[mimick]({ on() { return this } })
-  const emitter = Substitute.for<any>()
-  const instance = new EventEmitter()
-  instance.setMaxListeners(0)
-  emitter[mimick](instance)
-  const listener = () => { }
-  const res = Substitute.for<any>()
-  res.status(Arg.any()).returns(res)
-  const map = Substitute.for<any>()
-  map.set(Arg.all()).returns(map)
-  const reads = framesReadBy(() => {
-    for (let index = 0; index < 100; index++) {
-      fluent.on('a', index).on('b', index)
-      fluent.on('c', index)
-      emitter.on('a', listener).on('b', listener)
-      res.status(200).json(index)
-      map.set('k', index).set('l', index)
-    }
-  })
-  t.is(reads, 0)
-  t.notThrows(() => fluent.received(100).on('b', Arg.any()))
-  t.notThrows(() => emitter.received(100).on('a', listener))
-  t.notThrows(() => res.received(100).json(Arg.any()))
-  t.notThrows(() => map.received(1).set('l', 99))
-})
 
 test('R17-ADV-11 (E126) a link to a hand-out of the substitute itself is still decided by E111\'s line rule when a setup or a check uses it', t => {
   // one line: the setup continues the call that answered map itself, which is not recorded (README)

@@ -60,9 +60,7 @@ export class CallRecord {
     const previous = this._chainPrevious
     if (previous !== undefined && (this._stack as PendingLinkSite).pendingSelfLink === this.seq) {
       (this._stack as PendingLinkSite).pendingSelfLink = undefined
-      // (the candidate's frame first, as linkChain reads them)
-      const from = previous.frame
-      if (!continuesSelfHandOut(from, this.frame)) this._chainPrevious = undefined
+      if (!continuesSelfHandOut(previous.frame, this.frame)) this._chainPrevious = undefined
     }
     return this._chainPrevious
   }
@@ -111,7 +109,7 @@ export class CallRecord {
     return stackText(this._stack)
   }
 
-  /** The first frame outside the library (D25), or null when there is none. Reading it keeps the text (E11). */
+  /** The first frame outside the library (D25), or null when there is none. */
   public get frame(): Frame | null {
     return frameOfStack(this._stack)
   }

@@ -391,9 +391,7 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
     record.linkToSelfHandOut(candidate)
     return record
   }
-  // (the candidate's frame first: it is the one read last, which is kept, see CallSite.frameOfStack)
-  const from = candidate.frame
-  if (continuesExpression(candidate, from, record.frame)) record.chainPrevious = candidate
+  if (continuesExpression(candidate, candidate.frame, record.frame)) record.chainPrevious = candidate
   return record
 }
 

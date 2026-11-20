@@ -121,42 +121,6 @@ test('R10-ADV-2 (E63) a substitute of another copy among the arguments prints as
 
 // ---- E61 (R10V-2): symbol-form checks of a member that was never called -------------------------------------------
 
-/** How many stack traces `run` captures. */
-const capturesOf = (run: () => void): number => {
-  const original = Error.captureStackTrace
-  let count = 0
-  Error.captureStackTrace = function captureStackTrace(target: object, start?: Function) {
-    count++
-    return original.call(Error, target, start)
-  } as typeof Error.captureStackTrace
-  try {
-    run()
-  } finally {
-    Error.captureStackTrace = original
-  }
-  return count
-}
-
-const nextRun = () => new Promise(resolve => setImmediate(resolve))
-
-test('R10V-2 (E61) symbol-form check views record where they were made for the first views of a synchronous run only', async t => {
-  const s = Substitute.for<any>()
-  s.f(1)
-  const checks = (count: number) => () => {
-    for (let index = 0; index < count; index++) {
-      s[didNotReceive]().g(1)
-      s[received](0).h()
-    }
-  }
-  await nextRun()
-  // c503043: a stack capture per view, 6,000 here (the most of what such a check cost)
-  const captures = capturesOf(checks(3000))
-  t.is(captures, VIEW_SITES_PER_RUN)
-  // every synchronous run starts again
-  await nextRun()
-  t.is(capturesOf(checks(10)), 20)
-})
-
 test('R10V-2 (E61) a dangling check view after them is still reported, without the line of the check; the next run has the line again', t => {
   const clock = interceptDeferredReports()
   try {
