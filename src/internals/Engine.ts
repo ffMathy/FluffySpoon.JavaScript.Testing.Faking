@@ -2088,11 +2088,20 @@ const stateOf = (checked: SubstituteState | AutoEntry): SubstituteState | undefi
 /** Collects substitutes without repeats, in the order they are added. */
 class CheckedList {
   readonly items: Checked[] = []
-  private readonly seen = new Set<Checked>()
+  // (E110: only once there are several, as a step mostly leads to one substitute, over and over)
+  private seen?: Set<Checked>
   add(checked: Checked | undefined): void {
-    if (checked === undefined || this.seen.has(checked)) return
-    this.seen.add(checked)
-    this.items.push(checked)
+    if (checked === undefined) return
+    const items = this.items
+    if (items.length === 0) {
+      items.push(checked)
+      return
+    }
+    if (items[0] === checked) return
+    const seen = this.seen ?? (this.seen = new Set(items))
+    if (seen.has(checked)) return
+    seen.add(checked)
+    items.push(checked)
   }
 }
 
@@ -2140,9 +2149,22 @@ const concreteStep = (record: CallRecord, shared: SubstituteState | undefined): 
     kind: 'call',
     key: record.key,
     argumentList: args,
-    matchesCall: actualArguments => RecordedArguments.literalsEqual(args, actualArguments),
+    matchesCall: actualArguments => sameArguments(args, actualArguments),
     shared
   }
+}
+
+/**
+ * E110: whether the arguments of a received call are those of a call of a check expression (RecordedArguments.literalsEqual),
+ * the same values first (as for the calls of a loop that a check goes through, call after call).
+ */
+const sameArguments = (expected: readonly unknown[], actual: readonly unknown[]): boolean => {
+  if (expected.length === actual.length) {
+    let index = 0
+    while (index < expected.length && Object.is(expected[index], actual[index])) index++
+    if (index === expected.length) return true
+  }
+  return RecordedArguments.literalsEqual(expected, actual)
 }
 
 /** `.on('saved', Arg.any{any})`, `.items`, `('a')`: a step as a path shows it. */
