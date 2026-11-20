@@ -296,14 +296,15 @@ const withReceivedValues = (expected: readonly unknown[], actual: readonly unkno
   const ancestors = new Map<object, unknown>()
   const replaced = (value: unknown, received: { value: unknown } | undefined): unknown => {
     if (isArgumentMatcher(value)) return received === undefined ? value : received.value
-    if (typeof value !== 'object' || value === null || !matcherHolders.has(value) || received === undefined) return value
-    // a container that holds a matcher, where the received call has a container of the same kind
+    if (typeof value !== 'object' || value === null || types.isProxy(value) || received === undefined) return value
+    // a plain object or an array, where the received call has a container of the same kind
     const other = received.value
-    if (typeof other !== 'object' || other === null || types.isProxy(other) || Array.isArray(value) !== Array.isArray(other) ||
-      Object.getPrototypeOf(value) !== Object.getPrototypeOf(other)) return value
+    const prototype = Object.getPrototypeOf(value)
+    if (!(Array.isArray(value) || prototype === Object.prototype || prototype === null) || typeof other !== 'object' || other === null ||
+      types.isProxy(other) || Array.isArray(value) !== Array.isArray(other) || prototype !== Object.getPrototypeOf(other)) return value
     const ancestor = ancestors.get(value)
     if (ancestor !== undefined) return ancestor // a cycle
-    const copy = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value))
+    const copy = Array.isArray(value) ? Object.setPrototypeOf([], prototype) : Object.create(prototype)
     ancestors.set(value, copy)
     try {
       for (const key of Reflect.ownKeys(value)) {
