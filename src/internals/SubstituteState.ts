@@ -14,6 +14,10 @@ export { pathArguments } from './Paths'
 
 let substitutionOrder = 0
 
+/** E123: how many times received calls were cleared, of any substitute (see SubstituteState.clearedAt): none, as a rule. */
+let clears = 0
+export const clearsSoFar = (): number => clears
+
 /**
  * The hashes of the actual arguments of one call (see ArgumentHash), computed when first needed and shared by the
  * lookups the call makes (the literal substitutions, then the auto-substitute cache). They belong to one operation.
@@ -967,6 +971,7 @@ export class SubstituteState {
   public clearReceivedCalls(): void {
     const pending: SubstituteState[] = [this]
     const clearedAt = currentSequence()
+    clears++
     while (pending.length > 0) {
       const state = pending.pop()!
       state._records.length = 0

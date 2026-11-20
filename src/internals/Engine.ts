@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, clearsSoFar } from './SubstituteState'
 import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
@@ -2872,7 +2872,7 @@ const followRoute = (route: CheckRoute, start: Function | undefined, follow: Fol
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index]
     const through = () => routePath(route, index + 1)
-    since = latestClear(checked, since)
+    if (clearsSoFar() > 0) since = latestClear(checked, since)
     checked = step.kind === 'get' ? throughRead(checked, step.key, through, start, follow, since) : throughCall(checked, step, through, start, follow, since)
     if (follow !== 'count') continue
     const foreign = checked.find(isForeign)
