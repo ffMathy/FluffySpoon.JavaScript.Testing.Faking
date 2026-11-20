@@ -2988,7 +2988,10 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined, since: number): CallRecord[] {
     let records: CallRecord[] | undefined
     let several = false
-    for (const checked of checkedList) {
+    // (indexed loops, and the owners noted in the same loop: a check of many substitutes runs this once or twice, mostly
+    // before it is optimized)
+    for (let index = 0; index < checkedList.length; index++) {
+      const checked = checkedList[index]
       if (isForeign(checked)) continue
       const at = recordedAt(checked, key)
       if (at === undefined) continue
@@ -2997,33 +3000,39 @@ class MatchedSubstitutes implements SeveralSubstitutes {
       // (E123: not those received before a clear further up the route, see followRoute)
       if (since > 0) own = own.filter(record => record.seq > since)
       if (own.length === 0) continue
-      this.noteOwner(checked, own)
-      if (records === undefined) records = own
-      else {
-        if (!several) records = [...records]
+      const owners = this._owners
+      if (owners === undefined) this.noteOwner(checked, own)
+      if (records === undefined) {
+        records = own
+        if (owners !== undefined) for (let at = 0; at < own.length; at++) owners.set(own[at], checked)
+      } else {
+        if (!several) records = records.slice()
         several = true
-        for (const record of own) records.push(record)
+        for (let at = 0; at < own.length; at++) {
+          const record = own[at]
+          if (owners !== undefined) owners.set(record, checked)
+          records.push(record)
+        }
       }
     }
     if (records === undefined) return []
     return several ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
-  /** E121: notes that `records` (listed now) belong to `checked` (see _first). */
+  /** E121: notes that `records` (listed now) belong to `checked` (see _first), while no map is kept. */
   private noteOwner(checked: Checked, records: readonly CallRecord[]): void {
-    let owners = this._owners
-    if (owners === undefined) {
-      // (a check lists the records of the same member again when it is invoked, see assertionMember)
-      if (this._first === undefined || this._first === checked) {
-        this._first = checked
-        this._firstRecords = records
-        return
-      }
-      owners = this._owners = new Map()
-      for (const record of this._firstRecords!) owners.set(record, this._first)
-      this._firstRecords = undefined
+    // (a check lists the records of the same member again when it is invoked, see assertionMember)
+    if (this._first === undefined || this._first === checked) {
+      this._first = checked
+      this._firstRecords = records
+      return
     }
-    for (const record of records) owners.set(record, checked)
+    const owners = this._owners = new Map<CallRecord, Checked>()
+    const first = this._first
+    const firstRecords = this._firstRecords!
+    for (let at = 0; at < firstRecords.length; at++) owners.set(firstRecords[at], first)
+    this._firstRecords = undefined
+    for (let at = 0; at < records.length; at++) owners.set(records[at], checked)
   }
 
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
