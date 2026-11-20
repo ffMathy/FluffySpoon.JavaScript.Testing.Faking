@@ -91,7 +91,8 @@ pet.received().kind = 'cat'
 pet.received().kind = 'cow'
 // @ts-expect-error a string matcher is not a function
 pet.received().speak = Arg.any('string')
-// @ts-expect-error a function that returns nothing is not an onEvent of Cat | Dog either
+// Accepted (T-6): a function that returns a value fits `(e: string) => void`, and TypeScript accepts it for the union
+// too.
 pet.received().onEvent = () => 1
 interface Btn2 { kind: 'b'; handler: ((e: MouseEvent) => void) | null }
 interface Lnk2 { kind: 'l'; handler: ((e: KeyboardEvent) => void) | null }

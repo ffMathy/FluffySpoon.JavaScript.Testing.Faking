@@ -1,9 +1,9 @@
 // R13TD-1 / T73 Declaration emit of check views. A project built with `declaration: true` (a test-utils package of a
 // monorepo, `composite: true`) can export a check view of a substitute, a member read through one, or a function that
-// returns one, also for a substitute of a union whose members are unions of function types (whose check view carries
-// T71's construct-signature brand). Compiled with `declaration: true` and `emitDeclarationOnly` by its own tsconfig
-// (spec-types/declaration-emit/tsconfig.json, `npm run test:types`); `npm run test:types:min-ts` compiles it the same
-// way against the built typings with old TypeScript versions. Round 13 failed here with TS4023 / TS4058 / TS4029
+// returns one, also for a substitute of a union whose members are unions of function types. Compiled with
+// `declaration: true` and `emitDeclarationOnly` by its own tsconfig (spec-types/declaration-emit/tsconfig.json, `npm run
+// test:types`); `npm run test:types:min-ts` compiles it the same way against the built typings with old TypeScript
+// versions. Round 13 failed here with TS4023 / TS4058 / TS4029
 // ("has or is using name 'NotAssignableInstance' ... but cannot be named").
 // Not covered, as before round 13: declaration emit of SETUP results and of the configure view
 // (`export const s = calc.add(1, 2)`, `export const c = calc[configure]()`), whose setup methods are keyed by the

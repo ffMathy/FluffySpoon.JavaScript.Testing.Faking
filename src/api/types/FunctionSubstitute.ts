@@ -22,8 +22,7 @@ type SetupResult<TView extends SubstituteView, TArguments extends any[], TReturn
 // overloads the call can reach (T39, R4TD-1; T42, R5TD-1): for `Cat | Dog` with `speak(): 'meow'` and `speak():
 // 'woof'`, `.returns()` takes `'meow' | 'woof'`, and for `ReaderA | ReaderB` with `read(path: string): string` and
 // `read(path: string, encoding?: string): Uint8Array`, `read('p').returns()` takes `string | Uint8Array`.
-// `.resolves()`, `.mimicks()` and the configure view likewise. Being part of the signature's return type, this is only
-// computed for the calls that are made (and when signatures are compared).
+// `.resolves()`, `.mimicks()` and the configure view likewise.
 type CallResult<TView extends SubstituteView, TArguments extends any[], TReturnType, TFunction> =
   TView extends 'assertion' ? void : SetupResult<TView, TArguments, CallReturnType<TFunction, TArguments, TReturnType>>
 type CallReturnType<TFunction, TArguments, TReturnType> =
@@ -369,18 +368,8 @@ type TrailingAllArgumentsSignaturesOf<TOverload, TView extends SubstituteView, T
   TOverload extends Overload<any[], any> ?
   TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
   unknown
-// (Written out without a type alias for the signatures: a substitute of all lib.dom element types needs fewer type
-// instantiations then, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
-// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away.)
-// A generic method has a single signature (see `IsGenericSignature`): its `Arg.all()` signatures are only those of that
-// signature, without the other overloads, whose types TypeScript would then instantiate anew for each use of the
-// method (they made a substitute of Node's `EventEmitter<Events>` 12% costlier to check).
-type SingleOverloadAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
-  TOverload extends Overload<any[], any> ?
-  ((allArguments: AllArguments<TOverload['arguments']>) =>
-    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction>) &
-  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
-  unknown
+// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away; so
+// does a generic method, see `IsGenericSignature`.)
 type LastAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction, TOverloads extends any[]> =
   TOverload extends Overload<any[], any> ?
   ((allArguments: AllArguments<TOverload['arguments']>) => TOverloads[6] extends NoOverload ?
@@ -420,10 +409,8 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // called with the arguments of every overload and returns what any overload returns. Before, it was
 // the result of that first overload only: `pool.query(Arg.all())` of @types/pg took the `Submittable` stream overload,
 // so `.resolves(result)` did not compile. When all overloads return the same type (a member with one signature
-// included), it is still the first overload's result (`.mimicks()` takes its parameters). Being part of the result
-// type, it is only computed for a call that resolves to the signature: comparing the return types of every overload
-// of every member whenever a substitute's members are compared made large types slower to check. (A union of members
-// goes through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
+// included), it is still the first overload's result (`.mimicks()` takes its parameters). (A union of members goes
+// through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
 type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
   false extends EachOverloadReturnsAll<TOverloads[number], OverloadReturnTypes<TOverloads[number]>> ?
   AllOverloadsCallResult<V, TOverloads, OverloadReturnTypes<TOverloads[number]>> :
@@ -436,8 +423,8 @@ type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
 // their types from `OverloadsContextualImplementation`.
 type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], R> =
   V extends 'assertion' ? void :
-  V extends 'configure' ? ConfigurationResult<R, (this: OverloadsImplementation<TOverloads, R>) => R> :
-  SubstitutionResult<R, (this: OverloadsImplementation<TOverloads, R>) => R>
+  V extends 'configure' ? ConfigurationResult<R, OverloadsImplementation<TOverloads, R>> :
+  SubstitutionResult<R, OverloadsImplementation<TOverloads, R>>
 /**
  * `.mimicks()` of a setup that takes the calls of several overloads (`TOverloads`, see `Overloads`), each with the
  * value `R` (R16FE-1, T80): an implementation fits when it can stand in for each of them (an intersection of one
@@ -445,11 +432,6 @@ type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], 
  * trailing parameters. `OverloadsContextualImplementation` is one signature that every such implementation fits,
  * which types its parameters from the context on every TypeScript version (TypeScript 4.2 and older give a function
  * passed for an intersection of function types no contextual type: an untyped parameter would be implicitly `any`).
- * (The type parameters' constraints are only computed for a call of `.mimicks()`. The setup result carries the
- * overloads in the `this` type of its implementation type, see `OverloadsImplementation`: TypeScript computes such
- * results for many members of some substitutes, a TypeORM `Repository` among them, also where `.mimicks()` is not
- * used, and computing what `.mimicks()` takes up front, or carrying the overloads in an object type, cost a substitute
- * of `Repository` 10% to 28% more type instantiations on TypeScript 5.0.)
  */
 export type OverloadsMimicksFunction<TOverloads, R> =
   <TImplementation extends OverloadsContextual<TOverloads, R>, TMore extends OverloadsContextual<TOverloads, R>[]>(
@@ -514,7 +496,7 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
   SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
 type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
   TGeneric extends true ?
-  GenericPositionalSignature<F, TOverloads[7], TView> & SingleOverloadAllArgumentsSignatures<TOverloads[7], TView, TFunction> &
+  GenericPositionalSignature<F, TOverloads[7], TView> & LastAllArgumentsSignatures<TOverloads[7], TView, TFunction, TOverloads> &
   GenericCallSignatureFor<F, TOverloads[7], TView> & GenericTrailingAllArgumentsSignatures<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
 
@@ -661,9 +643,10 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // with `move(x: string, y: number)` in one variant and `move(x: number, y: string)` in the other, `move('a', 'b')`
 // does not compile. A callback argument without parameter types is typed from the list the call resolves to. The
 // results of these signatures depend only on the list and the whole member type, so the variants that declare the
-// same list (the same method declared in several interfaces) share its signatures: the number of signatures, and with
-// it the cost of type-checking a call, grows with the number of distinct lists, not with the number of variants. (The
-// methods of all lib.dom elements have a few distinct lists; 60 variants that declare 2 different lists have 2.)
+// same list (the same method declared in several interfaces) share its signatures: the number of signatures grows with
+// the number of distinct lists, not with the number of variants (the methods of all lib.dom elements have a few
+// distinct lists; 60 variants that declare 2 different lists have 2), which keeps the compiler from running out of
+// memory on a union of all lib.dom elements.
 // The positional signatures take an exact number of arguments (see `ListBox`) and are ordered by it, most first
 // (`fetch(url, options)` before `fetch(url)`); then the signatures for more than 6 arguments, the signatures of the
 // lists with optional parameters, the `Arg.all()` signatures, and last the signatures without parameters. When
@@ -688,18 +671,14 @@ type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> ex
 type SignaturesOfSlots<TThis, V extends SubstituteView, F> = SignaturesOfBoxes<[
   BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, EarlierSlot>, TThis>, V, F>>>,
   BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, 6>, TThis>, V, F>>>,
-  LastBoxes<DistinctParameterLists<SlotParameterLists<F, 7>, TThis>, TThis, V, F>
+  LastBoxes<TThis, V, F>
 ]>
 type EarlierSlot = 0 | 1 | 2 | 3 | 4 | 5
 // The boxes of the last overloads are made variant by variant (the boxes of the lists of several variants are one
 // type), so that they are created, and intersected, in the order of the variants: a call that the lists of several
 // variants accept (with `Arg.any()`) resolves to the first variant's list, as with the boxes per variant before T49.
-// That is only needed when the variants' last overloads have more than one distinct list (`TLists`). (The one box of a
-// single list goes through `UnionToIntersection` too: without it, TypeScript 3.6 reports this declaration as
-// "excessively deep" when it checks the typings, with skipLibCheck off.)
-type LastBoxes<TLists, TThis, V extends SubstituteView, F> = [TLists] extends [never] ? SignatureBox :
-  true extends IsUnion<TLists, TLists> ? BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>> :
-  BoxesOf<UnionToIntersection<ListBox<TLists, V, F>>>
+// (The boxes of variants that share a list are the same type, which the intersection keeps once.)
+type LastBoxes<TThis, V extends SubstituteView, F> = BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>>
 type VariantBoxes<TVariant, TThis, V extends SubstituteView, F> =
   TVariant extends unknown ? ListBox<DistinctParameterLists<ParameterListOf<Overloads<TVariant>[7]>, TThis>, V, F> : never
 type BoxesOf<TBoxes> = TBoxes extends SignatureBox ? TBoxes : SignatureBox
@@ -736,10 +715,8 @@ type CallbackThisType<TParameter> =
 type WithCallbackThis<TList, TThis> = { [P in keyof TList]: WithThis<TList[P], TThis> }
 type WithThis<TParameter, TThis> =
   [TParameter] extends [(this: infer TOwnThis, ...args: infer A) => infer R] ?
-  (unknown extends TOwnThis ? TParameter : CallbackWithThis<TThis, UnnamedCallbackArguments<A>, R>) :
+  (unknown extends TOwnThis ? TParameter : CallbackWithThis<TThis, UnnamedArguments<Extract<A, any[]>>, R>) :
   TParameter
-// (A single required parameter, as in most callbacks, without the general conversion.)
-type UnnamedCallbackArguments<A> = A extends [any] ? [A[0]] : UnnamedArguments<Extract<A, any[]>>
 // A separate alias, so that the callbacks of several variants that differ only in their `this` type give one type.
 type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => R
 
@@ -751,23 +728,18 @@ type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => 
 // Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x: number) => void)`,
 // `on(function (this: E2, x: string) {})` does not compile. A call is checked against each list as a whole, as
 // TypeScript checks a call of the union itself: with `both(a: (this: C1) => void, b: (this: C1) => void)` and the same
-// with `C2`, `both(function (this: C1) {}, function (this: C2) {})` does not compile (R9TD-2, T62). Its parameter list
-// is the constraint of its type parameter, which TypeScript only computes when a call gets to this signature, and being
-// generic, it is left out when TypeScript compares the signatures of the variants of a union, which made such unions of
-// callbacks very slow to check on TypeScript 3.6 for lib.dom's elements.
+// with `C2`, `both(function (this: C1) {}, function (this: C2) {})` does not compile (R9TD-2, T62).
 // (The lists are passed in: computing them in the constraint made TypeScript 3.6 and 4.1 report "Type instantiation is
 // excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`: TypeScript 4.1 and older
 // decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
 type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends never ? unknown :
   <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>>) =>
     OwnThisCallResult<V, P, F>
-// The arguments `P` fit one of the lists of the variants. Only checked for calls that pass a callback with a `this` type
-// of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature first, do not compute these
-// lists.
-// (The lists are wrapped in a tuple, so that TypeScript computes them only when it checks the arguments, not when it
-// infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
-// they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
-// `any`, which otherwise made them report "Type instantiation is excessively deep".)
+// The arguments `P` fit one of the lists of the variants, and pass a callback with a `this` type of its own: a call
+// with `Arg.any()` arguments, which TypeScript tries with this signature first, resolves to the signatures above.
+// (TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when they check this declaration (with `skipLibCheck`
+// off), with `any` for the type parameters: `OwnThisLists` stops at `any`, which otherwise made them report "Type
+// instantiation is excessively deep".)
 // A call whose last argument is `Arg.all()` (`onClick(function (this: Btn, n: number) {}, Arg.all())`) fits when its
 // leading arguments fit the first parameters of one of the lists, and that list has a parameter where `Arg.all()` is
 // passed, as for the other `Arg.all()` signatures (R11TD-4, T70): `AllArgumentsLists` are those leading parameters
@@ -803,12 +775,12 @@ type OverloadReturnTypeFor<TOverload, P> =
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,
-// the signature for more than 6 arguments (also with a rest parameter); in `full`, the signature with the whole list,
-// when it has optional parameters; and the `Arg.all()` signatures. A call that omits optional parameters (`get('k')`
-// of `get(key: string, options?: OptionsV1)` and `get(key: string, options?: OptionsV2)`) then resolves to a signature
-// with just the parameters it passes, whose result takes what every variant that accepts these arguments returns (see
-// `PrefixCallResult`). `list` keeps the boxes of different lists apart: TypeScript would otherwise infer only one box
-// for `UnionToIntersection` when the box of one list is assignable to the box of another.
+// the signature for more than 6 arguments (also with a rest parameter); in `full`, the signature with the whole list;
+// and the `Arg.all()` signatures. A call that omits optional parameters (`get('k')` of `get(key: string, options?:
+// OptionsV1)` and `get(key: string, options?: OptionsV2)`) then resolves to a signature with just the parameters it
+// passes, whose result takes what every variant that accepts these arguments returns (see `PrefixCallResult`). `list`
+// keeps the boxes of different lists apart: TypeScript would otherwise infer only one box for `UnionToIntersection`
+// when the box of one list is assignable to the box of another.
 type ListBox<A, TView extends SubstituteView, TFunction> = A extends any[] ? {
   list: (list: A) => A
   0: PrefixSignature<A, 0, TView, TFunction>
@@ -830,14 +802,7 @@ type PrefixSignature<A extends any[], TCount extends ArgumentCount, TView extend
 // signatures above first; these make sure that when TypeScript calls the union, it finds the same parameter list as
 // a variant's own method among the substitute's signatures and leaves the plain method out. (TypeScript tries a
 // signature whose parameters have literal types, such as `read(path: string, encoding?: 'buffer')`, first.)
-// Left out for a list of required parameters: the prefix signature with all its parameters is the same signature, and
-// having it twice made TypeScript 3.7 and 3.8 check a union of 60 variants 8 times slower. (Not for an empty list,
-// whose prefix signature comes last: a call without arguments resolves to the signatures of the variants without
-// parameters first.)
-type FullSignature<A extends any[], TView extends SubstituteView, TFunction> =
-  RequiredParametersOnly<A> extends true ? unknown : PrefixSignatureOf<A, A, TView, TFunction>
-type RequiredParametersOnly<A extends any[]> =
-  MaximumArguments<A> extends 0 ? false : MinimumArguments<A> extends MaximumArguments<A> ? true : false
+type FullSignature<A extends any[], TView extends SubstituteView, TFunction> = PrefixSignatureOf<A, A, TView, TFunction>
 type ArgumentCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 type ArgumentCounts = [[], [any], [any, any], [any, any, any], [any, any, any, any], [any, any, any, any, any],
   [any, any, any, any, any, any], [any, any, any, any, any, any, any]]
@@ -910,11 +875,7 @@ type VariantSignatures<TFunction, TView extends SubstituteView> = SignaturesInBo
   [union: number]: { signatures: CombinedSignatures<TFunction, TView> }
 }[VariantsKind<TFunction>]>
 type SignaturesInBox<TBox> = TBox extends { signatures: infer TSignatures } ? TSignatures : never
-/**
- * `any` for a union (told apart from its variants by type identity), `'single'` for any other type. In generic code
- * TypeScript cannot decide it and uses `'single'`.
- */
-export type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
+type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
 type IsUnion<TVariant, TFunction> = TVariant extends unknown ? (Equals<TVariant, TFunction> extends true ? false : true) : never
 
 // Primitives, `never` and `any` are ruled out without distributing over a (possibly very large) union of literals
@@ -943,11 +904,10 @@ export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substi
 // Construct signatures count as calls (T47): `new` is recorded as a call.
 type EachCallKind<TFunction> =
   TFunction extends (...args: any[]) => any ? 'call' : TFunction extends new (...args: any) => any ? 'call' : 'plain'
-type GuardedCallKind<TFunction> = [TFunction] extends [Primitive] ? never : EachCallKind<TFunction>
 
 /**
  * `'call'` when `TFunction` (a member type without `null | undefined`) is callable, otherwise `'plain'`. In generic
  * code it is decided by the member's constraint.
  */
 export type CallKind<TFunction> = CallKindOf<ObjectKind<TFunction>, TFunction>
-type CallKindOf<TKind, TFunction> = TKind extends 'object' ? GuardedCallKind<TFunction> : 'plain'
+type CallKindOf<TKind, TFunction> = TKind extends 'object' ? EachCallKind<TFunction> : 'plain'

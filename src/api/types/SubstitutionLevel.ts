@@ -1,6 +1,6 @@
 import { constants } from '../../shared'
 import { OverloadsMimicksFunction } from './FunctionSubstitute'
-import { HasMember, LibraryMemberName, Primitive } from './Utilities'
+import { HasMember, LibraryMemberName } from './Utilities'
 
 /**
  * Symbol form of `.returns(...)`: `sub.add(1, 2)[returns](3)`. Always available, also where the value has its own member
@@ -27,20 +27,15 @@ type ValueFunction<TValue> = undefined extends TValue ?
 
 type ReturnsFunction<TReturnType> = ValueFunction<TReturnType>
 type ThrowsFunction = OneArgumentRequiredFunction<any, never>
-// An implementation type whose `this` is an `OverloadsImplementation` stands for the calls of several overloads (see
-// there); every other implementation type the typings build declares no `this`, which is then inferred as `unknown`.
+// An implementation type that is an `OverloadsImplementation` stands for the calls of several overloads (see there);
+// every other implementation type the typings build is a function type.
 type MimicksFunction<TImplementation> =
-  TImplementation extends (this: infer TThis, ...args: any) => any ? MimicksFunctionFor<TThis, TImplementation> :
-  OneArgumentRequiredFunction<TImplementation, void>
-type MimicksFunctionFor<TThis, TImplementation> =
-  TThis extends OverloadsImplementation<infer TOverloads, infer TReturnType> ? OverloadsMimicksFunction<TOverloads, TReturnType> :
+  TImplementation extends OverloadsImplementation<infer TOverloads, infer TReturnType> ? OverloadsMimicksFunction<TOverloads, TReturnType> :
   OneArgumentRequiredFunction<TImplementation, void>
 /**
- * The `this` type of the implementation type of a setup that takes the calls of several overloads (`TOverloads`, as
- * `FunctionSubstitute` lists them), each with the value `TReturnType`: a single `Arg.all()` on an overloaded member
- * whose overloads return different types (R16FE-1, T80; see `OverloadsMimicksFunction`). The overloads are passed as
- * they are, so that what `.mimicks()` takes is only worked out when it is used, and in a function type, which costs
- * fewer type instantiations than an object type there.
+ * The implementation type of a setup that takes the calls of several overloads (`TOverloads`, as `FunctionSubstitute`
+ * lists them), each with the value `TReturnType`: a single `Arg.all()` on an overloaded member whose overloads return
+ * different types (R16FE-1, T80; see `OverloadsMimicksFunction`).
  */
 export type OverloadsImplementation<TOverloads, TReturnType> = {
   readonly '@fluffy-spoon/substitute:overloads-implementation': [TOverloads, TReturnType]
@@ -62,11 +57,8 @@ type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ?
 type PromiseValueOf<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
   (NativePromiseFits<TValue, U, TReturnType> extends true ? U : never) :
   never
-// (`PromiseLike<any>` first: inferring the value of every member type that is not a promise at all costs more.)
 type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>, TReturnType> ? true : false
-type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<any> ?
-  (TValue extends PromiseLike<infer U> ? NativePromiseFits<TValue, U, TReturnType> : false) :
-  false
+type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<infer U> ? NativePromiseFits<TValue, U, TReturnType> : false
 type NativePromiseFits<TValue, U, TReturnType> =
   TValue extends Promise<any> ? ([Exclude<keyof TValue, keyof Promise<any>>] extends [never] ? true : NativePromiseOf<U, TReturnType>) :
   NativePromiseOf<U, TReturnType>
@@ -135,8 +127,6 @@ type StringForm<TCheck, TName extends LibraryMemberName, TMethod> = TCheck exten
   never
 
 type CheckedStringSetupMethods<TReturnType, TImplementation> =
-  // Primitives (and unions of literals, however large) have no conflicting member: skip the per-member check (TD-8).
-  [NonNullable<TReturnType>] extends [Primitive] ? StringSetupMethods<TReturnType, TImplementation> :
   StringForm<NonNullable<TReturnType> & {}, 'returns', StringReturns<TReturnType>> &
   StringForm<NonNullable<TReturnType> & {}, 'throws', StringThrows> &
   StringForm<NonNullable<TReturnType> & {}, 'mimicks', StringMimicks<TImplementation>> &
@@ -148,8 +138,8 @@ type CheckedStringSetupMethods<TReturnType, TImplementation> =
 /**
  * The setup API offered on the result of a member access or call of a substitute: the symbol forms, plus each string
  * form unless the value has a member with that name.
- * `TReturnType` is the member's value (or return) type, `TImplementation` the function type `mimicks` accepts (or one
- * whose `this` is an `OverloadsImplementation`).
+ * `TReturnType` is the member's value (or return) type, `TImplementation` the function type `mimicks` accepts (or an
+ * `OverloadsImplementation`).
  * `TReturnType` must not be `never`, `null` or `undefined` (see `SubstitutionResult`).
  */
 export type SetupMethods<TReturnType, TImplementation> =
