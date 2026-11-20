@@ -1958,9 +1958,6 @@ const invoke = (
     const chained = continuedChain(chainCandidate, frameAt(stackStart))
     retract(read)
     retract(chained)
-    // E121: the read of the member is forgotten (it is its latest record), so that a check through a call with matchers
-    // looks at the records of real calls only, and costs the same however many setups and checks came before it
-    if (read !== undefined) state.dropRetracted(read)
     return callWithMatchers(state, key, RecordedArguments.forSpecification(args), read !== undefined ? read.chainPrevious : chained)
   }
 
@@ -2625,9 +2622,7 @@ const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutSt
  * where the check is opened, along the records of the expression (`head`: the record that handed out `state`, the
  * substitute the check is opened on). Undefined when the expression went through no such call: the check then counts
  * the calls of that substitute, as always.
- * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf), with nothing noted per
- * call. The records of the expression, which the check has retracted, are then forgotten where they are the latest of
- * their member (see SubstituteState.dropRetracted), so that later checks do not look at them again.
+ * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf).
  * E122 (R17-ADV-1, R17-ADV-2): a substitute that the expression handed out several times (a self-returning builder, a
  * cycle) has a note for each of those hand-outs (see configuredHandOuts), so the route goes on past each.
  */
@@ -2651,8 +2646,6 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   if (top === 0) return undefined
   const steps: RouteStep[] = []
   for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(found[index].record, found[index].shared ? answers[index] : undefined))
-  // (from the bottom up: each is the latest record of its member then)
-  for (const step of found) step.owner.dropRetracted(step.record)
   return { origin: found[top - 1].owner, steps }
 }
 
@@ -2863,20 +2856,16 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
       answered.add(checkedOf(step.shared))
       continue
     }
-    // E110: one pass over the received calls, with what each answered by position (no map of them)
-    const records = at.state.receivedRecordsOf(at.key)
-    const answers = at.state.configuredAnswersByPosition(at.key)
     const sharing = step.shared !== undefined && follow === 'count'
     let shared: Set<object> | undefined
     // E99: the calls that do not match the step and answered a substitute, which may be one that matching calls answered
-    let others: number[] | undefined
-    for (let position = 0; position < records.length; position++) {
-      const record = records[position]
+    let others: CallRecord[] | undefined
+    for (const record of at.state.recordsFor(at.key)) {
       // (E123: not a call made before the clear of a substitute further up the route, see followRoute)
-      if (record.retracted || record.kind !== 'call' || record.seq <= since) continue
-      const answer = answers === undefined ? undefined : answers[position]
+      if (record.kind !== 'call' || record.seq <= since) continue
+      const answer = at.state.configuredAnswerOf(record)
       if (!step.matchesCall(record.args ?? [])) {
-        if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(position)
+        if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(record)
         continue
       }
       if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
@@ -2892,11 +2881,11 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
     // E99: the calls that do not match the step, which a substitute that matching calls answered was returned to as well
     const returnedTo: CallRecord[] = []
     let sharedAnswer: object | undefined
-    for (const position of others) {
-      const answer = answers![position]!
+    for (const record of others) {
+      const answer = at.state.configuredAnswerOf(record)!
       if (!shared.has(answer)) continue
       if (sharedAnswer === undefined) sharedAnswer = answer
-      if (answer === sharedAnswer) returnedTo.push(records[position])
+      if (answer === sharedAnswer) returnedTo.push(record)
     }
     if (sharedAnswer !== undefined) throw sharedSubstituteError(through(), at.state, step, sharedAnswer, returnedTo, start)
   }

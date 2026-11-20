@@ -562,13 +562,6 @@ const memberPath = (state: SubstituteState, key: PropertyKey): string =>
  */
 export type ConfiguredAnswer = object
 
-/** E88: several received calls of one member, one after the other in its records, that the same answer answered. */
-const NO_RECORDS: readonly CallRecord[] = Object.freeze([])
-
-class AnswerRun {
-  constructor(public readonly first: CallRecord, public last: CallRecord) { }
-}
-
 /**
  * Everything the library knows about one substitute (the root, or a cached auto-substitute):
  * the received calls, the configured substitutions, the mimicked instance and the auto-substitutes.
@@ -595,13 +588,8 @@ export class SubstituteState {
   /** E39: the record of the operation that last answered with this substitute (a configured value), and when. */
   private _handedOutBy?: CallRecord
   private _handedOutAt?: number
-  /**
-   * E81, E88: what the received calls answered with a configured value (see noteConfiguredAnswer), as pairs of an answer
-   * and the calls it answered (a record, or an AnswerRun of records that follow each other in the records of their
-   * member), and per member where the pair of its latest answer is.
-   */
-  private _configuredAnswers?: unknown[]
-  private _latestAnswers?: Map<PropertyKey, number>
+  /** E81, E88: what the received calls answered with a configured value (see noteConfiguredAnswer). */
+  private readonly _configuredAnswers = new Map<CallRecord, ConfiguredAnswer>()
 
   constructor(public readonly owner?: AutoEntry) { }
 
@@ -711,145 +699,24 @@ export class SubstituteState {
    * any other configured value (see ConfiguredAnswer), so that such a check knows that it cannot count it. An
    * unconfigured call answers the auto-substitute of its arguments, which is found again from them (existingCallEntry), so
    * it is not noted.
-   *
-   * E88: calls of a member that follow each other in its records and are answered alike (`logger.log(i)` in a loop with
-   * `log(Arg.any()).returns(undefined)`, a fluent loop) are kept as one run, which grows with each call: noting costs no
-   * memory per call then. A call that does not follow the run (another call or read of the member came in between)
-   * starts a new one.
    */
   public noteConfiguredAnswer(record: CallRecord, answer: ConfiguredAnswer): void {
-    const key = record.key
-    // the run noted last goes on when the call comes right after its last call among all the records (a loop)
-    const top = this._configuredAnswers
-    if (top !== undefined && top[top.length - 2] === answer) {
-      const records = this._records
-      const length = records.length
-      const run = top[top.length - 1] as CallRecord | AnswerRun
-      const last = run instanceof AnswerRun ? run.last : run
-      if (last === record) return // (noted already)
-      if (length > 1 && records[length - 1] === record && records[length - 2] === last && last.key === key) {
-        if (run instanceof AnswerRun) run.last = record
-        else top[top.length - 1] = new AnswerRun(run, record)
-        return
-      }
-    }
-    const answers = top ?? (this._configuredAnswers = [])
-    const latest = this._latestAnswers ?? (this._latestAnswers = new Map())
-    const at = latest.get(key)
-    if (at !== undefined && answers[at] === answer) {
-      const records = this._recordsByKey.get(key)
-      const length = records === undefined ? 0 : records.length
-      const run = answers[at + 1] as CallRecord | AnswerRun
-      const last = run instanceof AnswerRun ? run.last : run
-      if (last === record) return // (noted already)
-      if (length > 1 && records![length - 1] === record && records![length - 2] === last) {
-        if (run instanceof AnswerRun) run.last = record
-        else answers[at + 1] = new AnswerRun(run, record)
-        return
-      }
-    }
-    latest.set(key, answers.length)
-    answers.push(answer, record)
+    this._configuredAnswers.set(record, answer)
   }
 
   /** E81: what the received calls of one member answered, for those noted by noteConfiguredAnswer. */
   public configuredAnswers(key: PropertyKey): Map<CallRecord, ConfiguredAnswer> | undefined {
-    const answers = this._configuredAnswers
-    const records = this._recordsByKey.get(key)
-    if (answers === undefined || records === undefined) return undefined
-    // where the runs of the member start (a call noted again starts a run of its own, which takes its place)
-    const starts = new Map<CallRecord, number>()
-    for (let index = 0; index < answers.length; index += 2) {
-      const run = answers[index + 1] as CallRecord | AnswerRun
-      const first = run instanceof AnswerRun ? run.first : run
-      if (first.key === key) starts.set(first, index)
-    }
-    if (starts.size === 0) return undefined
     const byRecord = new Map<CallRecord, ConfiguredAnswer>()
-    let answer: ConfiguredAnswer | undefined
-    let last: CallRecord | undefined
-    for (const record of records) {
-      const start = starts.get(record)
-      if (start !== undefined) {
-        answer = answers[start] as ConfiguredAnswer
-        const run = answers[start + 1] as CallRecord | AnswerRun
-        last = run instanceof AnswerRun ? run.last : run
-      }
-      if (answer === undefined) continue
-      byRecord.set(record, answer)
-      if (record === last) answer = last = undefined
+    for (const record of this.recordsFor(key)) {
+      const answer = this._configuredAnswers.get(record)
+      if (answer !== undefined) byRecord.set(record, answer)
     }
-    return byRecord
+    return byRecord.size === 0 ? undefined : byRecord
   }
 
-  /**
-   * E110 (R16V-2): what the received calls of one member answered, as configuredAnswers gives it, by position in
-   * receivedRecordsOf(key) (undefined where a record is not noted), without building a map: a check through a call goes
-   * through every received call of the member.
-   */
-  public configuredAnswersByPosition(key: PropertyKey): (ConfiguredAnswer | undefined)[] | undefined {
-    const answers = this._configuredAnswers
-    const records = this._recordsByKey.get(key)
-    if (answers === undefined || records === undefined) return undefined
-    const starts = new Map<CallRecord, number>()
-    for (let index = 0; index < answers.length; index += 2) {
-      const run = answers[index + 1] as CallRecord | AnswerRun
-      const first = run instanceof AnswerRun ? run.first : run
-      if (first.key === key) starts.set(first, index)
-    }
-    if (starts.size === 0) return undefined
-    const byPosition: (ConfiguredAnswer | undefined)[] = new Array(records.length)
-    let answer: ConfiguredAnswer | undefined
-    let last: CallRecord | undefined
-    for (let position = 0; position < records.length; position++) {
-      const record = records[position]
-      const start = starts.get(record)
-      if (start !== undefined) {
-        answer = answers[start] as ConfiguredAnswer
-        const run = answers[start + 1] as CallRecord | AnswerRun
-        last = run instanceof AnswerRun ? run.last : run
-      }
-      byPosition[position] = answer
-      if (record === last) answer = last = undefined
-    }
-    return byPosition
-  }
-
-  /** E110: the records of one member, retracted ones included (see configuredAnswersByPosition). */
-  public receivedRecordsOf(key: PropertyKey): readonly CallRecord[] {
-    return this._recordsByKey.get(key) ?? NO_RECORDS
-  }
-
-  /**
-   * E110 (R16V-2): forgets a retracted record that a check went through (the engine's concreteRoute, for a check through a
-   * concrete call whose answer a setup with matchers shares), when it is the latest record of its member, as the leading
-   * call of a check is: so that the records and answers of the member that later checks look at are those of real calls,
-   * and a check costs the same however many came before it. Otherwise it stays (retracted records are never counted or
-   * shown).
-   */
-  public dropRetracted(record: CallRecord): void {
-    const forKey = this._recordsByKey.get(record.key)
-    if (!record.retracted || forKey === undefined || forKey[forKey.length - 1] !== record) return
-    const previous = forKey.length > 1 ? forKey[forKey.length - 2] : undefined
-    // what it answered: noted in the latest pair of its member, alone or as the end of a run (see noteConfiguredAnswer)
-    const answers = this._configuredAnswers
-    const at = this._latestAnswers?.get(record.key)
-    if (answers !== undefined && at !== undefined) {
-      const run = answers[at + 1] as CallRecord | AnswerRun
-      if (run === record) {
-        // (a pair that is not the latest of all stays: it matches no record any more)
-        if (at === answers.length - 2) {
-          answers.length = at
-          this._latestAnswers!.delete(record.key)
-        }
-      } else if (run instanceof AnswerRun && run.last === record && previous !== undefined) {
-        if (run.first === previous) answers[at + 1] = previous
-        else run.last = previous
-      }
-    }
-    forKey.pop()
-    const records = this._records
-    if (records[records.length - 1] === record) records.pop()
+  /** E81: what one received call answered, if it was noted (see noteConfiguredAnswer). */
+  public configuredAnswerOf(record: CallRecord): ConfiguredAnswer | undefined {
+    return this._configuredAnswers.get(record)
   }
 
   /** Received calls of one member, in order, without retracted records. */
@@ -884,7 +751,7 @@ export class SubstituteState {
       state._recordsByKey.clear()
       state._pendingReads.clear()
       state._clearedAt = clearedAt
-      if (state._configuredAnswers !== undefined) state._configuredAnswers = state._latestAnswers = undefined
+      state._configuredAnswers.clear()
       for (const entry of state.entries()) {
         const nested = entry.materializedState
         if (nested !== undefined) pending.push(nested)
