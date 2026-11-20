@@ -428,12 +428,12 @@ const noteReadAnswer = (state: SubstituteState, record: CallRecord, value: unkno
  * call/apply, and the direct call of x. Notes what it answered for the record of each reading given, as
  * handOutConfigured does for other calls, so that a check through a call with matchers under either reading
  * (`api.getUser(Arg.any())[received](1).save()`, `client.rpc.call('getUser', Arg.any())[received](1).save()`) counts the
- * calls of that substitute, however the code under test made the call. It hands nothing out (the call/apply path never
- * did), except E111 (R16-ADV-5) a substitute that a setup with matchers (or the mimicked instance) shares, as
- * handOutConfigured does, from the reading that answered (`directAnswered`: the direct one), so that a check through
- * a concrete call made so (`rpc.call('getUser', 2).received(1).save()`, `io.to.call(io, 'room-b')[received](1).emit()`)
- * goes through that call (see concreteRoute). E88, E89: a value that is not a substitute of this copy is noted as
- * handOutConfigured notes it. Returns the value.
+ * calls of that substitute, however the code under test made the call. E111 (R16-ADV-5): a substitute is handed out as
+ * handOutConfigured hands it out (until then, the call/apply path handed out none), from the reading that answered
+ * (`directAnswered`: the direct one), so that a check through a concrete call made so goes through that call when a
+ * setup with matchers (or the mimicked instance) shares its answer (`rpc.call('getUser', 2).received(1).save()`,
+ * `io.to.call(io, 'room-b')[received](1).emit()`, see concreteRoute), and leaves the call out (D25, E39). E88, E89: a
+ * value that is not a substitute of this copy is noted as handOutConfigured notes it. Returns the value.
  */
 const noteHelperAnswer = <T>(
   value: T, memberRecord: CallRecord, memberState: SubstituteState, directRecord: CallRecord | undefined, directState: SubstituteState,
@@ -447,9 +447,12 @@ const noteHelperAnswer = <T>(
     memberState.noteConfiguredAnswer(memberRecord, answer)
     if (directRecord !== undefined && directRecord.kind === 'call') directState.noteConfiguredAnswer(directRecord, answer)
   }
-  if (face !== undefined && sharesAnswer(source)) {
-    if (!directAnswered) handOutShared(face, memberRecord, memberState, true)
-    else if (directRecord !== undefined && directRecord.kind === 'call') handOutShared(face, directRecord, directState, true)
+  if (face !== undefined) {
+    // (from the reading that answered)
+    const record = directAnswered && directRecord !== undefined ? directRecord : memberRecord
+    const owner = record === memberRecord ? memberState : directState
+    const shared = sharesAnswer(source)
+    if (record.kind === 'call' && (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner)) handOutShared(face, record, owner, shared)
   }
   return value
 }
@@ -984,8 +987,11 @@ const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: C
  * call that a setup with matchers answered counts along its expression (see concreteRoute).
  */
 const faceContextFunction = (face: Face, context: ContextMethod, head: CallRecord | undefined): Function => {
-  const subject = (context === 'received' || context === 'didNotReceive') && head !== undefined && sharedHandOutCount > 0
-    ? () => concreteSubject(faceState(face), head) : undefined
+  const check = (context === 'received' || context === 'didNotReceive') && head !== undefined
+  // E111: the check view uses the hand-out up: the next statement does not continue its expression (a substitute that a
+  // setup with matchers answers with itself, `io.to(Arg.any()).returns(io)`, is where the next statement starts as well)
+  if (check) face.forgetHandOut(head!)
+  const subject = check && sharedHandOutCount > 0 ? () => concreteSubject(faceState(face), head) : undefined
   return contextFunction(context, () => faceState(face), head, subject)
 }
 

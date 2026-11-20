@@ -308,6 +308,11 @@ export class AutoEntry {
     return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
   }
 
+  /** E111: forgets that `record` handed out this proxy (a check made through it used it up, see the engine's faceContextFunction). */
+  public forgetHandOut(record: CallRecord): void {
+    if (this._handedOutBy === record) this._handedOutBy = undefined
+  }
+
   /** E110: the latest configured hand-out of this entry's proxy (see ConfiguredHandOut). (Left undeclared until one.) */
   private _configuredHandOut?: ConfiguredHandOut
 
@@ -643,6 +648,11 @@ export class SubstituteState {
   /** E39: the record that answered with this substitute, if that was the most recent operation of all. */
   public adjacentHandOut(): CallRecord | undefined {
     return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
+  }
+
+  /** E111: forgets that `record` handed out this substitute (a check made through it used it up, see the engine's faceContextFunction). */
+  public forgetHandOut(record: CallRecord): void {
+    if (this._handedOutBy === record) this._handedOutBy = undefined
   }
 
   /** E110: the latest configured hand-out of this substitute (see ConfiguredHandOut). (Left undeclared until one.) */
