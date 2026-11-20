@@ -925,15 +925,9 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (isSubstitutionSymbol(property)) throw substitutionOnSubstituteError(property, stackStart)
   } else {
     const entry = face
-    const stringCheck = entry.kind === 'call' && isStringAssertionKey(entry.key)
-    // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
-    const opening = stringCheck ? useStringCheck(entry) : undefined
+    if (entry.kind === 'call' && isStringAssertionKey(entry.key)) return stringCheckMember(entry, property, chainHead, stackStart)
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
-
-    // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion. E116: its
-    // expression is the one of the call that opened it (see useStringCheck).
-    if (stringCheck) return stringCheckMember(entry, property, opening ?? chainHead(), stackStart)
   }
 
   // D26: call/apply/bind, unless the member with that name is configured as a property, or the substitute mimicks
@@ -954,8 +948,14 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
 }
 
 /** `sub.received(n).member` (see faceGet; a function of its own, which keeps faceGet small for the hot path). */
-const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: CallRecord | undefined, stackStart: Function): any => {
-  const assertion = resolveStringAssertion(entry, chainHead, stackStart)
+const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: () => CallRecord | undefined, stackStart: Function): any => {
+  // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
+  const opening = useStringCheck(entry)
+  const method = substitutionMethodOf(property)
+  if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
+  // D11: `sub.received(n)` followed by a member access other than a substitution method is an assertion. E116: its
+  // expression is the one of the call that opened it (see useStringCheck).
+  const assertion = resolveStringAssertion(entry, opening ?? chainHead(), stackStart)
   return assertion.other !== undefined ? assertion.other[property] : assertionMember(useOf(assertion.state), property, assertion.count, stackStart)
 }
 
