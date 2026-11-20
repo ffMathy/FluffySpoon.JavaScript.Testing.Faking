@@ -1835,6 +1835,9 @@ const invoke = (
     const chained = continuedChain(chainCandidate, frameAt(stackStart))
     retract(read)
     retract(chained)
+    // E121: the read of the member is forgotten (it is its latest record), so that a check through a call with matchers
+    // looks at the records of real calls only, and costs the same however many setups and checks came before it
+    if (read !== undefined) state.dropRetracted(read)
     return callWithMatchers(state, key, RecordedArguments.forSpecification(args), read !== undefined ? read.chainPrevious : chained)
   }
 
