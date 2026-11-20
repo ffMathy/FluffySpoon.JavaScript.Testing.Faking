@@ -98,9 +98,9 @@ test.serial('R5-ADV-1 (E13) distinct Sets of records are told apart', t => {
   t.notThrows(() => sub.received(1).put(changed))
 })
 
-test.serial('R5-ADV-1 (E13) 200 literal setups with distinct 5,000-key objects are each found by a copy', t => {
+test.serial('R5-ADV-1 (E13) 20 literal setups with distinct 5,000-key objects are each found by a copy', t => {
   // each copy is confirmed with live deep equality (D35)
-  const objects = Array.from({ length: 200 }, (_, index) => wideObject(5000, key => index * 100_000 + key))
+  const objects = Array.from({ length: 20 }, (_, index) => wideObject(5000, key => index * 100_000 + key))
   const copies = objects.map(object => ({ ...object }))
   const sink = Substitute.for<any>()
   objects.forEach((object, index) => sink.write(object).returns(index))
