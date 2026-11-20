@@ -118,14 +118,10 @@ export type SameArguments = (a: readonly unknown[], b: readonly unknown[]) => bo
 /** E99: the calls a shared auto-substitute was handed out to (see handOuts). */
 type HandOuts = { readonly calls: readonly HandOut[], readonly more: number }
 
-/**
- * E99: what showing records with the calls that handed their substitutes out needs: how to compare arguments, and the
- * hand-outs found so far. One is made for each printout or failure message (see recordLabels), which records do not
- * change while they are built, so that the hand-outs of each substitute are looked up once there.
- */
-export type RecordLabelContext = { readonly same: SameArguments, readonly found: Map<PathEntry, HandOuts> }
+/** E99: what showing records with the calls that handed their substitutes out needs: how to compare arguments. */
+export type RecordLabelContext = { readonly same: SameArguments }
 
-export const recordLabelContext = (same: SameArguments): RecordLabelContext => ({ same, found: new Map() })
+export const recordLabelContext = (same: SameArguments): RecordLabelContext => ({ same })
 
 /** E99: how many calls a note of sharedNotes names, at most. */
 const HAND_OUTS_SHOWN = 3
@@ -141,8 +137,6 @@ const NO_HAND_OUTS: HandOuts = { calls: [], more: 0 }
  */
 export const handOuts = (entry: PathEntry, context: RecordLabelContext): HandOuts => {
   if (entry.specifiesMatchers !== true) return NO_HAND_OUTS
-  let found = context.found.get(entry)
-  if (found !== undefined) return found
   const calls: HandOut[] = []
   let more = 0
   const answers = entry.parent.configuredAnswers?.(entry.key)
@@ -156,9 +150,7 @@ export const handOuts = (entry: PathEntry, context: RecordLabelContext): HandOut
       else more++
     }
   }
-  found = { calls, more }
-  context.found.set(entry, found)
-  return found
+  return { calls, more }
 }
 
 /** E99: how a member is shown in the path of records (see above). */

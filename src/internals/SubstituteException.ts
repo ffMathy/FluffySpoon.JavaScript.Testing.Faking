@@ -314,17 +314,13 @@ export class SubstituteException extends Error {
       const shown = mismatch.listed.length > MAX_LISTED_CALLS ? mismatch.listed.slice(0, MAX_LISTED_CALLS) : mismatch.listed
       let listedCount = 0
       let listedCharacters = 0
-      // E99: the paths of the substitutes that the records shown belong to, each built once
+      // E99: the paths of the substitutes that the records shown belong to, and those substitutes (for the notes)
       const labels = mismatch.recordLabels
-      const recordPaths = new Map<{ readonly path: string } | undefined, string>()
+      const owners = new Set<{ readonly path: string } | undefined>()
       const labelOf = (owner: { readonly path: string } | undefined): string => {
-        let label = recordPaths.get(owner)
-        if (label === undefined) {
-          const path = labels!.path(owner)
-          label = key === SELF ? path : `${path}.${keyToString(key)}`
-          recordPaths.set(owner, label)
-        }
-        return label
+        owners.add(owner)
+        const path = labels!.path(owner)
+        return key === SELF ? path : `${path}.${keyToString(key)}`
       }
       for (const listed of shown) {
         if (listedCharacters >= MAX_LISTED_CHARACTERS) break
@@ -348,7 +344,7 @@ export class SubstituteException extends Error {
       const hidden = mismatch.listed.length - listedCount
       if (hidden > 0) textBuilder.newLine().add(`› … and ${hidden} more`, t => t.faint())
       textBuilder.newLine()
-      if (labels !== undefined) notes = labels.notes([...recordPaths.keys()])
+      if (labels !== undefined) notes = labels.notes([...owners])
     }
 
     const hints = notes.length > 0 ? [...notes, ...mismatch.hints ?? []] : mismatch.hints ?? []
