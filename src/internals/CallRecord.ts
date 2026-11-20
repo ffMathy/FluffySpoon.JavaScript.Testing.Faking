@@ -33,9 +33,9 @@ export class CallRecord {
   /** E23: true when the invocation was a construction (`new sub.Client(url)`), which messages show with `new`. */
   public constructed?: boolean
   /**
-   * The record of the previous step when this one continues an expression chain (`a.b().c`), see chainPrevious. E126:
-   * or the previous step that handed out the substitute itself, while it is not decided yet whether this one continues its
-   * expression (see linkToSelfHandOut).
+   * The record of the previous step when this one continues an expression chain (`a.b().c`), see chainPrevious.
+   * E126: or the previous step that handed out the substitute itself, while it is not decided yet whether this one
+   * continues its expression (see linkToSelfHandOut).
    */
   private _chainPrevious: CallRecord | undefined
 
@@ -131,11 +131,11 @@ export class CallRecord {
 }
 
 /**
- * E126 (R17-ADV-11): the capture of an operation whose link to a hand-out of the substitute itself is not decided yet (see
- * CallRecord.linkToSelfHandOut) notes the operation's sequence number. The capture is an object of its own per operation,
- * with room for it, so the record of a fluent call needs no field of its own for it (E126 and D30: what a record of
- * 8be3a70 needed), and a number keeps nothing alive (E127). The number tells the record from any other that shares the
- * capture (the two readings of `x.call(...)`, see pairReadings).
+ * E126 (R17-ADV-11): the capture of an operation whose link to a hand-out of the substitute itself is not decided yet
+ * (see CallRecord.linkToSelfHandOut) notes the operation's sequence number. The capture is an object of its own per
+ * operation, with room for it, so the record of a fluent call needs no field of its own for it (E126 and D30: what a
+ * record of 8be3a70 needed), and a number keeps nothing alive (E127). The number tells the record from any other that
+ * shares the capture (the two readings of `x.call(...)`, see pairReadings).
  */
 type PendingLinkSite = StackHolder & { pendingSelfLink?: number }
 
@@ -157,10 +157,10 @@ export const retract = (record: CallRecord | undefined): void => {
 
 /**
  * E111 (R16-ADV-7): whether an operation at `frame` continues the expression of a hand-out of the substitute itself at
- * `from` (see the engine's handOutShared): only on the same line, after it, in the same function (E125: the same line of the source,
- * where Node.js has a source map, see CallSite.sameLineAfter). Such a substitute is where the next statement starts,
- * too (`server.on('close', listener)`, then `server.received(1).on('error', Arg.any())`), and a statement before it is no
- * part of its expression (E39). Without frames (Error.stackTraceLimit = 0) it never does.
+ * `from` (see the engine's handOutShared): only on the same line, after it, in the same function (E125: the same line
+ * of the source, where Node.js has a source map, see CallSite.sameLineAfter). Such a substitute is where the next
+ * statement starts, too (`server.on('close', listener)`, then `server.received(1).on('error', Arg.any())`), and a
+ * statement before it is no part of its expression (E39). Without frames (Error.stackTraceLimit = 0) it never does.
  */
 export const continuesSelfHandOut = (from: Frame | null, frame: Frame | null): boolean =>
   from !== null && frame !== null && sameExpression(from, frame) && sameLineAfter(from, frame)
