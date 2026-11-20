@@ -1,8 +1,7 @@
 // R7TD-5 / R7TD-8 / R7TD-11 / T49 Concrete unions whose variants declare a method with different parameter lists check a
 // call against each variant's parameter list as a whole, also when every variant returns the same type: no combination
 // of arguments that no variant accepts compiles, in setups, checks and the configure view. Callbacks without parameter
-// types are typed from the parameter list the call resolves to. (spec-types/R6V-5.R6TD-2.T44.check-cost.js checks the
-// type-check cost of the union of all lib.dom elements.)
+// types are typed from the parameter list the call resolves to.
 import { Substitute, Arg, configure, received, didNotReceive } from '../src'
 
 // R7TD-5: every variant returns the same type (`void`, `Promise<void>`)
