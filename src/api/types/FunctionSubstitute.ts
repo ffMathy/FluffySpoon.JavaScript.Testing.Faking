@@ -715,10 +715,8 @@ type CallbackThisType<TParameter> =
 type WithCallbackThis<TList, TThis> = { [P in keyof TList]: WithThis<TList[P], TThis> }
 type WithThis<TParameter, TThis> =
   [TParameter] extends [(this: infer TOwnThis, ...args: infer A) => infer R] ?
-  (unknown extends TOwnThis ? TParameter : CallbackWithThis<TThis, UnnamedCallbackArguments<A>, R>) :
+  (unknown extends TOwnThis ? TParameter : CallbackWithThis<TThis, UnnamedArguments<Extract<A, any[]>>, R>) :
   TParameter
-// (A single required parameter, as in most callbacks, without the general conversion.)
-type UnnamedCallbackArguments<A> = A extends [any] ? [A[0]] : UnnamedArguments<Extract<A, any[]>>
 // A separate alias, so that the callbacks of several variants that differ only in their `this` type give one type.
 type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => R
 
@@ -915,11 +913,10 @@ export type FunctionSubstitute<TFunction, TView extends SubstituteView = 'substi
 // Construct signatures count as calls (T47): `new` is recorded as a call.
 type EachCallKind<TFunction> =
   TFunction extends (...args: any[]) => any ? 'call' : TFunction extends new (...args: any) => any ? 'call' : 'plain'
-type GuardedCallKind<TFunction> = [TFunction] extends [Primitive] ? never : EachCallKind<TFunction>
 
 /**
  * `'call'` when `TFunction` (a member type without `null | undefined`) is callable, otherwise `'plain'`. In generic
  * code it is decided by the member's constraint.
  */
 export type CallKind<TFunction> = CallKindOf<ObjectKind<TFunction>, TFunction>
-type CallKindOf<TKind, TFunction> = TKind extends 'object' ? GuardedCallKind<TFunction> : 'plain'
+type CallKindOf<TKind, TFunction> = TKind extends 'object' ? EachCallKind<TFunction> : 'plain'
