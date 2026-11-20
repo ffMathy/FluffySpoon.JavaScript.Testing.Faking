@@ -2750,7 +2750,7 @@ type Follow = 'count' | 'list'
  * not match were returned as well is a usage error (see sharedSubstituteError); one that only calls that do not match
  * were returned is not counted (nothing came through the step).
  */
-const throughCall = (checked: readonly Checked[], step: RouteStep, through: () => string, start: Function | undefined, follow: Follow): Checked[] => {
+const throughCall = (checked: readonly Checked[], step: RouteStep, through: () => string, start: Function | undefined, follow: Follow, since: number): Checked[] => {
   const answered = new CheckedList()
   for (const item of checked) {
     if (isForeign(item)) continue
@@ -2769,7 +2769,8 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
     let others: number[] | undefined
     for (let position = 0; position < records.length; position++) {
       const record = records[position]
-      if (record.retracted || record.kind !== 'call') continue
+      // (E123: not a call made before the clear of a substitute further up the route, see followRoute)
+      if (record.retracted || record.kind !== 'call' || record.seq <= since) continue
       const answer = answers === undefined ? undefined : answers[position]
       if (!step.matchesCall(record.args ?? [])) {
         if (sharing && (answer instanceof AutoEntry || answer instanceof SubstituteState)) (others ?? (others = [])).push(position)
@@ -2805,7 +2806,7 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
  * nothing, and of returns(y1, y2) only the values that reads got count), and the auto-substitute of the member, which
  * every other read answered. A read answered with a value that is not a substitute is E88's usage error.
  */
-const throughRead = (checked: readonly Checked[], key: PropertyKey, through: () => string, start: Function | undefined, follow: Follow): Checked[] => {
+const throughRead = (checked: readonly Checked[], key: PropertyKey, through: () => string, start: Function | undefined, follow: Follow, since: number): Checked[] => {
   const answered = new CheckedList()
   for (const item of checked) {
     if (isForeign(item)) continue
@@ -2814,7 +2815,7 @@ const throughRead = (checked: readonly Checked[], key: PropertyKey, through: () 
     const configured = state.configuredAnswers(key)
     if (configured !== undefined) {
       for (const record of state.recordsFor(key)) {
-        if (record.kind !== 'get') continue
+        if (record.kind !== 'get' || record.seq <= since) continue
         const answer = configured.get(record)
         if (answer === undefined) continue
         if (answer instanceof AutoEntry || answer instanceof SubstituteState) answered.add(checkedOf(answer))
@@ -2829,28 +2830,46 @@ const throughRead = (checked: readonly Checked[], key: PropertyKey, through: () 
 
 /**
  * What a route leads to: the substitutes of this copy to count, or (E89) one substitute of another copy (`foreign`, with
- * none to count here), which is where the check is opened (E105).
+ * none to count here), which is where the check is opened (E105). `since` (E123): the calls they received up to this
+ * sequence value are not counted (see followRoute).
  */
-type RouteEnd = { readonly checked: readonly Checked[], readonly foreign?: Function }
+type RouteEnd = { readonly checked: readonly Checked[], readonly foreign?: Function, readonly since: number }
 
-/** Follows a route (see above). E88, E89, E99, E105: a usage error when it cannot be followed (`start`: where). */
+/** E123: the latest of `since` and the clears of the received calls of the substitutes in `checked` (see followRoute). */
+const latestClear = (checked: readonly Checked[], since: number): number => {
+  for (const item of checked) {
+    const state = isForeign(item) ? undefined : stateOf(item)
+    if (state !== undefined && state.clearedAt > since) since = state.clearedAt
+  }
+  return since
+}
+
+/**
+ * Follows a route (see above). E88, E89, E99, E105: a usage error when it cannot be followed (`start`: where).
+ * E123 (R17-ADV-12): once the received calls of a substitute on the route were cleared (`io[clearReceivedCalls]()`), the
+ * calls that the substitutes further down received before (through what it handed out then, whose records the clear
+ * removed) are not counted, at any step, neither as calls that came through the route nor as other calls. A check of
+ * such a substitute itself still counts them (its own records are cleared by clearing it).
+ */
 const followRoute = (route: CheckRoute, start: Function | undefined, follow: Follow = 'count'): RouteEnd => {
   if (route.undetermined !== undefined && follow === 'count') throw undeterminedRouteError(route, route.undetermined.record, route.undetermined.answered, start)
   let checked: Checked[] = [checkedOf(route.origin)]
+  let since = 0
   const steps = route.steps
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index]
     const through = () => routePath(route, index + 1)
-    checked = step.kind === 'get' ? throughRead(checked, step.key, through, start, follow) : throughCall(checked, step, through, start, follow)
+    since = latestClear(checked, since)
+    checked = step.kind === 'get' ? throughRead(checked, step.key, through, start, follow, since) : throughCall(checked, step, through, start, follow, since)
     if (follow !== 'count') continue
     const foreign = checked.find(isForeign)
     if (foreign === undefined) continue
     if (checked.length > 1) throw severalCopiesError(through(), start)
     // E105: only where the check is opened; the steps after it are not that copy's check to follow
     if (index < steps.length - 1) throw otherCopyAboveError(through(), steps.slice(index + 1).map(stepText).join(''), start)
-    return { checked: [], foreign: foreign as Function }
+    return { checked: [], foreign: foreign as Function, since }
   }
-  return { checked }
+  return { checked, since }
 }
 
 /**
@@ -2926,7 +2945,7 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   }
 
   public recordsFor(key: PropertyKey): CallRecord[] {
-    return this.listRecords(this.checked, key, undefined)
+    return this.listRecords(this.checked, key, undefined, this.end().since)
   }
 
   /**
@@ -2937,8 +2956,9 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   public uncountedFor(key: PropertyKey): CallRecord[] {
     if (!this.route.steps.some(step => step.shared !== undefined)) return []
     const counted = new Set(this.checked)
-    const uncounted = followRoute(this.route, undefined, 'list').checked.filter(checked => !counted.has(checked))
-    return uncounted.length === 0 ? [] : this.listRecords(uncounted, key, new Set(this.recordsFor(key)))
+    const listed = followRoute(this.route, undefined, 'list')
+    const uncounted = listed.checked.filter(checked => !counted.has(checked))
+    return uncounted.length === 0 ? [] : this.listRecords(uncounted, key, new Set(this.recordsFor(key)), listed.since)
   }
 
   /** The records of `key` of the substitutes (not those in `except`), each with its owner, in the order they were received. */
@@ -2947,7 +2967,7 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * the same substitute and member, see recordedAt. In one use every listing is of the same member, so a record always
    * has the same owner.)
    */
-  private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined): CallRecord[] {
+  private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined, since: number): CallRecord[] {
     let records: CallRecord[] | undefined
     let several = false
     for (const checked of checkedList) {
@@ -2956,6 +2976,8 @@ class MatchedSubstitutes implements SeveralSubstitutes {
       if (at === undefined) continue
       let own = at.state.recordsFor(at.key)
       if (except !== undefined) own = own.filter(record => !except.has(record))
+      // (E123: not those received before a clear further up the route, see followRoute)
+      if (since > 0) own = own.filter(record => record.seq > since)
       if (own.length === 0) continue
       this.noteOwner(checked, own)
       if (records === undefined) records = own

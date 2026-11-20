@@ -952,14 +952,27 @@ export class SubstituteState {
     return this._records.filter(record => !record.retracted)
   }
 
+  /**
+   * E123 (R17-ADV-12): when the received calls of this substitute were cleared last (the sequence value then; 0 if they
+   * never were), so that a check through one of its calls does not count the calls that the substitutes it handed out
+   * received before (see the engine's followRoute). (Left undeclared until a clear.)
+   */
+  private _clearedAt?: number
+
+  public get clearedAt(): number {
+    return this._clearedAt ?? 0
+  }
+
   /** Clears the received calls of this substitute and of its auto-substitutes (E35: without recursion). */
   public clearReceivedCalls(): void {
     const pending: SubstituteState[] = [this]
+    const clearedAt = currentSequence()
     while (pending.length > 0) {
       const state = pending.pop()!
       state._records.length = 0
       state._recordsByKey.clear()
       state._pendingReads.clear()
+      state._clearedAt = clearedAt
       if (state._configuredAnswers !== undefined) state._configuredAnswers = state._latestAnswers = undefined
       for (const entry of state.entries()) {
         const nested = entry.materializedState

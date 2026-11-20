@@ -1,6 +1,6 @@
 import test, { ExecutionContext } from 'ava'
 
-import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
+import { Substitute, Arg, mimick, received, didNotReceive, clearReceivedCalls } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -199,4 +199,67 @@ test('E122: the notes of an expression are bounded by it, and checks after it st
   t.notThrows(() => qb.received(1).first())
   t.notThrows(() => qb.received(50).where('id', Arg.any()))
   t.notThrows(() => db.received(1)('orders'))
+})
+
+// ---- E123 (R17-ADV-12): after a clear, what came through the cleared calls is not counted through the route ---------
+
+test('R17-ADV-12 (E123) the finding: after io[clearReceivedCalls](), the calls a shared room received through to(\'room-a\') do not count through to(\'room-b\')', t => {
+  const io = Substitute.for<any>()
+  const room = Substitute.for<any>()
+  io.to(Arg.any()).returns(room)
+  io.to('room-a').emit('welcome') // arrange
+  io[clearReceivedCalls]()
+  io.to('room-b').emit('bye') // act
+  // (5c41ddc: both received(1) forms passed, and didNotReceive() failed with "received 1")
+  expectCounts(t, "to('room-b') emit('welcome')", 0, (form, count) => io.to('room-b')[form.key](...form.args(count)).emit('welcome'))
+  const message = failureOf(t, () => io.to('room-b').received(1).emit('welcome'))
+  t.true(message.includes('but received none.'), message)
+  t.true(message.includes("emit('bye')"), message)
+  t.false(message.includes("emit('welcome')\n"), message)
+  expectCounts(t, "to('room-b') emit('bye')", 1, (form, count) => io.to('room-b')[form.key](...form.args(count)).emit('bye'))
+  // neither as other calls: to('room-b') is the only call since the clear
+  expectCounts(t, "to('room-b') emit(Arg.any())", 1, (form, count) => io.to('room-b')[form.key](...form.args(count)).emit(Arg.any()))
+  // a check of room itself counts its own calls, which only clearing room clears
+  t.notThrows(() => room.received(1).emit('welcome'))
+  t.notThrows(() => room.received(2).emit(Arg.any()))
+  room[clearReceivedCalls]()
+  t.notThrows(() => room.didNotReceive().emit(Arg.any()))
+})
+
+test('R17-ADV-12 (E123) a clear further up a longer route, a clear of the substitute in the middle, and checks through calls with matchers', t => {
+  const io = Substitute.for<any>()
+  const room = Substitute.for<any>()
+  const socket = Substitute.for<any>()
+  io.to(Arg.any()).returns(room)
+  room.socket(Arg.any()).returns(socket)
+  io.to('a').socket(1).emit('old')
+  io[clearReceivedCalls]()
+  io.to('a').socket(1).emit('new')
+  expectCounts(t, "to('a').socket(1) emit('old')", 0, (form, count) => io.to('a').socket(1)[form.key](...form.args(count)).emit('old'))
+  expectCounts(t, "to('a').socket(1) emit('new')", 1, (form, count) => io.to('a').socket(1)[form.key](...form.args(count)).emit('new'))
+  // room's own records of socket(1) were not cleared, but what came through them before the clear is not counted
+  t.notThrows(() => room.received(2).socket(1))
+  expectCounts(t, "to(Arg.any()).socket(1) emit('old')", 0, (form, count) => io.to(Arg.any()).socket(1)[form.key](...form.args(count)).emit('old'))
+  expectCounts(t, "to(Arg.any()).socket(1) emit('new')", 1, (form, count) => io.to(Arg.any()).socket(1)[form.key](...form.args(count)).emit('new'))
+
+  // a clear of the substitute in the middle of the route
+  const bus = Substitute.for<any>()
+  const channel = Substitute.for<any>()
+  const sender = Substitute.for<any>()
+  bus.channel(Arg.any()).returns(channel)
+  channel.sender(Arg.any()).returns(sender)
+  bus.channel('x').sender(1).send('old')
+  channel[clearReceivedCalls]()
+  bus.channel('x').sender(1).send('new')
+  expectCounts(t, "channel('x').sender(1) send('old')", 0, (form, count) => bus.channel('x').sender(1)[form.key](...form.args(count)).send('old'))
+  expectCounts(t, "channel('x').sender(1) send('new')", 1, (form, count) => bus.channel('x').sender(1)[form.key](...form.args(count)).send('new'))
+  t.notThrows(() => sender.received(2).send(Arg.any()))
+
+  // without a clear, nothing changes
+  const plainIo = Substitute.for<any>()
+  const plainRoom = Substitute.for<any>()
+  plainIo.to(Arg.any()).returns(plainRoom)
+  plainIo.to('a').emit('m')
+  plainIo.to('a').emit('m')
+  expectCounts(t, "no clear: to('a')", 2, (form, count) => plainIo.to('a')[form.key](...form.args(count)).emit('m'))
 })
