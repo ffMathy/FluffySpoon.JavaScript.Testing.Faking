@@ -349,7 +349,7 @@ test('R9-ADV-4 (E56) a dangling check view is reported, also when the same check
   }
 })
 
-// ---- E58: what a check costs -----------------------------------------------------------------------------------
+// ---- E58: the reports of checks in one synchronous run ---------------------------------------------------------
 
 /** `file:line` of a stack frame line. */
 const lineOf = (frame: string): string => {

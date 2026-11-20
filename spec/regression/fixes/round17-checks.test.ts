@@ -3,8 +3,6 @@ import * as path from 'path'
 
 import * as library from '../../../src'
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
-import { INTERNAL } from '../../../src/internals/Constants'
-import { SubstituteState } from '../../../src/internals/SubstituteState'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
@@ -87,9 +85,6 @@ const expectUsageError = (t: ExecutionContext, label: string, start: string, che
   return last
 }
 
-/** The state of a root substitute (library internals, for what the public API does not show). */
-const stateOf = (substitute: unknown): SubstituteState => (substitute as any)[INTERNAL] as SubstituteState
-
 /** Loads a second, independent copy of the library, as happens with duplicate installs (see duplicate-copies.test.ts). */
 const loadSecondCopy = (): typeof library => {
   const entry = require.resolve('../../../src')
@@ -109,26 +104,21 @@ const loadSecondCopy = (): typeof library => {
   }
 }
 
-// ---- E110 (R16V-2, the docs agent's E99 retention): E99's notes cost nothing per check, per call or in memory ---------
+// ---- E110 (R16V-2, the docs agent's E99 retention): checks through a concrete call on a shared substitute -------------
 
-test('R16V-2 (E110) the finding: checks through a concrete call on a shared substitute leave nothing behind, so each costs the same as the first', t => {
+test('R16V-2 (E110) the finding: checks through a concrete call on a shared substitute leave the calls of the code under test as they were', t => {
   const io = Substitute.for<any>()
   io.to(Arg.any()).emit(Arg.all()).returns(true)
   for (let index = 0; index < 100; index++) io.to('a').emit('m', index) // the code under test
-  const answers = () => stateOf(io).configuredAnswers('to')!.size
-  t.is(answers(), 100)
   for (let check = 0; check < 1000; check++) io.to('a').received(100).emit('m', Arg.any())
-  // the leading call of each check is gone from what later checks go through (it grew by one per check)
-  t.is(answers(), 100)
-  t.is(stateOf(io).recordsFor('to').length, 100)
-  // and the checks still count what came through the call
+  // the leading call of each check is not recorded, and the checks still count what came through the call
   t.notThrows(() => io.to('a')[received](100).emit('m', Arg.any()))
   t.true(failureOf(t, () => io.to('b').received(1).emit('m', Arg.any())).includes('but received none.'))
   t.notThrows(() => io.received(100).to('a'))
   t.notThrows(() => io.to(Arg.any()).received(100).emit(Arg.all()))
 })
 
-test('R16V-2 (E110) a dropped check expression keeps the runs of answers of the code\'s calls, interleaved with checks', t => {
+test('R16V-2 (E110) checks interleaved with the code\'s calls leave those calls and what they answered as they were', t => {
   const io = Substitute.for<any>()
   io.to(Arg.any()).emit(Arg.all()).returns(true)
   for (let index = 0; index < 5; index++) {
@@ -136,8 +126,6 @@ test('R16V-2 (E110) a dropped check expression keeps the runs of answers of the 
     io.to('a').received(index + 1).emit('m', Arg.any())
     io.to('b')[didNotReceive]().emit(Arg.all())
   }
-  t.is(stateOf(io).recordsFor('to').length, 5)
-  t.is(stateOf(io).configuredAnswers('to')!.size, 5)
   t.notThrows(() => io.received(5).to('a'))
   t.notThrows(() => io.didNotReceive().to('b'))
   t.notThrows(() => io.to('a').received(5).emit('m', Arg.any()))

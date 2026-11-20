@@ -220,12 +220,12 @@ test('R6FE-2 (E22) received(n) and didNotReceive count calls with and without th
   t.true(messageOf(() => sub.didNotReceive().f(Arg.any())).includes('but received 4.'), 'Arg.any() also matches f()')
 })
 
-test('R6FE-2 (E22) the literal-setup index, re-configuration and the auto-substitute cache agree', t => {
+test('R6FE-2 (E22) literal setups, re-configuration and the auto-substitute cache agree', t => {
   const sub = Substitute.for<any>()
   const request = { id: 1 }
   sub.fetch(request).returns('by identity')
   t.is(sub.fetch(request, undefined), 'by identity')
-  t.is(sub.fetch({ id: 1 }, undefined), 'by identity', 'by the structural hash')
+  t.is(sub.fetch({ id: 1 }, undefined), 'by identity', 'by deep equality')
   sub.load({ id: 2 }, undefined, undefined).returns('loaded')
   t.is(sub.load({ id: 2 }), 'loaded')
   for (let index = 0; index < 200; index++) sub.many(index, undefined).returns(index)

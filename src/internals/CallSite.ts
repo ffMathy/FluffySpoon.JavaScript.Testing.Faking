@@ -38,9 +38,6 @@ export type Frame = {
   readonly column?: number | null
 }
 
-/** A site without a stack or a frame (Assertions' checkViewSite, E61). */
-export const NO_FRAMES: StackHolder = Object.freeze({})
-
 /**
  * The frame of a call site. An async frame is no frame of the operation: V8 appends the async functions that await the
  * current promise job to its stack (async stack traces), so a call made from a promise job, which has no frame of its
