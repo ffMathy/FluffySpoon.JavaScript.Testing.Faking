@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
+import { AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { codeMember, pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
@@ -831,7 +831,7 @@ const configuredConversion = (state: SubstituteState, key: string, instance: any
     const method = !looking ? execute(property) : libraryGuard.matching > 0 ? peekExecute(property) : lookedExecute(property)
     return typeof method === 'function' ? Reflect.apply(method, receiver, []) : NO_PRIMITIVE
   }
-  const call = state.findCallSubstitution(key, new ArgumentHashes([]), !looking)
+  const call = state.findCallSubstitution(key, [], !looking)
   const mimicked = instance !== undefined && !isSubstituteProxy(instance) && hasMember(instance, key) &&
     typeof instance[key] === 'function' && !isDefaultConversion(instance[key])
   if ((call === undefined || call.method === 'auto') && !mimicked) return NO_PRIMITIVE
@@ -1089,9 +1089,9 @@ const wrapperThis = (thisArg: unknown): boolean =>
  * arguments, or when a mimicked instance has such a member of its own (a function's call/apply/bind inherited from
  * Function.prototype is the direct reading itself, recorded as such).
  */
-const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, rawArgs: any[], hashes: ArgumentHashes, record: CallRecord | undefined, thisArg: unknown): any => {
+const memberReadingAnswer = (state: SubstituteState, helper: FunctionHelperKey, rawArgs: any[], record: CallRecord | undefined, thisArg: unknown): any => {
   // (E100: a real call is matched in the look of its arguments, see configuredAnswer)
-  const substitution = state.findCallSubstitution(helper, hashes, record !== undefined)
+  const substitution = state.findCallSubstitution(helper, rawArgs, record !== undefined)
   if (substitution !== undefined) {
     // (no record: a matcher's look, E95)
     if (record === undefined) return peekExecute(substitution, rawArgs, { thisArg, explicit: true })
@@ -1131,7 +1131,7 @@ const directAnswers = new WeakMap<CallRecord, SubstituteState>()
  */
 const setupEntryOf = (entry: AutoEntry, chainHead: CallRecord | undefined): AutoEntry => {
   const memberState = chainHead === undefined ? undefined : directAnswers.get(chainHead)
-  return memberState === undefined ? entry : memberState.callEntry(chainHead!.key, new ArgumentHashes(chainHead!.args!))
+  return memberState === undefined ? entry : memberState.callEntry(chainHead!.key, chainHead!.args!)
 }
 
 /**
@@ -1186,30 +1186,29 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     memberRecord.chainPrevious = directRecord ?? read ?? chainHead
     if (directRecord !== undefined) pairReadings(memberRecord, directRecord)
 
-    const hashes = new ArgumentHashes(rawArgs)
-    let directHashes: ArgumentHashes | undefined
+    let directAnswered = false
     let answer: any
     answerSource = undefined
     // E103 (R15V-3): an answer that throws (a throws() setup, a throwing mimicks() function or mimicked method) is noted
     // under both readings, as the direct call notes it (E101: without catching, see noteThrew)
     let answered = false
     try {
-      answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
+      answer = memberReadingAnswer(memberState, helper, rawArgs, memberRecord, thisArg)
       if (answer === NOT_CONFIGURED && directRecord !== undefined) {
-        directHashes = new ArgumentHashes(directArgs!)
-        answer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true, read: handle })
+        directAnswered = true
+        answer = configuredAnswer(direct.state, direct.key, directArgs!, directRecord, { thisArg, explicit: true, read: handle })
       }
       answered = true
     } finally {
       if (!answered) noteHelperThrew(memberRecord, memberState, directRecord, direct.state, direct.key)
     }
-    if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state, directHashes !== undefined)
+    if (answer !== NOT_CONFIGURED) return noteHelperAnswer(answer, memberRecord, memberState, directRecord, direct.state, directAnswered)
     if (directRecord !== undefined) {
       // E82: the auto-substitute of x(...directArgs), handed out by the invocation (see setupEntryOf). E91: only when the
       // invocation can be a wrapper's (see wrapperThis); otherwise the member reading's own auto-substitute, below.
       if (!isStringAssertionKey(direct.key)) {
         if (wrapperThis(thisArg)) {
-          const directEntry = direct.state.callEntry(direct.key, directHashes!)
+          const directEntry = direct.state.callEntry(direct.key, directArgs!)
           directEntry.handOut(memberRecord)
           directAnswers.set(memberRecord, memberState)
           // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
@@ -1218,13 +1217,13 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         }
         // E91 with E81: the direct reading answers the member reading's auto-substitute, so that a check through a
         // direct call with matchers (`redis(Arg.any())[received](1).toString()`) counts the calls made on it
-        const entry = memberState.callEntry(helper, hashes)
+        const entry = memberState.callEntry(helper, rawArgs)
         entry.handOut(memberRecord)
         if (directRecord.kind === 'call') direct.state.noteConfiguredAnswer(directRecord, entry)
         return entryProxy(entry)
       }
     }
-    const entry = memberState.callEntry(helper, hashes)
+    const entry = memberState.callEntry(helper, rawArgs)
     entry.handOut(memberRecord)
     return entryProxy(entry)
   }
@@ -1254,10 +1253,9 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         }
         const memberRecord = memberState.addRecord('call', 'bind', rawArgs, captureStack(bind))
         memberRecord.chainPrevious = chainHead
-        const hashes = new ArgumentHashes(rawArgs)
-        const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, memberRecord, thisArg)
+        const answer = memberReadingAnswer(memberState, 'bind', rawArgs, memberRecord, thisArg)
         if (answer !== NOT_CONFIGURED) return answer
-        const entry = memberState.callEntry('bind', hashes)
+        const entry = memberState.callEntry('bind', rawArgs)
         entry.handOut(memberRecord)
         return createBoundProxy(face, entry, thisArg, boundArgs)
       }
@@ -1270,25 +1268,22 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
  */
 const peekHelper = (face: Face, helper: FunctionHelperKey, rawArgs: any[], thisArg: unknown, directArgs: any[] | undefined): any => {
   const memberState = faceState(face)
-  const hashes = new ArgumentHashes(rawArgs)
-  const answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, undefined, thisArg)
+  const answer = memberReadingAnswer(memberState, helper, rawArgs, undefined, thisArg)
   if (answer !== NOT_CONFIGURED) return answer
   if (directArgs !== undefined) {
     const direct = directReadingOf(face)
-    const directHashes = new ArgumentHashes(directArgs)
-    const directAnswer = configuredAnswer(direct.state, direct.key, directArgs, directHashes, undefined, { thisArg, explicit: true })
+    const directAnswer = configuredAnswer(direct.state, direct.key, directArgs, undefined, { thisArg, explicit: true })
     if (directAnswer !== NOT_CONFIGURED) return directAnswer
-    if (!isStringAssertionKey(direct.key) && wrapperThis(thisArg)) return entryProxy(direct.state.callEntry(direct.key, directHashes))
+    if (!isStringAssertionKey(direct.key) && wrapperThis(thisArg)) return entryProxy(direct.state.callEntry(direct.key, directArgs))
   }
-  return entryProxy(memberState.callEntry(helper, hashes))
+  return entryProxy(memberState.callEntry(helper, rawArgs))
 }
 
 /** E95: `x.bind(...)` that a matcher's look makes (see peekGet): answered as dualHelper's bind would, leaving no trace. */
 const peekBind = (face: Face, rawArgs: any[], thisArg: unknown, boundArgs: any[]): any => {
   const memberState = faceState(face)
-  const hashes = new ArgumentHashes(rawArgs)
-  const answer = memberReadingAnswer(memberState, 'bind', rawArgs, hashes, undefined, thisArg)
-  return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', hashes), thisArg, boundArgs)
+  const answer = memberReadingAnswer(memberState, 'bind', rawArgs, undefined, thisArg)
+  return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', rawArgs), thisArg, boundArgs)
 }
 
 /*
@@ -1581,7 +1576,7 @@ const runsInDelegation = (state: SubstituteState, key: PropertyKey, read: Handle
  * read when the instance had no function for the member: the auto-substitute that call answers otherwise).
  */
 const partOfDelegation = (state: SubstituteState, key: PropertyKey, read: HandleRead, args: any[], self: Self): any => {
-  if (read.fn === undefined) return entryProxy(state.callEntry(key, new ArgumentHashes(args)))
+  if (read.fn === undefined) return entryProxy(state.callEntry(key, args))
   return callOrConstruct(read.fn, self.explicit ? self.thisArg : state.mimicked!.instance, args, self)
 }
 
@@ -1840,11 +1835,10 @@ const peekDeferredRead = (state: SubstituteState, key: PropertyKey, substitution
  */
 const peekCall = (state: SubstituteState, key: PropertyKey, args: any[], self: Self): any => {
   if (RecordedArguments.containsMatchers(args)) return configureCall(state, key, RecordedArguments.forSpecification(args), isStringAssertionKey(key))
-  const hashes = new ArgumentHashes(args)
-  const answer = configuredAnswer(state, key, args, hashes, undefined, self)
+  const answer = configuredAnswer(state, key, args, undefined, self)
   if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return answer
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
-  return entryProxy(state.callEntry(key, hashes))
+  return entryProxy(state.callEntry(key, args))
 }
 
 /** A real property assignment by the code under test (`site`: its call site). */
@@ -2007,9 +2001,9 @@ const noteHelperThrew = (memberRecord: CallRecord, memberState: SubstituteState,
 }
 
 /** The configured answer to a call: a matching substitution, or the mimicked instance. NOT_CONFIGURED otherwise. */
-const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], hashes: ArgumentHashes, record: CallRecord | undefined, self: Self): any => {
+const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord | undefined, self: Self): any => {
   // E100: a real call is matched in the look of its arguments (see Look); a matcher's look (no record) as a look
-  const substitution = state.findCallSubstitution(key, hashes, record !== undefined)
+  const substitution = state.findCallSubstitution(key, args, record !== undefined)
   if (substitution !== undefined) {
     // (no record: a matcher's look, E95)
     if (record === undefined) return peekExecute(substitution, args, self)
@@ -2035,13 +2029,12 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
 }
 
 const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], record: CallRecord, self: Self): any => {
-  const hashes = new ArgumentHashes(args)
   let answer: any
   answerSource = undefined
   // E101 (R15V-1): noted without catching (see noteThrew)
   let answered = false
   try {
-    answer = configuredAnswer(state, key, args, hashes, record, self)
+    answer = configuredAnswer(state, key, args, record, self)
     answered = true
   } finally {
     if (!answered) noteThrew(state, key, record)
@@ -2050,7 +2043,7 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   if (answer !== NOT_CONFIGURED && (self.construct !== true || isObjectLike(answer))) return handOutConfigured(answer, record, state)
   // E36: or, for a subclass (new.target), a new instance of it
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
-  const entry = state.callEntry(key, hashes)
+  const entry = state.callEntry(key, args)
   entry.handOut(record)
   if (isStringAssertionKey(key) && self.construct !== true) deferStringCheck(state, key, args, entry, record)
   return entryProxy(entry)
@@ -2777,7 +2770,7 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
         if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(record)
         continue
       }
-      if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
+      if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, record.args ?? []))
       else if (isFaceAnswer(answer)) {
         answered.add(checkedOf(answer))
         if (sharing) (shared ?? (shared = new Set())).add(answer)
@@ -3257,7 +3250,7 @@ const nestedSetupTarget = (
   state: SubstituteState, key: PropertyKey, specification: RecordedArguments, property: PropertyKey | undefined, start: Function, configuring: boolean
 ): any => {
   const answering = specification.argumentsClass === 'plain'
-    ? state.findCallSubstitution(key, new ArgumentHashes(specification.value!))
+    ? state.findCallSubstitution(key, specification.value!)
     : state.callSubstitutionFor(key, specification)
   const call = `${memberLabel(key)}${formatArguments(specification.value, false)}`
   const path = `${state.memberPath(key)}${formatArguments(specification.value, false)}${property === undefined ? '(...)' : `.${keyToString(property)}`}`

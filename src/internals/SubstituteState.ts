@@ -10,11 +10,6 @@ export { pathArguments } from './Paths'
 
 let substitutionOrder = 0
 
-/** The actual arguments of one call, as the engine hands them to the lookups below. */
-export class ArgumentHashes {
-  constructor(public readonly args: readonly unknown[]) { }
-}
-
 /** A configured behaviour: `sub.add(1, Arg.any()).returns(3, 4)`, `sub.prop.throws(err)`, ... */
 export class Substitution {
   private _next = 0
@@ -165,8 +160,7 @@ class CallSubstitutions {
    * The most specific class wins (all-literal, then predicates, then Arg.all()); within a class the most recent one.
    * `real`: for a real call of the code under test (E100, see Look).
    */
-  public match(hashes: ArgumentHashes, real = false): Substitution | undefined {
-    const actualArguments = hashes.args
+  public match(actualArguments: readonly unknown[], real = false): Substitution | undefined {
     const literal = this._literal
     for (let index = literal.length - 1; index >= 0; index--) {
       const candidate = literal[index]
@@ -443,7 +437,7 @@ export class SubstituteState {
    * The substitution that answers a call: the most specific class wins (all-literal, then predicates,
    * then Arg.all()), and within a class the most recently configured one wins.
    */
-  public findCallSubstitution(key: PropertyKey, actualArguments: ArgumentHashes, real = false): Substitution | undefined {
+  public findCallSubstitution(key: PropertyKey, actualArguments: readonly unknown[], real = false): Substitution | undefined {
     return this._callSubstitutions.get(key)?.match(actualArguments, real)
   }
 
@@ -472,15 +466,15 @@ export class SubstituteState {
    * The auto-substitute for a call with these actual (literal) arguments (D2): the first one whose arguments match them
    * now, else a new one.
    */
-  public callEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry {
+  public callEntry(key: PropertyKey, actual: readonly unknown[]): AutoEntry {
     let list = this._callEntries.get(key)
     if (list === undefined) {
       list = []
       this._callEntries.set(key, list)
     }
-    let entry = list.find(candidate => candidate.matchesCall(actual.args))
+    let entry = list.find(candidate => candidate.matchesCall(actual))
     if (entry === undefined) {
-      entry = new AutoEntry('call', this, key, RecordedArguments.from(actual.args as any[]))
+      entry = new AutoEntry('call', this, key, RecordedArguments.from(actual as any[]))
       list.push(entry)
     }
     return entry
@@ -490,13 +484,13 @@ export class SubstituteState {
    * E81: the auto-substitute that callEntry gives a call with these actual arguments, if it has been created: the one
    * that an unconfigured call with them answered.
    */
-  public existingCallEntry(key: PropertyKey, actual: ArgumentHashes): AutoEntry | undefined {
-    return this._callEntries.get(key)?.find(candidate => candidate.matchesCall(actual.args))
+  public existingCallEntry(key: PropertyKey, actual: readonly unknown[]): AutoEntry | undefined {
+    return this._callEntries.get(key)?.find(candidate => candidate.matchesCall(actual))
   }
 
   /** The auto-substitute for a call specification used in a nested setup (`a(Arg.any()).b.returns(1)`). */
   public specificationEntry(key: PropertyKey, specification: RecordedArguments): AutoEntry {
-    if (specification.argumentsClass === 'plain') return this.callEntry(key, new ArgumentHashes(specification.value!))
+    if (specification.argumentsClass === 'plain') return this.callEntry(key, specification.value!)
     let list = this._specificationEntries.get(key)
     if (list === undefined) {
       list = []
