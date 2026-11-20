@@ -2,7 +2,7 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
-import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
+import { codeMember, pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
@@ -1694,8 +1694,23 @@ const defineOnInstance = (face: Face, key: PropertyKey, descriptor: PropertyDesc
       delete defined.configurable
     }
   }
+  if (Reflect.defineProperty(instance, key, defined)) return true
+  // E129: node:test's mock of the member (see wrapsOwnHandle) on an instance that refuses it (a frozen one): on the
+  // substitute itself, it would answer every call without the substitute's setups and recording, so it is refused
+  if (typeof defined.value === 'function' && wrapsOwnHandle(defined.value)) throw mockRefusedError(face, key)
+  // (what the instance has already, one of the substitute's own member handles that a restore of such a mock gives back:
+  // nothing to change)
+  if ('value' in descriptor && ownHandleOf(state, descriptor.value) !== undefined && Reflect.getOwnPropertyDescriptor(instance, key)?.value === defined.value) return true
   // (an instance that refuses it, a frozen one, leaves it to the substitute itself, as before)
-  return Reflect.defineProperty(instance, key, defined) ? true : undefined
+  return undefined
+}
+
+/** E129: node:test's mock.method on a member of a substitute whose instance refuses the mock (see defineOnInstance). */
+const mockRefusedError = (face: Face, key: PropertyKey): TypeError => {
+  const member = codeMember(key) ?? `[${keyToString(key)}]`
+  return new TypeError(`Cannot define node:test's mock of ${keyToString(key)} on ${face.path}: the instance it mimicks refuses it (a frozen ` +
+    `instance), and on the substitute itself the mock would answer every call without the substitute's setups and recording. Mock a ` +
+    `reference to the member instead (mock.fn(sub${member})), or mimick an instance that is not frozen.`)
 }
 
 /**

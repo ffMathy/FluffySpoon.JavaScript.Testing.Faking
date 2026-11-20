@@ -140,6 +140,42 @@ test('R17-ADV-4 (E129) a function that wraps a member handle on the instance (no
   t.is(fs.child, child)
 })
 
+test('R17-ADV-4 (E129) a frozen instance: mock.method throws a TypeError instead of putting the mock on the substitute, where it would answer without the setups; sealed instances work', t => {
+  for (const implementation of [undefined, () => ({ size: -1 })]) {
+    const real = Object.freeze({ stat: (path: string) => ({ size: path.length }) })
+    const fs = Substitute.for<any>()
+    fs[mimick](real)
+    fs[configure]().stat('/configured').returns({ size: 99 })
+    try {
+      const error = t.throws(() => implementation === undefined ? mock.method(fs, 'stat') : mock.method(fs, 'stat', implementation), { instanceOf: TypeError })
+      t.true(error?.message.startsWith("Cannot define node:test's mock of stat on @Substitute: the instance it mimicks refuses it (a frozen instance)"), error?.message)
+    } finally {
+      mock.restoreAll() // (node keeps the mock it could not define: its restore changes nothing)
+    }
+    t.deepEqual([fs.stat('/configured'), fs.stat('/xy')], [{ size: 99 }, { size: 3 }])
+    t.notThrows(() => fs.received(2).stat(Arg.any()))
+    t.deepEqual(Object.keys(fs), ['stat'], 'the substitute still enumerates like its instance')
+    // a mock of a reference works
+    const spied = mock.fn(fs.stat)
+    t.deepEqual(spied('/configured'), { size: 99 })
+    t.is(spied.mock.callCount(), 1)
+  }
+  // a sealed instance takes the mock, with or without an implementation
+  const sealed = Object.seal({ stat: (path: string) => ({ size: path.length }) })
+  const fs = Substitute.for<any>()
+  fs[mimick](sealed)
+  fs[configure]().stat('/configured').returns({ size: 99 })
+  const spied = mock.method(fs, 'stat', () => ({ size: -1 }))
+  try {
+    t.deepEqual([fs.stat('/configured'), fs.stat('/xy')], [{ size: 99 }, { size: -1 }])
+    t.is(spied.mock.callCount(), 2)
+    t.notThrows(() => fs.received(1).stat('/xy'))
+  } finally {
+    mock.restoreAll()
+  }
+  t.deepEqual(fs.stat('/ab'), { size: 3 })
+})
+
 test('R17-ADV-4 (E129) plain substitutes and other spies are unchanged: mock.method still throws on a substitute that mimicks nothing', t => {
   const api = Substitute.for<any>()
   t.throws(() => mock.method(api, 'fetch'), { instanceOf: TypeError })
