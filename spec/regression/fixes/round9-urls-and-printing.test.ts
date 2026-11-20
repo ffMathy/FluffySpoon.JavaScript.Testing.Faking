@@ -36,7 +36,7 @@ test('R8FE-7 (E42) promises, WeakMaps and WeakSets: the same one finds its setup
     // the same one finds its setup
     const tracker = Substitute.for<any>()
     tracker.track(a).returns('tracked')
-    t.is(tracker.track(a), 'tracked')
+    t.is(tracker.track(a), 'tracked', name)
   }
 })
 
