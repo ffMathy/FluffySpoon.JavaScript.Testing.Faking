@@ -436,8 +436,8 @@ type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
 // their types from `OverloadsContextualImplementation`.
 type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], R> =
   V extends 'assertion' ? void :
-  V extends 'configure' ? ConfigurationResult<R, (this: OverloadsImplementation<TOverloads, R>) => R> :
-  SubstitutionResult<R, (this: OverloadsImplementation<TOverloads, R>) => R>
+  V extends 'configure' ? ConfigurationResult<R, OverloadsImplementation<TOverloads, R>> :
+  SubstitutionResult<R, OverloadsImplementation<TOverloads, R>>
 /**
  * `.mimicks()` of a setup that takes the calls of several overloads (`TOverloads`, see `Overloads`), each with the
  * value `R` (R16FE-1, T80): an implementation fits when it can stand in for each of them (an intersection of one
@@ -445,11 +445,6 @@ type AllOverloadsCallResult<V extends SubstituteView, TOverloads extends any[], 
  * trailing parameters. `OverloadsContextualImplementation` is one signature that every such implementation fits,
  * which types its parameters from the context on every TypeScript version (TypeScript 4.2 and older give a function
  * passed for an intersection of function types no contextual type: an untyped parameter would be implicitly `any`).
- * (The type parameters' constraints are only computed for a call of `.mimicks()`. The setup result carries the
- * overloads in the `this` type of its implementation type, see `OverloadsImplementation`: TypeScript computes such
- * results for many members of some substitutes, a TypeORM `Repository` among them, also where `.mimicks()` is not
- * used, and computing what `.mimicks()` takes up front, or carrying the overloads in an object type, cost a substitute
- * of `Repository` 10% to 28% more type instantiations on TypeScript 5.0.)
  */
 export type OverloadsMimicksFunction<TOverloads, R> =
   <TImplementation extends OverloadsContextual<TOverloads, R>, TMore extends OverloadsContextual<TOverloads, R>[]>(
