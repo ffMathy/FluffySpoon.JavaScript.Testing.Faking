@@ -124,12 +124,10 @@ const memberAccess = (key: PropertyKey): string =>
 const asHints = (hint: string | undefined): string[] | undefined => hint === undefined ? undefined : [hint]
 
 /**
- * E97: how many auto-substitutes (and received calls on them) the search of fluentChainHint looks at, at most, and how
- * many places it names. Like a printout of a substitute (E35), it walks the auto-substitutes without recursion and
- * builds only the paths it shows (bounded, see Paths), so a deep or wide tree of them costs little; it runs only when
- * a check fails.
+ * E97: how many places fluentChainHint names, at most. Like a printout of a substitute (E35), its search walks the
+ * auto-substitutes without recursion and builds only the paths it shows (bounded, see Paths); it runs only when a check
+ * fails.
  */
-const FLUENT_SEARCH_BUDGET = 10000
 const FLUENT_PATHS_SHOWN = 3
 /** E97: and the characters of each path it names, at most (each argument in a path is bounded, but a path has many). */
 const FLUENT_PATH_CHARACTERS = 1000
@@ -140,8 +138,7 @@ const FLUENT_METHODS_SHOWN = 3
  * E97 (R14FE-5): a check that found no record of the member on the checked substitute, while a member of that name was
  * called on auto-substitutes further down (the code under test made an unconfigured fluent call, as in
  * `reply.code(404).send(...)` or `span.setAttribute(...).setStatus(...)`, whose result is a new substitute): a hint that
- * names up to FLUENT_PATHS_SHOWN of them, nearest first, and the remedy. Undefined when there are none (within the
- * search's bounds).
+ * names up to FLUENT_PATHS_SHOWN of them, nearest first, and the remedy. Undefined when there are none.
  *
  * E108 (R15-ADV-6): the remedy is for the first place named, and works when it is followed. When every step from the
  * checked substitute down to it is a call (`reply.code(404).header(...).send(...)`), it names each of those methods
@@ -166,18 +163,13 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   const roots: readonly SubstituteState[] = subject instanceof SubstituteState ? [subject] : subject.states
   const found: SubstituteState[] = []
   let more = false
-  let budget = FLUENT_SEARCH_BUDGET
-  // breadth first, so that the nearest places come first; each auto-substitute is looked at when it is reached, so that
-  // the first ones of a substitute with more of them than the budget are looked at, too
+  // breadth first, so that the nearest places come first
   const queue: SubstituteState[] = [...roots]
   search: for (let index = 0; index < queue.length; index++) {
     for (const entry of queue[index].entries()) {
-      if (--budget < 0) break search
       const nested = entry.materializedState
       if (nested === undefined) continue
-      const records = nested.recordsFor(key)
-      budget -= records.length
-      if (records.some(record => record.kind === 'call')) {
+      if (nested.recordsFor(key).some(record => record.kind === 'call')) {
         if (found.length === FLUENT_PATHS_SHOWN) {
           more = true
           break search
