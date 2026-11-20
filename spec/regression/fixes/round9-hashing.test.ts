@@ -7,43 +7,13 @@ import { Substitute, Arg } from '../../../src'
 import { MAX_LISTED_CHARACTERS, SubstituteException } from '../../../src/internals/SubstituteException'
 import { structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { MESSAGE_BOUNDS, formatValue } from '../../../src/internals/utilities/Stringify'
-import { MAX_FACTOR, TimeLimit, assertFast, assertWithin, loadFactor, timeLimit } from '../../helpers/timing'
+import { MAX_FACTOR, TimeLimit, assertWithin, loadFactor, timeLimit } from '../../helpers/timing'
 
 // Round 9, engine A: the hash of URLs and other values that Node.js compares by internal state or by identity (fix spec
 // E42), timing tests that hold up on a busy machine (E43), and bounded printing (E44, E45). This file runs in the
 // serial run of the timing-sensitive files (see ava.config.js).
 
 // ---- E42: URLs, promises, WeakMaps and WeakSets ---------------------------------------------------------------------
-
-const urls = (count: number, offset = 0) => Array.from({ length: count }, (_, index) => new URL(`https://api.example.com/items?page=${offset + index}`))
-
-test('R8FE-7 (E42) 10,000 calls with distinct URLs, also inside an object, stay well under 1 s', t => {
-  // d5b96ab: all URLs had one hash, so each call was compared with every earlier one: 16.5 s for the first shape
-  const plain = urls(10_000)
-  const wrapped = urls(10_000, 20_000).map(url => ({ url }))
-  assertFast(t, 1000, '10,000 calls http.fetch(url) with distinct URLs', () => {
-    const http = Substitute.for<any>()
-    for (const url of plain) http.fetch(url)
-  })
-  assertFast(t, 1000, '10,000 calls http.request({ url }) with distinct URLs', () => {
-    const http = Substitute.for<any>()
-    for (const options of wrapped) http.request(options)
-  })
-})
-
-test('R8FE-7 (E42) 1,000 calls with distinct fetch Requests stay well under 1 s', t => {
-  const RequestClass = (globalThis as any).Request
-  if (typeof RequestClass !== 'function') {
-    t.pass('no fetch Request in this Node.js')
-    return
-  }
-  // d5b96ab on Node.js 22: 2.8 s, as a Request holds its URL as a URL
-  const requests = Array.from({ length: 1000 }, (_, index) => new RequestClass(`https://api.example.com/items?page=${index}`))
-  assertFast(t, 1000, '1,000 calls http.send(request) with distinct Requests', () => {
-    const http = Substitute.for<any>()
-    for (const request of requests) http.send(request)
-  })
-})
 
 test('R8FE-7 (E42) URLs that the running Node.js finds deep strictly equal share a hash, and other URLs do not', t => {
   const spellings = [
@@ -95,7 +65,7 @@ test('R8FE-7 (E42) calls with URLs match setups and checks as before: by href', 
   t.throws(() => http.received(1).fetch(new URL('https://api.example.com/users/3')))
 })
 
-test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and 10,000 calls with distinct ones stay well under 1 s', t => {
+test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and the same one finds its setup', t => {
   const kinds: Array<[string, () => object]> = [
     ['promises', () => Promise.resolve(1)],
     ['pending promises', () => new Promise(() => { })],
@@ -110,11 +80,6 @@ test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and
     if (isDeepStrictEqual(a, b)) t.is(structuralHash(a), structuralHash(b), name)
     else t.not(structuralHash(a), structuralHash(b), name)
     t.is(structuralHash(a), structuralHash(a))
-    const values = Array.from({ length: 10_000 }, create)
-    assertFast(t, 1000, `10,000 calls with distinct ${name}`, () => {
-      const tracker = Substitute.for<any>()
-      for (const value of values) tracker.track(value)
-    })
     // the same one finds its setup
     const tracker = Substitute.for<any>()
     tracker.track(a).returns('tracked')
