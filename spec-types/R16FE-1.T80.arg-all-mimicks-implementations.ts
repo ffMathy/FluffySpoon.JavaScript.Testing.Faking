@@ -141,3 +141,37 @@ const plainUsers = Substitute.for<PlainUsers>()
 plainUsers.save(Arg.all()).mimicks(entity => Promise.resolve(entity))
 // @ts-expect-error the same for a function assigned to the member
 const plainSaveWithoutTypeParameters: PlainUsers['save'] = entity => Promise.resolve(entity)
+
+// R17TD-1 / T82 A union of implementations (a conditional expression, or a value typed as a union of functions) fits
+// only when every one of them does, as when such a union is assigned to the member itself (TS2322). In 2.0.1 before T82
+// it fitted when one of them did (strict mode only).
+declare const cond: boolean
+const takesEveryCall = (...args: any[]) => Promise.resolve(row)
+const takesAnyRow = (entity: any) => Promise.resolve(entity)
+const takesOneRow = (entity: Row) => Promise.resolve(entity)
+repo.remove(Arg.all()).mimicks(cond ? takesEveryCall : takesAnyRow)
+repo.remove(Arg.all())[mimicks](cond ? takesEveryCall : takesAnyRow)
+repo[configure]().remove(Arg.all()).mimicks(cond ? takesEveryCall : takesAnyRow)
+declare const fitting: typeof takesEveryCall | typeof takesAnyRow
+repo.remove(Arg.all()).mimicks(fitting)
+repo.remove(Arg.all()).mimicks(async () => row, fitting)
+// @ts-expect-error takesOneRow does not take the Row[] that remove(entities) passes
+repo.remove(Arg.all()).mimicks(cond ? takesEveryCall : takesOneRow)
+// @ts-expect-error the symbol form too
+repo.remove(Arg.all())[mimicks](cond ? takesEveryCall : takesOneRow)
+// @ts-expect-error in the configure view too
+repo[configure]().remove(Arg.all()).mimicks(cond ? takesEveryCall : takesOneRow)
+declare const either: typeof takesEveryCall | typeof takesOneRow
+// @ts-expect-error a union typed value
+repo.remove(Arg.all()).mimicks(either)
+// @ts-expect-error and in further implementations
+repo.remove(Arg.all()).mimicks(async () => row, either)
+// @ts-expect-error plain TypeScript rejects the union for the member itself
+const plainEither: Repo['remove'] = either
+// @ts-expect-error none of them fits
+repo.remove(Arg.all()).mimicks(cond ? takesOneRow : (entity: Row[]) => Promise.resolve(entity))
+// @ts-expect-error get() passes no key
+store.get(Arg.all()).mimicks(cond ? (() => ['a']) : ((key: string) => key))
+// @ts-expect-error in the configure view too
+store[configure]().get(Arg.all()).mimicks(cond ? (() => ['a']) : ((key: string) => key))
+store.get(Arg.all()).mimicks(cond ? (() => ['a']) : ((key?: string) => key === undefined ? ['a'] : key))
