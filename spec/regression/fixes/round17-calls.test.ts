@@ -3,6 +3,7 @@ import test, { ExecutionContext } from 'ava'
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
+import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 17: the calls-and-arguments part of the round-16 findings (R16-ADV-2, R16FE-5, R16-ADV-8, R16V-1), decided in
 // the fix spec as E109, E116, E117 and E118. The timing tests of E109 are in round17-calls-hashing.test.ts (serial run).
@@ -284,4 +285,141 @@ test('R16V-1 (E118) a revoked function proxy as a configured answer, an argument
   t.notThrows(() => String(pool))
   t.notThrows(() => String(sink))
   t.true(failureOf(t, () => sink.received(2).release(connection)).includes('release'))
+})
+
+// ---- E116 (R16FE-5): the steps before a check view belong to the check opened in their expression ------------------
+
+/** A socket.io-like server where every room answers one shared substitute (a nested setup through a call with matchers). */
+const sharedRooms = () => {
+  const io = Substitute.for<any>()
+  io.to(Arg.any()).emit(Arg.all()).returns(true)
+  io.to('room-a').emit('message', 'hi') // the code under test: only room-a
+  return io
+}
+
+test('R16FE-5 (E116) a check view opened in a helper and completed by the caller records nothing of the steps before it, and E99 narrows as inline', t => {
+  // test-utils helpers that return a check for the caller to complete
+  const sentTo = (io: any, room: string) => io.to(room).received(1)
+  const notSentTo = (io: any, room: string) => io.to(room).didNotReceive()
+  const sentAnyTo = (io: any, room: string) => io.to(room).received()
+  const countedTo = (io: any, room: string, count: number) => io.to(room).received(count)
+  for (const io of [sharedRooms(), sharedRooms()]) {
+    failureOf(t, () => sentTo(io, 'room-b').emit('message', Arg.any()), 'nothing was emitted to room-b')
+    t.notThrows(() => notSentTo(io, 'room-b').emit('message', Arg.any()))
+    failureOf(t, () => sentAnyTo(io, 'room-b').emit('message', Arg.any()))
+    t.notThrows(() => countedTo(io, 'room-b', 0).emit('message', Arg.any()))
+    t.notThrows(() => sentTo(io, 'room-a').emit('message', Arg.any()))
+    // no phantom calls of to() or received()
+    t.notThrows(() => io.didNotReceive().to('room-b'))
+    t.notThrows(() => io.received(1).to(Arg.any()))
+    t.notThrows(() => io.to('room-a').didNotReceive().received(Arg.all()))
+  }
+  // an IIFE in the test, and nested helpers
+  const io = sharedRooms()
+  failureOf(t, () => (() => io.to('room-b').received(1))().emit('message', Arg.any()))
+  t.notThrows(() => (() => io.to('room-b').didNotReceive())().emit('message', Arg.any()))
+  const inner = (s: any, room: string) => s.to(room).received(1)
+  const outer = (s: any, room: string) => inner(s, room)
+  failureOf(t, () => outer(io, 'room-b').emit('message', Arg.any()))
+  t.notThrows(() => io.didNotReceive().to('room-b'))
+  t.notThrows(() => io.received(1).to(Arg.any()))
+})
+
+test('R16FE-5 (E116) helpers returning a check of a call result, a nested member, a property, an assignment and a direct call', t => {
+  const api = Substitute.for<any>()
+  api.getUser(1).save() // the code under test
+  const userCheck = (s: any, id: number) => s.getUser(id).received(1)
+  t.notThrows(() => userCheck(api, 1).save())
+  failureOf(t, () => userCheck(api, 2).save())
+  t.notThrows(() => api.received(1).getUser(1))
+  t.notThrows(() => api.didNotReceive().getUser(2))
+
+  const app = Substitute.for<any>()
+  app.logger.info('x')
+  void app.logger.level
+  app.options.port = 8080
+  const loggerCheck = (s: any) => s.logger.received(1)
+  t.notThrows(() => loggerCheck(app).info('x'))
+  t.notThrows(() => loggerCheck(app).level)
+  const optionsCheck = (s: any) => s.options.received(1)
+  t.notThrows(() => { optionsCheck(app).port = 8080 })
+  t.notThrows(() => app.received(2).logger)
+  t.notThrows(() => app.received(1).options)
+
+  const factory = Substitute.for<any>()
+  factory.make('job')('run')
+  const madeCheck = (s: any) => s.make('job').received(1)
+  t.notThrows(() => madeCheck(factory)('run'))
+  t.notThrows(() => factory.received(1).make('job'))
+
+  // the symbol forms decide where they are opened already: unchanged
+  const symbolCheck = (s: any, id: number) => s.getUser(id)[received](1)
+  t.notThrows(() => symbolCheck(api, 1).save())
+  t.notThrows(() => api.received(1).getUser(1))
+  const symbolNotCheck = (s: any, id: number) => s.getUser(id)[didNotReceive]()
+  t.notThrows(() => symbolNotCheck(api, 3).save())
+  t.notThrows(() => api.didNotReceive().getUser(3))
+})
+
+test('R16FE-5 (E116) stored handles and handles checked in a callback keep their calls; a stored view belongs to its opening wherever it is completed', t => {
+  // a handle that the test stores and checks after other uses of substitutes counts every call of the shared substitute
+  const io = sharedRooms()
+  const roomB = io.to('room-b')
+  const other = Substitute.for<any>()
+  other.ping()
+  t.notThrows(() => roomB.received(1).emit('message', Arg.any()), 'counts the emit of room-a')
+  t.notThrows(() => io.received(1).to('room-b'), 'the stored handle\'s call is recorded')
+
+  // README: a handle got in the test and checked in a callback keeps the reads that produced it
+  const app = Substitute.for<any>()
+  app.handlers.click.fire()
+  const click = app.handlers.click
+  t.notThrows(() => click.received(1).fire())
+  failureOf(t, () => app.didNotReceive().handlers)
+
+  // a view opened in one statement and completed in the next, or in a callback (8be3a70 kept the read of logger for the
+  // latter, as the use decided)
+  const service = Substitute.for<any>()
+  service.logger.info('x')
+  const view = service.logger.received(1)
+  view.info('x')
+  const later = service.logger.received(1)
+  t.notThrows(() => later.info('x'))
+  t.notThrows(() => service.received(1).logger)
+  // a view stored while other substitutes are used, then completed: no phantom call of received
+  const repo = Substitute.for<any>()
+  repo.find(1).save()
+  const stored = repo.find(1).received(1)
+  other.ping()
+  t.notThrows(() => stored.save())
+  t.notThrows(() => repo.received(1).find(1))
+  t.notThrows(() => repo.find(1).didNotReceive().received(Arg.all()))
+
+  // Error.stackTraceLimit = 0: adjacency decides, also for a helper
+  const limit = Error.stackTraceLimit
+  Error.stackTraceLimit = 0
+  try {
+    const rooms = sharedRooms()
+    const sentTo = (s: any, room: string) => s.to(room).received(1)
+    failureOf(t, () => sentTo(rooms, 'room-b').emit('message', Arg.any()))
+    t.notThrows(() => rooms.didNotReceive().to('room-b'))
+  } finally {
+    Error.stackTraceLimit = limit
+  }
+})
+
+test('R16FE-5 (E116) a check view that a helper returns and nothing completes is still reported (E48), once per view (E56)', t => {
+  const clock = interceptDeferredReports()
+  try {
+    const api = Substitute.for<any>()
+    api.getUser(1).save() // the code under test
+    const userCheck = (s: any, id: number) => s.getUser(id).received(1)
+    userCheck(api, 1) // nothing follows
+    userCheck(api, 1).save() // a complete check of the same form does not hide the report above
+    const reports = clock.run().map(error => plain((error as Error).message))
+    t.is(reports.length, 1, reports.join('\n'))
+    t.true(reports[0].startsWith('@Substitute.getUser(1).received(1) checked nothing'), reports[0])
+  } finally {
+    clock.uninstall()
+  }
 })
