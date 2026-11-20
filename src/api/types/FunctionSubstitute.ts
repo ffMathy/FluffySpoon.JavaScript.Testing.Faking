@@ -671,18 +671,14 @@ type EachCallable<TVariant> = TVariant extends unknown ? (Overloads<TVariant> ex
 type SignaturesOfSlots<TThis, V extends SubstituteView, F> = SignaturesOfBoxes<[
   BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, EarlierSlot>, TThis>, V, F>>>,
   BoxesOf<UnionToIntersection<ListBox<DistinctParameterLists<SlotParameterLists<F, 6>, TThis>, V, F>>>,
-  LastBoxes<DistinctParameterLists<SlotParameterLists<F, 7>, TThis>, TThis, V, F>
+  LastBoxes<TThis, V, F>
 ]>
 type EarlierSlot = 0 | 1 | 2 | 3 | 4 | 5
 // The boxes of the last overloads are made variant by variant (the boxes of the lists of several variants are one
 // type), so that they are created, and intersected, in the order of the variants: a call that the lists of several
 // variants accept (with `Arg.any()`) resolves to the first variant's list, as with the boxes per variant before T49.
-// That is only needed when the variants' last overloads have more than one distinct list (`TLists`). (The one box of a
-// single list goes through `UnionToIntersection` too: without it, TypeScript 3.6 reports this declaration as
-// "excessively deep" when it checks the typings, with skipLibCheck off.)
-type LastBoxes<TLists, TThis, V extends SubstituteView, F> = [TLists] extends [never] ? SignatureBox :
-  true extends IsUnion<TLists, TLists> ? BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>> :
-  BoxesOf<UnionToIntersection<ListBox<TLists, V, F>>>
+// (The boxes of variants that share a list are the same type, which the intersection keeps once.)
+type LastBoxes<TThis, V extends SubstituteView, F> = BoxesOf<UnionToIntersection<VariantBoxes<F, TThis, V, F>>>
 type VariantBoxes<TVariant, TThis, V extends SubstituteView, F> =
   TVariant extends unknown ? ListBox<DistinctParameterLists<ParameterListOf<Overloads<TVariant>[7]>, TThis>, V, F> : never
 type BoxesOf<TBoxes> = TBoxes extends SignatureBox ? TBoxes : SignatureBox
