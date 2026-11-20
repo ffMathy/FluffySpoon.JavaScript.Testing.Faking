@@ -1,7 +1,7 @@
 import test from 'ava'
 import { types } from 'util'
 
-import { Substitute, Arg } from '../../src'
+import { Substitute, Arg, configure } from '../../src'
 
 interface Calculator {
   add(a: number, b: number): number
@@ -40,7 +40,9 @@ test('returns a primitive value for method with specific arguments where the las
   calculator.multiply(2).returns(4)
   calculator.multiply(0, Arg.any('number')).returns(0)
   calculator.multiply(1, Arg.any()).returns(10)
-  calculator.multiply(1).returns(1)
+  // E22 (round 7): an omitted argument matches Arg.any(), so multiply(1) is already answered by the setup above (10),
+  // and re-configuring a call that an existing setup answers goes through the configure view (D5)
+  calculator[configure]().multiply(1).returns(1)
 
   t.is(4, calculator.multiply(2))
   t.is(0, calculator.multiply(0, 10))

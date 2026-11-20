@@ -1,56 +1,246 @@
-import { Argument, AllArguments, type ArgumentOptions, type PredicateFunction } from '../shared'
+import { inspect } from 'util'
+import { Argument, AllArguments, ArgumentOptions, PredicateFunction, isSubstituteProxy, registerMatcherFactory } from '../shared'
+import { cancelDeferredReportOf } from '../internals/Assertions'
 
+// The shape `createInversable` builds at runtime. The public types (`Is`, `Any`) give `.not` its own call signatures
+// with their own documentation, so that editors describe the inverse at `Arg.is.not(...)` (T35).
 type Inversable<T> = T & { not: T }
 type ExtractFirstArg<T> = T extends AllArguments<infer TArgs> ? TArgs[0] : T
 type ReturnArg<T> = Argument<T> & T
-const createInversable = <TArg, TReturn>(target: (arg: TArg, opt?: ArgumentOptions) => TReturn): Inversable<(arg: TArg) => TReturn> => {
-  const inversable = (arg: TArg) => target(arg)
-  inversable.not = (arg: TArg) => target(arg, { inverseMatch: true })
+// `stackStart`: the function the test called (Arg.any, Arg.any.not, ...), where the stack of a usage error starts (E47).
+// E49: the functions are named after the matcher (`[Function: any]`, not the internal `inversable`), and registered,
+// so that passing one without calling it (`Arg.any` for `Arg.any()`) is recognised as a usage error.
+const createInversable = <TArg, TReturn>(
+  target: (arg: TArg, opt: ArgumentOptions | undefined, stackStart: Function) => TReturn,
+  name: string, parameter: string, notParameter: string
+): Inversable<(arg: TArg) => TReturn> => {
+  const inversable = (arg: TArg) => target(arg, undefined, inversable)
+  const not = (arg: TArg) => target(arg, { inverseMatch: true }, not)
+  Object.defineProperty(inversable, 'name', { value: name, configurable: true })
+  Object.defineProperty(not, 'name', { value: 'not', configurable: true })
+  registerMatcherFactory(inversable, `Arg.${name}`, `Arg.${name}(${parameter})`)
+  registerMatcherFactory(not, `Arg.${name}.not`, `Arg.${name}.not(${notParameter})`)
+  inversable.not = not
   return inversable
 }
 
-const toStringify = (obj: any) => {
-  if (typeof obj.inspect === 'function') return obj.inspect()
-  if (typeof obj.toString === 'function') return obj.toString()
-  return obj
+const describePredicate = (predicate: Function): string => {
+  try {
+    const customInspect = (predicate as any).inspect
+    if (typeof customInspect === 'function') return String(customInspect.call(predicate))
+  } catch { /* fall through to the source text */ }
+  try {
+    return Function.prototype.toString.call(predicate)
+  } catch {
+    return '<predicate>'
+  }
 }
-const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options?: ArgumentOptions) => new Argument(
-  `Arg.is{${toStringify(predicate)}}`, predicate, options
-)
-type Is = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>) => ReturnArg<ExtractFirstArg<T>>
 
-type MapAnyReturn<T> = T extends 'any' ?
+const describeInvalidPredicate = (value: unknown): string => {
+  try {
+    return inspect(value, { depth: 0 })
+  } catch {
+    return typeof value
+  }
+}
+
+/**
+ * A usage error of a matcher, whose stack starts where the test called the matcher (`stackStart`). E37/E47: the check
+ * whose arguments the matcher was meant for (`sub.received(2).log(...)`) is never invoked, so the report that its
+ * invocation would have cancelled is cancelled here, when it is the report of that check: the usage error is then the
+ * only error (see cancelDeferredReportOf).
+ */
+const usageError = (message: string, stackStart: Function): TypeError => {
+  const error = new TypeError(message)
+  if (typeof Error.captureStackTrace === 'function') Error.captureStackTrace(error, stackStart)
+  cancelDeferredReportOf(stackStart)
+  return error
+}
+
+const isFunction = <T>(predicate: PredicateFunction<ExtractFirstArg<T>>, options: ArgumentOptions | undefined, stackStart: Function) => {
+  if (typeof predicate !== 'function')
+    throw usageError(`Arg.is expects a predicate function, but received ${describeInvalidPredicate(predicate)}.`, stackStart)
+  return new Argument(`Arg.is{${describePredicate(predicate)}}`, predicate, options)
+}
+type Is = {
+  /**
+   * Matches an argument for which `predicate` returns a truthy value: `calculator.add(Arg.is(x => x > 10), 2)`,
+   * `repository.save(Arg.is(user => user.name))`. The predicate's parameter type is taken from the parameter the matcher
+   * is passed to. It must decide synchronously: a predicate that returns a promise (an `async` one) does not compile. A
+   * predicate that throws counts as a non-match.
+   */
+  <T>(predicate: PredicateFunction<ExtractFirstArg<T>>): ReturnArg<ExtractFirstArg<T>>
+  /**
+   * Matches an argument for which `predicate` returns a truthy value: `const negative = Arg.is((x: number) => x < 0)`.
+   * It must decide synchronously: a predicate that returns a promise does not compile. A predicate that throws counts
+   * as a non-match.
+   */
+  // Infers the type from an annotated predicate when the matcher is created on its own, which TypeScript 3.6 and 3.7
+  // cannot do through `ExtractFirstArg` above (TD-6).
+  <T>(predicate: PredicateFunction<T>): ReturnArg<T>
+  /**
+   * The inverse of `Arg.is`: `Arg.is.not(predicate)` matches an argument for which `predicate` returns a falsy value,
+   * e.g. `calculator.divide(1, Arg.is.not(x => x === 0))`. A predicate that throws matches in neither form.
+   */
+  not: IsNot
+}
+
+type IsNot = {
+  /**
+   * The inverse of `Arg.is`: matches an argument for which `predicate` returns a FALSY value (it does not match where
+   * `Arg.is(predicate)` matches): `calculator.divide(1, Arg.is.not(x => x === 0))`. The predicate's parameter type is
+   * taken from the parameter the matcher is passed to. A predicate that throws matches in neither form.
+   */
+  <T>(predicate: PredicateFunction<ExtractFirstArg<T>>): ReturnArg<ExtractFirstArg<T>>
+  /**
+   * The inverse of `Arg.is`: matches an argument for which `predicate` returns a FALSY value (it does not match where
+   * `Arg.is(predicate)` matches): `const notZero = Arg.is.not((x: number) => x === 0)`. A predicate that throws
+   * matches in neither form.
+   */
+  <T>(predicate: PredicateFunction<T>): ReturnArg<T>
+}
+
+// 'function' and 'object' are mostly used for callback and object parameters, so they must be assignable to them (TD-5):
+// 'function' is typed as any function or constructor (its `matches` still accepts any `Function`), 'object' as `any`
+// (no type is assignable to every object type).
+type AnyFunction = Argument<Function> & ((...args: any[]) => any) & (new (...args: any[]) => any)
+
+// 'undefined' fits only parameters that accept `undefined` (T38). (`Argument<undefined> & undefined` is `never`, which
+// fits every parameter.) The type is taken from where the matcher is used: `TContext` is inferred from the parameter (or
+// property) type it is passed to. That type is used when it accepts `undefined`, and `undefined` otherwise, which is
+// then a compile error. Without such a type (`const m = Arg.any('undefined')`) it is `undefined`. A type assertion to a
+// matcher type (`<Argument<unknown>>Arg.any('undefined')`) keeps working.
+type UndefinedArg<TContext> = undefined extends TContext ? TContext : TContext extends Argument<any> ? TContext : undefined
+
+// 'string', 'number', 'boolean', 'symbol' and 'bigint' are typed as that primitive type, whatever the parameter they are
+// passed to (T66, which reverts round 10's T64). A matcher typed by the parameter it is passed to would also fit a
+// parameter of a subtype (`'EUR' | 'USD'`, an enum, a branded string), but it would then fit the FIRST overload whose
+// parameter is such a subtype, and lib.dom's querySelector<K extends keyof HTMLElementTagNameMap>, Node's
+// `on(event: 'close', ...)` overloads and keyed getters (`get(key: 'count'): number`) would resolve to the wrong
+// overload (R11TD-1). For such a parameter, use `Arg.is((c: Currency) => true)` or `Arg.any('string') as Currency`.
+type MapAnyReturn<T, TContext> = T extends 'any' ?
 ReturnArg<any> : T extends 'string' ?
 ReturnArg<string> : T extends 'number' ?
 ReturnArg<number> : T extends 'boolean' ?
 ReturnArg<boolean> : T extends 'symbol' ?
-ReturnArg<symbol> : T extends 'undefined' ?
-ReturnArg<undefined> : T extends 'object' ?
-ReturnArg<object> : T extends 'function' ?
-ReturnArg<Function> : T extends 'array' ?
+ReturnArg<symbol> : T extends 'bigint' ?
+ReturnArg<bigint> : T extends 'undefined' ?
+UndefinedArg<TContext> : T extends 'object' ?
+ReturnArg<any> : T extends 'function' ?
+AnyFunction : T extends 'array' ?
 ReturnArg<any[]> : any
 
-type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'undefined' | 'object' | 'function' | 'array' | 'any'
-type Any = <T extends AnyType = 'any'>(type?: T) => MapAnyReturn<T>
+// `Arg.any.not('undefined')` matches every defined value, so it fits any parameter. The other types keep the type of
+// the matcher without `.not`.
+type MapAnyNotReturn<T> = T extends 'undefined' ? ReturnArg<any> : MapAnyReturn<T, undefined>
 
-const anyFunction = (type: AnyType = 'any', options?: ArgumentOptions) => {
-  const description = `Arg.any{${type}}`
-  const predicate = (x: any) => {
-    switch (type) {
-      case 'any':
-        return true
-      case 'array':
-        return Array.isArray(x)
-      default:
-        return typeof x === type
-    }
+type AnyType = 'string' | 'number' | 'boolean' | 'symbol' | 'bigint' | 'undefined' | 'object' | 'function' | 'array' |
+  'any'
+type Any = {
+  /**
+   * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
+   * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
+   * substitutes), 'array' or 'any'.
+   */
+  // (A signature of its own, without type parameters, so that the most common matcher costs no inference.)
+  (): ReturnArg<any>
+  /**
+   * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
+   * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
+   * substitutes), 'array' or 'any'. The matcher of a primitive type has that type: for a parameter of a union of string
+   * literals, an enum or a branded string, use `Arg.is((c: Currency) => true)` or `Arg.any('string') as Currency`.
+   */
+  <T extends AnyType = 'any', TContext = undefined>(type?: T): MapAnyReturn<T, TContext>
+  /**
+   * The inverse of `Arg.any`: `Arg.any.not(type)` matches every argument that is NOT of the given type, e.g.
+   * `Arg.any.not('string')` matches every argument that is not a string.
+   */
+  not: AnyNot
+}
+
+type AnyNot = {
+  /**
+   * The inverse of `Arg.any`: matches every argument that is NOT of the given type (it does not match where
+   * `Arg.any(type)` matches): `Arg.any.not('string')` matches every argument that is not a string, and
+   * `Arg.any.not()` matches nothing. Types: 'string', 'number', 'boolean', 'symbol', 'bigint', 'undefined', 'object'
+   * (non-null objects, arrays and substitutes), 'function' (functions, classes and substitutes), 'array' or 'any'.
+   */
+  <T extends AnyType = 'any'>(type?: T): MapAnyNotReturn<T>
+}
+
+const createAnyPredicate = (type: string): PredicateFunction<unknown> => {
+  switch (type) {
+    case 'any':
+      return () => true
+    case 'array':
+      return x => Array.isArray(x)
+    case 'object':
+      // non-null objects (arrays included) and substitutes (which are function proxies)
+      return x => (typeof x === 'object' && x !== null) || isSubstituteProxy(x)
+    case 'function':
+      // functions, which includes substitutes
+      return x => typeof x === 'function'
+    default:
+      return x => typeof x === type
   }
-
-  return new Argument(description, predicate, options)
 }
 
-export const Arg = {
+// One predicate per type, so that two Arg.any('number') matchers are recognised as the same matcher.
+const anyPredicates = new Map<string, PredicateFunction<unknown>>()
+const anyPredicateFor = (type: string): PredicateFunction<unknown> => {
+  let predicate = anyPredicates.get(type)
+  if (predicate === undefined) {
+    predicate = createAnyPredicate(type)
+    anyPredicates.set(type, predicate)
+  }
+  return predicate
+}
+
+// E28: the type names Arg.any understands at runtime ('bigint' as well). Another name would silently never match, and its
+// `.not` form would match everything, so it is refused right away, as Arg.is refuses a predicate that is not a function.
+const anyTypes: readonly string[] = ['any', 'string', 'number', 'boolean', 'symbol', 'undefined', 'object', 'function', 'array', 'bigint']
+
+const anyFunction = (type: AnyType = 'any', options: ArgumentOptions | undefined, stackStart: Function) => {
+  if (typeof type !== 'string' || anyTypes.indexOf(type) === -1) {
+    const name = options?.inverseMatch ? 'Arg.any.not' : 'Arg.any'
+    throw usageError(
+      `${name} expects one of ${anyTypes.map(name => `'${name}'`).join(', ')} (or no argument for 'any'), ` +
+      `but received ${describeInvalidPredicate(type)}.`,
+      stackStart
+    )
+  }
+  const description = `Arg.any{${type}}`
+  return new Argument(description, anyPredicateFor(type), options)
+}
+
+type ArgMatchers = {
+  /**
+   * Matches all arguments. As the only argument it matches any argument list: `calculator.add(Arg.all())`. After
+   * leading arguments it matches the rest of the arguments, including none: `logger.log('saved', Arg.all())` matches
+   * `log('saved')` and `log('saved', 1, 2)`. Nothing may follow it.
+   */
+  all: <T extends any[]>() => AllArguments<T>
+  /**
+   * Matches an argument for which the predicate returns a truthy value: `calculator.add(Arg.is(x => x > 10), 2)`.
+   * `Arg.is.not(predicate)` matches where it returns a falsy value. A predicate that throws matches in neither form.
+   */
+  is: Is
+  /**
+   * Matches any argument (`Arg.any()`), or any argument of a type (`Arg.any('string')`): 'string', 'number',
+   * 'boolean', 'symbol', 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function'
+   * (functions, classes and substitutes), 'array' or 'any'. `Arg.any.not('string')` matches every argument that is not
+   * a string.
+   */
+  any: Any
+}
+
+/**
+ * Argument matchers for setups and assertions: `Arg.any()`, `Arg.is(predicate)`, `Arg.all()` and their `.not` forms.
+ * A call whose arguments contain a matcher is always a setup or an assertion, never a real call.
+ */
+export const Arg: ArgMatchers = {
   all: <T extends any[]>(): AllArguments<T> => new AllArguments<T>(),
-  is: createInversable(isFunction) as Inversable<Is>,
-  any: createInversable(anyFunction) as Inversable<Any>
+  is: createInversable<any, unknown>(isFunction, 'is', 'predicate', 'predicate') as unknown as Is,
+  any: createInversable<any, unknown>(anyFunction, 'any', '', 'type') as unknown as Any
 }
+registerMatcherFactory(Arg.all, 'Arg.all', 'Arg.all()')

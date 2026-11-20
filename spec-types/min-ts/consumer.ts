@@ -1,0 +1,477 @@
+// A consumer of the BUILT package typings (dist/*.d.ts), type-checked with old TypeScript versions by
+// `npm run test:types:min-ts`. Only plain code that must compile: no `@ts-expect-error` (TypeScript >= 3.9).
+import Substitute, {
+  Arg, SubstituteOf, SubstituteException,
+  received, didNotReceive, clearReceivedCalls, configure, mimick, returns, throws, mimicks, resolves, rejects
+} from '@fluffy-spoon/substitute'
+
+enum Status { Active, Disabled }
+
+interface Calculator {
+  add(a: number, b: number): number
+  divide(a: number, b: number): number
+  heavyOperation(...numbers: number[]): Promise<number>
+  isValid(input: string): boolean
+  status(id: number): Status
+  find(id: number): string | null
+  reset(): void
+  fail(message: string): never
+  format(...args: unknown[]): string
+  timeout?: number
+  onDone?(): string
+  isEnabled: boolean
+}
+
+const calculator = Substitute.for<Calculator>()
+const asCalculator: Calculator = calculator
+calculator.add(1, 2).returns(3)
+calculator.add(1, 2).returns(3, 4, 5)
+calculator.add(Arg.any(), Arg.is(b => b > 0)).returns(1)
+calculator.add(Arg.all()).mimicks((a, b) => a + b)
+calculator.divide(Arg.any('number'), 0).throws(new Error('Cannot divide by 0'))
+calculator.heavyOperation(1, 2).resolves(4)
+calculator.heavyOperation().rejects(new Error())
+calculator.isValid(Arg.any()).mimicks(input => input.length > 3)
+calculator.status(1).mimicks(() => Status.Active)
+calculator.find(1).returns(null)
+calculator.reset().returns()
+calculator.fail('x').throws(new Error('x'))
+calculator.format('a', 1).returns('a 1')
+calculator.timeout.returns(1000)
+calculator.onDone().returns('done')
+calculator.isEnabled.returns(true)
+calculator.add(1, 2)[returns](3)
+calculator.add(1, 2)[throws](new Error())
+calculator.add(1, 2)[mimicks]((a, b) => a - b)
+calculator.heavyOperation()[resolves](1)
+calculator.heavyOperation()[rejects](new Error())
+
+calculator.received().add(1, 2)
+calculator.received(2).add(Arg.all())
+calculator.didNotReceive().divide(1, 0)
+calculator.received().isEnabled = true
+calculator[received](1).add(1, 2)
+calculator[didNotReceive]().onDone()
+calculator[clearReceivedCalls]()
+calculator[configure]().add(1, 2).returns(3)
+calculator[mimick]({} as Calculator)
+
+// overloads, including one without parameters
+interface Store {
+  get(): string[]
+  get(key: string): string
+}
+const store = Substitute.for<Store>()
+store.get().returns(['a'])
+store.get('k').returns('v')
+store.get(Arg.is(key => key.length > 0)).returns('v')
+
+// index signatures
+interface Config {
+  name: string
+  [key: string]: unknown
+}
+const config = Substitute.for<Config>()
+config.name.returns('app')
+
+// members that conflict with the library's names
+interface Order {
+  returns: string[]
+  total(): number
+}
+interface Shop { find(id: string): Order }
+const shop = Substitute.for<Shop>()
+const order = Substitute.for<Order>()
+order.total().returns(1)
+order[received]().total()
+shop.find('1')[returns](order)
+
+// generic helpers
+function once<T>(sub: SubstituteOf<T>) {
+  return sub[received](1)
+}
+once(calculator).add(1, 2)
+
+// TD-2 / T26: setups and string assertions in generic code
+interface Repo<T> { get(id: string): T; find(id: string): T | undefined; count: number }
+function stubRepo<T>(repo: SubstituteOf<Repo<T>>, value: T) {
+  repo.count.returns(1)
+  repo.get(Arg.any()).returns(value)
+  repo.find('a').returns(undefined)
+  repo[configure]().get('b').returns(value)
+  repo.received().get('a')
+  repo.didNotReceive().find('b')
+}
+stubRepo(Substitute.for<Repo<string>>(), 'value')
+function expectNoCalls<T>(sub: SubstituteOf<T>) {
+  return sub.didNotReceive()
+}
+expectNoCalls(calculator).add(1, 2)
+
+// TD-1 / T25: members typed only null / undefined
+interface Ok { data: string; error?: undefined; nothing: null }
+const ok = Substitute.for<Ok>()
+ok.data.returns('x')
+const nothing: null = ok.nothing
+const asOk: Ok = ok
+
+// TD-3 / T27: Arg.all() after leading arguments
+interface Logger {
+  log(message: string, ...details: string[]): void
+  find(id: string, options?: { deep: boolean }): string
+}
+const logger = Substitute.for<Logger>()
+calculator.add(1, Arg.all()).returns(3)
+calculator.received().add(1, Arg.all())
+logger.received().log('saved', Arg.all())
+logger.find('1', Arg.all()).returns('x')
+
+// TD-5 / T28: Arg.any('function') / Arg.any('object') on typed parameters
+interface Bus { subscribe(handler: (value: number) => void): () => void; save(item: { id: string }): void }
+const bus = Substitute.for<Bus>()
+bus.subscribe(Arg.any('function')).returns(() => undefined)
+bus.received().save(Arg.any('object'))
+
+// TD-6 / T29: a matcher created on its own from an annotated predicate
+const negative = Arg.is((x: number) => x < 0)
+calculator.divide(negative, negative).returns(1)
+const notZero = Arg.is.not((x: number) => x === 0)
+calculator.divide(1, notZero).returns(2)
+
+// TD-7 / T30: clearing an optional property, checked in the assertion view
+interface Form { note?: string }
+const form = Substitute.for<Form>()
+form.received().note = undefined
+
+// R3TD-1 / T33: setups and checks through a type parameter's constraint (members that cannot be null or undefined;
+// nullable members need TypeScript 3.9 in generic code)
+interface Counter { add(a: number, b: number): number; total: number; load(): Promise<number> }
+function stubCounter<T extends Counter>(sub: SubstituteOf<T>) {
+  sub.total.returns(1)
+  sub.add(1, 2).returns(3)
+  sub.add(Arg.all()).mimicks((a, b) => a + b)
+  sub.load().resolves(1)
+  sub[configure]().total.returns(2)
+  sub[configure]().add(1, Arg.all()).returns(4)
+  sub.received().add(1, 2)
+  sub.received().total = 1
+  sub[didNotReceive]().add(Arg.any(), 2)
+}
+class CounterFixture<T extends Counter> {
+  sub = Substitute.for<T>()
+  arrange() { this.sub.add(1, 2).returns(3) }
+}
+stubCounter(Substitute.for<Counter>())
+new CounterFixture<Counter>().arrange()
+
+// R4TD-2 / R4V-1 / T40: optional and nullable members in generic code, through the configure view. The direct forms
+// (`sub.reset().returns()`, `sub.limit.returns(1)`, `box.maybe.returns(value)`) need TypeScript 4.8 for calls of
+// optional methods and 3.9 for the rest (spec-types/R4TD-2.R4V-1.T40.generic-optional-members.ts).
+interface Machine { start(): void; reset?(): void; find?(id: string): string | undefined; limit?: number; label: string | null }
+function stubMachine<T extends Machine>(sub: SubstituteOf<T>) {
+  sub.start().returns()
+  sub[configure]().reset().returns()
+  sub[configure]().find('a').returns('b')
+  sub[configure]().limit.returns(1)
+  sub[configure]().label.returns(null)
+  sub.received().reset()
+  sub[didNotReceive]().find(Arg.any())
+  const asMachine: Machine = sub
+  return asMachine
+}
+stubMachine(Substitute.for<Machine>())
+interface Box<T> { current: T; maybe?: T; orNull: T | null; find(id: string): T | undefined }
+function stubBox<T>(box: SubstituteOf<Box<T>>, value: T) {
+  box.current.returns(value)
+  box.find('a').returns(value)
+  box[configure]().maybe.returns(value)
+  box[configure]().orNull.returns(value)
+  box[configure]().orNull.returns(null)
+}
+stubBox(Substitute.for<Box<number>>(), 1)
+
+// R6V-4 / T43: members reached through a generic key of a mapped type keep their setup API
+function stubByKey<K extends string>(sub: SubstituteOf<Record<K, () => number>>, key: K) {
+  sub[key]().returns(1)
+  sub[configure]()[key]().returns(2)
+}
+function stubLoaderByKey<K extends string>(sub: SubstituteOf<Record<K, (id: string) => Promise<number>>>, key: K) {
+  sub[key]('a').resolves(1)
+  sub[key](Arg.any()).rejects(new Error())
+}
+type EventHandlers<E extends string> = { [P in E]: (payload: string) => boolean }
+function stubHandler<E extends string>(handlers: SubstituteOf<EventHandlers<E>>, event: E) {
+  handlers[event]('p').returns(true)
+}
+stubByKey(Substitute.for<Record<'a', () => number>>(), 'a')
+stubLoaderByKey(Substitute.for<Record<'a', (id: string) => Promise<number>>>(), 'a')
+stubHandler(Substitute.for<EventHandlers<'saved'>>(), 'saved')
+
+// R6FE-7 / T46: generic methods, configured and checked with their type parameters replaced by their constraints
+interface ChannelEvents { saved: (id: string) => void; failed: (error: Error) => void }
+interface Channel {
+  on<E extends keyof ChannelEvents>(event: E, listener: ChannelEvents[E]): this
+  emit<E extends keyof ChannelEvents>(event: E, ...args: Parameters<ChannelEvents[E]>): boolean
+}
+const channel = Substitute.for<Channel>()
+channel.emit('saved', 'id1').returns(true)
+channel.emit(Arg.all()).returns(false)
+channel[configure]().emit('saved', Arg.any()).returns(true)
+channel.on(Arg.any(), Arg.any()).returns(channel)
+channel.received(1).emit('saved', 'id1')
+interface Settings { port: number; host: string }
+interface SettingsService { get<K extends keyof Settings>(key: K): Settings[K] }
+const settings = Substitute.for<SettingsService>()
+settings.get('port').returns(80)
+settings.get(Arg.any()).returns('localhost')
+settings.received().get(Arg.all())
+
+// R6FE-3 / T47: constructor types and constructor members are configured and checked with call syntax
+interface HttpClient { get(path: string): Promise<string> }
+type HttpClientFactory = new (baseUrl: string) => HttpClient
+const HttpClientCtor = Substitute.for<HttpClientFactory>()
+HttpClientCtor('https://api').returns(Substitute.for<HttpClient>())
+HttpClientCtor.received(1)(Arg.any())
+const httpClient: HttpClient = new HttpClientCtor('https://api')
+class Pool { constructor(readonly size: number) { } }
+interface PoolModule { Pool: typeof Pool }
+const poolModule = Substitute.for<PoolModule>()
+poolModule.Pool(4).returns(new Pool(4))
+poolModule.received(1).Pool(Arg.any())
+
+// R6FE-5 / T48: Arg.any('bigint'); R6TD-3 / T48: unions of types with a string index signature
+interface Ledger { credit(amount: bigint): bigint }
+declare const amount: bigint
+const ledger = Substitute.for<Ledger>()
+ledger.credit(Arg.any('bigint')).returns(amount)
+interface MeowPet { kind: 'cat'; [key: string]: unknown; speak(): 'meow' }
+interface WoofPet { kind: 'dog'; [key: string]: unknown; speak(): 'woof' }
+const anyPet = Substitute.for<MeowPet | WoofPet>()
+anyPet.speak().returns('meow')
+anyPet.speak().returns('woof')
+
+// R3TD-6 / R3-3 / T37: substitutes of function types
+type Listener = (event: string) => string
+const listener = Substitute.for<Listener>()
+listener('saved').returns('ack')
+listener(Arg.all()).mimicks(event => event)
+listener.received(1)('saved')
+listener.didNotReceive()(Arg.any())
+listener[received](1)('saved')
+listener[configure]()('saved').returns('ack')
+const asListener: Listener = listener
+
+// R3TD-4 / T36: unions whose variants declare members as only null
+type QueryResult = { data: string[]; error: null } | { data: null; error: Error }
+const queryResult = Substitute.for<QueryResult>()
+queryResult.data.returns(['a'])
+queryResult.error.returns(null)
+const asQueryResult: QueryResult = queryResult
+
+// R4TD-1 / T39 and R5TD-1 / T42: a union whose variants declare a method with different return types or parameter
+// lists; the setup API takes what any variant the call can reach returns
+interface ReaderA { kind: 'a'; read(path: string): string; close(): void }
+interface ReaderB { kind: 'b'; read(path: string, encoding?: string): Uint8Array; close(force?: boolean): void }
+const reader = Substitute.for<ReaderA | ReaderB>()
+reader.read('p').returns('text')
+reader.read('p').returns(new Uint8Array(0))
+reader.read('p', 'utf8').mimicks(() => 'text')
+reader.read(Arg.any()).returns('text')
+reader.read(Arg.all()).throws(new Error())
+reader.close().returns()
+reader[configure]().read('p').returns(new Uint8Array(0))
+reader.received().read('p')
+const asReader: ReaderA | ReaderB = reader
+interface CacheA { kind: 'a'; get(): string[]; get(key: string): string; load(key: string): Promise<string> }
+interface CacheB { kind: 'b'; get(): number[]; get(key: string, fallback?: number): number; load(key: string, retries: number): Promise<number> }
+const cache = Substitute.for<CacheA | CacheB>()
+cache.get().returns([1])
+cache.get('k').returns('v')
+cache.get('k').returns(1)
+cache.get('k', 2).returns(1)
+cache.load('k').resolves('v')
+cache.load('k', 3).resolves(1)
+
+// R3TD-2 / T34: the ways around the optional-callback limitation
+interface Widget { onChange?: (value: string) => void }
+const widget = Substitute.for<Widget>()
+widget.received().onChange('x')
+;(widget.received() as Widget).onChange = undefined
+widget.received().onChange = Arg.any.not('function')
+
+// R3TD-3 / T35 and R3TD-7 / T38: Arg.any / Arg.is and their .not forms
+interface Finder { find(id?: string): string; count(value: number): number }
+const finder = Substitute.for<Finder>()
+finder.find(Arg.any('undefined')).returns('none')
+finder.count(Arg.any.not('undefined')).returns(0)
+finder.count(Arg.is.not(value => value > 0)).returns(1)
+finder.count(Arg.any.not('number')).returns(2)
+const missing: undefined = Arg.any('undefined')
+
+// R7TD-2 / T53: every construct signature has the call syntax (TypeScript 5.2 and older offered only the last one)
+interface Connection { open(): void }
+interface ConnectionConstructor { new (url: string): Connection; new (url: string, retries: number): Connection }
+const connection = Substitute.for<Connection>()
+const Connect = Substitute.for<ConnectionConstructor>()
+Connect('u').returns(connection)
+Connect('u', 2).returns(connection)
+Connect.received()('u')
+Connect[configure]()('u', 2).returns(connection)
+
+// R7TD-3 / T53: unions with a string index signature take the union of the variants' return types (also on 4.3)
+interface IndexedA { kind: 'a'; [key: string]: unknown; speak(): 'meow' }
+interface IndexedB { kind: 'b'; [key: string]: unknown; speak(): 'woof' }
+const indexed = Substitute.for<IndexedA | IndexedB>()
+indexed.speak().returns('meow')
+indexed.speak().returns('woof')
+indexed.kind.returns('a')
+
+// R7TD-5 / R7TD-8 / T49: one set of signatures per distinct parameter list in a union; callbacks are typed
+interface SocketV1 { version: 1; on(cb: (data: string) => void): void; move(x: string, y: number): void }
+interface SocketV2 { version: 2; on(cb: (data: Uint8Array) => void): void; move(x: number, y: string): void }
+const socket = Substitute.for<SocketV1 | SocketV2>()
+socket.on(data => undefined).returns()
+socket.move('a', 1)
+socket.move(1, 'b').returns()
+
+// R7TD-7 / T50, R7TD-1 / T53: generic methods
+interface ServiceSettings { port: number; host: string }
+interface ServiceWithSettings {
+  get<K extends keyof ServiceSettings>(key: K): ServiceSettings[K]
+  conv<K>(e: K): K extends string ? number : boolean
+}
+const service = Substitute.for<ServiceWithSettings>()
+service.get('port').returns(80)
+service.get(Arg.any()).returns('localhost')
+service.conv('x').returns(1)
+service[configure]().conv('x').returns(1)
+
+// R7FE-8 / T52: members that may return a promise
+interface Hooks { onInit(): void | Promise<void>; load(): string | Promise<string>; like(): PromiseLike<number> }
+const hooks = Substitute.for<Hooks>()
+hooks.onInit().resolves()
+hooks.load().resolves('x')
+hooks.like().resolves(1)
+
+// R9FE-1 / T60: an Arg.is predicate takes the parameter's type on generic methods
+interface SqlClient { query<T = unknown>(sql: string, params?: readonly unknown[]): Promise<T[]> }
+const sql = Substitute.for<SqlClient>()
+sql.query(Arg.is(text => text.startsWith('SELECT'))).resolves([])
+sql.received().query(Arg.is(text => text.length > 0), Arg.is(params => params !== undefined))
+
+// R9TD-1 / T62: a callback with one variant's `this` gets that variant's value and the setup API
+interface Button { kind: 'b'; onClick(cb: (this: Button, n: number) => void, options?: { once: boolean }): 'b' }
+interface Link { kind: 'l'; onClick(cb: (this: Link, n: number) => void, options?: { once: boolean }): 'l' }
+const control = Substitute.for<Button | Link>()
+control.onClick(function (this: Button, n: number) {}).returns('b')
+control.onClick(function (this: Link, n: number) {}, { once: true }).returns('l')
+control[configure]().onClick(function (this: Button, n: number) {}).returns('b')
+
+// R11TD-1 / T66: a type matcher keeps its primitive type, so it does not pick a literal-typed overload
+interface KeyedStore { get(key: 'count'): number; get(key: string): string | undefined }
+const keyedStore = Substitute.for<KeyedStore>()
+keyedStore.get(Arg.any('string')).returns('x')
+keyedStore[configure]().get(Arg.any('string')).returns(undefined)
+keyedStore.received().get(Arg.any('string'))
+
+// R11TD-2 / T67: the function matcher in a property-set check of a concrete union's callable member
+interface Cat { kind: 'cat'; speak(loud: boolean): 'meow' }
+interface Dog { kind: 'dog'; speak(loud: boolean): 'woof' }
+const pet = Substitute.for<Cat | Dog>()
+pet.received().speak = Arg.any('function')
+
+// R11TD-4 / T70: Arg.all() after a callback with one variant's `this`
+control.onClick(function (this: Button, n: number) {}, Arg.all()).returns('b')
+control.received().onClick(function (this: Link, n: number) {}, Arg.all())
+
+// R12FE-5 / T72: a partial instance of an object type; a whole `T` in generic code
+calculator[mimick]({ add: (a, b) => a + b })
+pet[mimick]({ kind: 'cat' })
+listener[mimick](event => event)
+function delegateTo<T>(sub: SubstituteOf<T>, instance: T) {
+  sub[mimick](instance)
+}
+delegateTo(calculator, asCalculator)
+
+// R13TD-4 / T74: in generic code a substitute of `T | undefined` / `T | null` mimicks a `T` as well; a concrete
+// nullable type still takes a partial instance
+function delegateToOptional<T>(sub: SubstituteOf<T | undefined>, instance: T) {
+  sub[mimick](instance)
+}
+function delegateToNullable<T>(sub: SubstituteOf<T | null>, instance: T | null) {
+  sub[mimick](instance)
+}
+delegateToOptional(Substitute.for<Calculator | undefined>(), asCalculator)
+delegateToNullable(Substitute.for<Calculator | null>(), null)
+Substitute.for<Calculator | undefined>()[mimick]({ add: (a, b) => a + b })
+
+// R14FE-3 / T75: an Arg.is() predicate may return any truthy value, not only a boolean (no optional chaining here:
+// TypeScript 3.6 cannot parse it)
+interface Member { name?: string; roles: string[] }
+interface Members { save(member: Member): string; get<T>(key: string): T }
+const members = Substitute.for<Members>()
+members.save(Arg.is(member => member.name)).returns('named')
+members.save(Arg.is(member => member.roles.length)).returns('with roles')
+members.save(Arg.is.not(member => member.name)).returns('anonymous')
+members.received(1).save(Arg.is(member => member.name && member.name.length))
+members[didNotReceive]().save(Arg.is(member => member.roles.find(role => role === 'admin')))
+members[configure]().save(Arg.is(member => member.name)).returns('configured')
+members.get(Arg.is(key => key.length)).returns(1)
+const namedMember = Arg.is((member: Member) => member.name)
+const anonymousMember = Arg.is.not((member: Member) => member.name)
+members.save(namedMember).returns('named')
+members.save(anonymousMember).returns('anonymous')
+
+// R14FE-2 / T76: a single Arg.all() on a member whose overloads return different types takes the value of any overload
+interface PgSubmittable { submit: (connection: unknown) => void }
+interface PgResult { rows: unknown[]; rowCount: number | null }
+interface PgPool {
+  query<T extends PgSubmittable>(queryStream: T): T
+  query(text: string, values?: unknown[]): Promise<PgResult>
+  query(text: string, callback: (err: Error, result: PgResult) => void): void
+}
+const pgPool = Substitute.for<PgPool>()
+const pgResult: PgResult = { rows: [], rowCount: 0 }
+pgPool.query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.all()).mimicks(async () => pgResult)
+pgPool[configure]().query(Arg.all()).resolves(pgResult)
+pgPool.query(Arg.any('string'), Arg.all()).resolves(pgResult)
+// R16FE-1 / T80: its implementation may leave out trailing parameters, and untyped parameters take the types of all
+// overloads at their position (TypeScript 4.2 and older give a function passed for several signatures no contextual
+// type)
+interface RowRepo {
+  remove(rows: PgResult[], options?: { chunk?: number }): Promise<PgResult[]>
+  remove(row: PgResult, options?: { chunk?: number }): Promise<PgResult>
+}
+const rowRepo = Substitute.for<RowRepo>()
+rowRepo.remove(Arg.all()).mimicks(row => Promise.resolve(row as any))
+rowRepo.remove(Arg.all()).mimicks((row: any) => Promise.resolve(row))
+rowRepo.remove(Arg.all()).mimicks((row, options) => Promise.resolve(options && options.chunk ? row as any : pgResult))
+rowRepo.remove(Arg.all()).mimicks(async () => pgResult, async row => row as any)
+rowRepo[configure]().remove(Arg.all()).mimicks(row => Promise.resolve(row as any))
+pgPool.query(Arg.all()).mimicks(async query => pgResult)
+
+// R15FE-2 / T78: an overload whose parameters become impossible (hono's Context.get with an empty ContextVariableMap)
+// is left out, so the remaining overload has the setup API
+interface EmptyVariables {}
+interface HonoVariables { user: { id: string }; requestId: string }
+interface HonoGet {
+  <Key extends keyof HonoVariables>(key: Key): HonoVariables[Key]
+  <Key extends keyof EmptyVariables>(key: Key): EmptyVariables[Key]
+}
+interface HonoContext { get: HonoGet }
+const honoContext = Substitute.for<HonoContext>()
+honoContext.get('user').returns({ id: 'u1' })
+honoContext[configure]().get('user').returns({ id: 'u1' })
+honoContext.get(Arg.all()).returns({ id: 'u1' })
+honoContext.received(1).get('requestId')
+
+try {
+  calculator.received().add(9, 9)
+} catch (error) {
+  if (error instanceof SubstituteException) {
+    const message: string = error.message
+  }
+}
+
+export { asCalculator, nothing, asOk, asListener, asQueryResult, asReader, missing, httpClient }

@@ -1,66 +1,57 @@
 name: Publish
 
+# Publishing a GitHub release publishes the package to npm. See CONTRIBUTING.md ("Releasing").
+# - The release tag must match the version in package.json (v2.0.1 or 2.0.1 for version 2.0.1).
+# - A stable version is published with the npm dist-tag `latest`. A prerelease version (2.1.0-beta.1) or a release
+#   marked as a prerelease on GitHub is published with the dist-tag `beta`.
+#
+# There is no GitHub Packages job: GitHub Packages only hosts npm packages whose scope is the repository owner
+# (@ffmathy), so it cannot host @fluffy-spoon/substitute, and the former job failed on every release.
 on:
   release:
-    types: [created]
+    # `published` also fires for a release that was saved as a draft first (`created` does not).
+    types: [published]
+
+permissions:
+  contents: read
 
 jobs:
-  build-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          show-progress: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-      - run: npm test
+  ci:
+    name: CI
+    uses: ./.github/workflows/nodejs.yml
 
   publish-npm:
-    needs: build-test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          show-progress: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 18
-          registry-url: https://registry.npmjs.org/
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: echo "tag=latest" >> $GITHUB_ENV
-      - name: Sets npm tag
-        if: contains(github.event.release.tag_name, 'beta')
-        run: echo "tag=beta" >> $GITHUB_ENV
-      - run: npm publish --access public --tag ${{ env.tag }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
-
-  publish-github:
-    needs: build-test
+    name: Publish to npm
+    needs: ci
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      # Lets npm publish with provenance (and with trusted publishing, if it is configured on npmjs.com).
+      id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           show-progress: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 18
-          registry-url: https://npm.pkg.github.com/
-          cache: 'npm'
-      - run: npm ci --ignore-scripts
-      - run: npm run build
-      - run: echo "tag=latest" >> $GITHUB_ENV
-      - name: Sets npm tag
-        if: contains(github.event.release.tag_name, 'beta')
-        run: echo "tag=beta" >> $GITHUB_ENV
-      - run: npm publish --tag ${{ env.tag }}
+          node-version-file: package.json
+          registry-url: https://registry.npmjs.org/
+          cache: npm
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Determine the npm dist-tag
+        id: dist-tag
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          tag="$(node packaging/dist-tag.js "$RELEASE_TAG" "$version" "$PRERELEASE")"
+          echo "Publishing $version with the dist-tag $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      # npm publish runs the prepack script, which builds dist/ from scratch.
+      - name: Publish
+        run: npm publish --provenance --access public --tag "$DIST_TAG"
+        env:
+          DIST_TAG: ${{ steps.dist-tag.outputs.tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}

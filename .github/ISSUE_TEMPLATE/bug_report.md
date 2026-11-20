@@ -22,6 +22,8 @@ A clear and concise description of what you expected to happen.
 - Typescript version: ` `
 - substitute.js version: ` `
 - Node version: ` `
+- Module system (CommonJS, native ESM, bundler): ` `
+- Test runner (ava, jest, mocha, node:test, vitest, ...): ` `
 
 **Additional context**
 Add any other context about the problem here.
