@@ -243,7 +243,8 @@ not against `src/`, and checks two things:
   after the test function has returned, and checks what each runner then does with the tests around it, as README
   "Assertions that fail later" describes. For mocha, it does so with a synchronous test (`test-runners/mocha/`) and
   with an `async` test (`test-runners/mocha-async/`), which mocha reports twice, the second time as "done() called
-  multiple times". It also runs these suites, which must pass:
+  multiple times" (as long as the run is still going when the test's promise settles; README "Assertions that fail
+  later" describes the other case). It also runs these suites, which must pass:
   - `test-runners/jest-matchers/` (`npm run validate:jest-matchers`): substitutes used inside jest matchers compare
     by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
     `expect(42).toEqual(substitute)` fails with jest's normal assertion error. It also checks that snapshots
@@ -253,6 +254,10 @@ not against `src/`, and checks two things:
     inline snapshots, setups and checks, and that jest's asymmetric matchers (`expect.any()`,
     `expect.objectContaining()`, ...) work as matchers in setups and checks, as README "Matchers of test runners"
     documents. `jest.fn(substitute)` must answer what the substitute answers (README "What counts as a call").
+    `spyon-mimicked.spec.ts` checks `jest.spyOn()`, node:test's `mock.method()` and an instrumentation wrapper
+    (`const original = obj.m; obj.m = wrap(original)`) on a substitute that mimicks an instance: setups still
+    answer, each call is recorded once, and the restore gives the instance its function back (README "Partial
+    mocks" and "Test runners").
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
     vitest's matchers, snapshots and diffs (including the checks and setups with vitest's asymmetric matchers that the
     README's vitest example makes, and `vi.fn(substitute)`), and how vitest and `util.inspect` see printed, frozen and
@@ -269,7 +274,8 @@ not against `src/`, and checks two things:
     `mock.module()` (`test-runners/nodejs-modules/`, `npm run validate:nodejs-modules`, with
     `--experimental-test-module-mocks`) and jest's `unstable_mockModule()` for native ES modules
     (`test-runners/jest-esm-modules/`, `npm run validate:jest-modules-esm`, with `--experimental-vm-modules` and
-    `jest.modules.esm.config.js`).
+    `jest.modules.esm.config.js`). That run also checks vitest's `vi.spyOn()` (the `spyOn()` of `@vitest/spy`) on
+    substitutes that mimick an instance and on those that do not (`spies-mimicked.test.mjs`).
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
