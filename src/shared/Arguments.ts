@@ -118,7 +118,7 @@ const asymmetricMatch = function asymmetricMatch(this: unknown, value: unknown):
   // E100: inside a look of the library (a runner's matcher among the matchers of a setup or a check asks it), that look
   // decides what leaves no trace; called by a runner's own equality, a look of its own
   const inLook = libraryGuard.matching > 0 || libraryGuard.looking !== undefined
-  return (inLook ? runPredicate(this as AnyArgument, value) : evaluateArgument(this as AnyArgument, value)).matches
+  return evaluateArgument(this as AnyArgument, value, !inLook).matches
 }
 Object.defineProperty(BaseArgument.prototype, 'asymmetricMatch', { value: asymmetricMatch, writable: true, configurable: true })
 
@@ -204,43 +204,24 @@ export const isArgumentMatcher = (value: unknown): boolean => matcherKindOf(valu
 
 /**
  * Evaluates a matcher of a test runner against a value (see ForeignMatcherKind); one that throws does not match. E95: what
- * it does to substitutes leaves no trace (see evaluateArgument).
+ * it does to substitutes leaves no trace (see evaluateArgument; `guard`, likewise).
  */
-export const evaluateForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown): ArgumentEvaluation => {
+export const evaluateForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown, guard = true): ArgumentEvaluation => {
   let result: unknown
-  libraryGuard.matching++
+  if (guard) libraryGuard.matching++
   try {
     result = kind === 'asymmetric' ? (matcher as any).asymmetricMatch(value) : (matcher as any).test(value)
   } catch (error) {
     return { matches: false, error, threw: true }
   } finally {
-    libraryGuard.matching--
+    if (guard) libraryGuard.matching--
   }
   return { matches: !!result, threw: false }
 }
 
-/** evaluateForeignMatcher without a guard of its own (see evaluateMatcherInLook). */
-const runForeignMatcher = (matcher: object, kind: ForeignMatcherKind, value: unknown): ArgumentEvaluation => {
-  let result: unknown
-  try {
-    result = kind === 'asymmetric' ? (matcher as any).asymmetricMatch(value) : (matcher as any).test(value)
-  } catch (error) {
-    return { matches: false, error, threw: true }
-  }
-  return { matches: !!result, threw: false }
-}
-
-/** Evaluates a matcher of any kind but Arg.all() (see MatcherKind) against a value. */
-export const evaluateMatcher = (matcher: unknown, kind: 'single' | ForeignMatcherKind, value: unknown): ArgumentEvaluation =>
-  kind === 'single' ? evaluateArgument(matcher as AnyArgument, value) : evaluateForeignMatcher(matcher as object, kind, value)
-
-/**
- * E100 (R15-ADV-4): evaluateMatcher for a caller that holds the guard of all the matchers it evaluates, one per pass
- * instead of one per evaluation: when a real call is matched against setups, the look of the call's arguments (see Look
- * and CallSubstitutions.match), in which only what is done to the values being matched leaves no trace.
- */
-export const evaluateMatcherInLook = (matcher: unknown, kind: 'single' | ForeignMatcherKind, value: unknown): ArgumentEvaluation =>
-  kind === 'single' ? runPredicate(matcher as AnyArgument, value) : runForeignMatcher(matcher as object, kind, value)
+/** Evaluates a matcher of any kind but Arg.all() (see MatcherKind) against a value (`guard`: see evaluateArgument). */
+export const evaluateMatcher = (matcher: unknown, kind: 'single' | ForeignMatcherKind, value: unknown, guard = true): ArgumentEvaluation =>
+  kind === 'single' ? evaluateArgument(matcher as AnyArgument, value, guard) : evaluateForeignMatcher(matcher as object, kind, value, guard)
 
 /**
  * E75: how a matcher of a test runner is printed, as the runner prints it: jest's and vitest's with their
@@ -269,34 +250,20 @@ export const foreignMatcherLabel = (value: unknown): { text: string, sample?: { 
  * sequence (they see what the next real read or call would get) and create nothing that a check or a printout shows.
  * They still answer with configured values, and a throws() setup still throws (a non-match). See the record path in
  * Engine, which consults the counter of the looks under way (`libraryGuard.matching`, shared by the copies).
- * E100 (R15-ADV-4): when a real call is matched against setups, the look of the call decides instead (see
- * evaluateMatcherInLook).
+ * E100 (R15-ADV-4): `guard` false for a caller that holds the guard of the matchers it evaluates, or that leaves the
+ * decision to the look of a real call (when a real call is matched against setups, see Look and CallSubstitutions.match).
  */
-export const evaluateArgument = (argument: AnyArgument, value: unknown): ArgumentEvaluation => {
+export const evaluateArgument = (argument: AnyArgument, value: unknown, guard = true): ArgumentEvaluation => {
   const matchingFunction = argument['_matchingFunction'] as PredicateFunction<unknown>
   const inverseMatch = argument['_options']?.inverseMatch ?? false
   let result: unknown
-  libraryGuard.matching++
+  if (guard) libraryGuard.matching++
   try {
     result = matchingFunction(value)
   } catch (error) {
     return { matches: false, error, threw: true }
   } finally {
-    libraryGuard.matching--
-  }
-  if (isThenable(result)) throw thenablePredicateError(argument, result)
-  return { matches: inverseMatch ? !result : !!result, threw: false }
-}
-
-/** evaluateArgument without a guard of its own (see evaluateMatcherInLook). */
-const runPredicate = (argument: AnyArgument, value: unknown): ArgumentEvaluation => {
-  const matchingFunction = argument['_matchingFunction'] as PredicateFunction<unknown>
-  const inverseMatch = argument['_options']?.inverseMatch ?? false
-  let result: unknown
-  try {
-    result = matchingFunction(value)
-  } catch (error) {
-    return { matches: false, error, threw: true }
+    if (guard) libraryGuard.matching--
   }
   if (isThenable(result)) throw thenablePredicateError(argument, result)
   return { matches: inverseMatch ? !result : !!result, threw: false }

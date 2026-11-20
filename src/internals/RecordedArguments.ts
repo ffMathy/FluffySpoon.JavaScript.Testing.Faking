@@ -2,7 +2,7 @@ import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
 // (from the module itself rather than '../shared', whose re-exports are getters in CommonJS output: the matcher search
 // runs on the arguments of every call, and a getter per lookup cost more than E75's own check)
 import {
-  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, evaluateMatcherInLook, foreignMatcherKind, foreignMatcherOf, isAllArguments,
+  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
   isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf
 } from '../shared/Arguments'
 import { SubstituteException } from './SubstituteException'
@@ -480,7 +480,7 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
   if (kind !== undefined) {
     // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3)
     if (isArgMatcher(actual)) return DIFFERS
-    const evaluation = guarded ? evaluateMatcherInLook(expected, kind, actual) : evaluateMatcher(expected, kind, actual)
+    const evaluation = evaluateMatcher(expected, kind, actual, !guarded)
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
   if (!holder) return literalEquals(expected, actual) ? MATCHES : DIFFERS
@@ -771,7 +771,7 @@ export class RecordedArguments {
         // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3; E75: a test runner's
         // matcher there is a value like any other)
         if (isArgMatcher(actualArgument)) return NO_MATCH
-        const evaluation = guarded ? evaluateMatcherInLook(expectedArgument, kind, actualArgument) : evaluateMatcher(expectedArgument, kind, actualArgument)
+        const evaluation = evaluateMatcher(expectedArgument, kind, actualArgument, !guarded)
         if (!evaluation.matches)
           return evaluation.threw ? { matches: false, predicateThrew: true, predicateError: evaluation.error } : NO_MATCH
         continue
