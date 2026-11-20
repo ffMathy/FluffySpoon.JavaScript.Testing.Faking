@@ -3,7 +3,7 @@ import { inspect, types } from 'util'
 import { AutoEntry, SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind, RecordLabels } from './SubstituteException'
-import { RecordLabelContext, SameArguments, recordLabelContext, recordPath, sharedNotes } from './Paths'
+import { RecordLabelContext, SameArguments, codeMember, codePath, recordLabelContext, recordPath, sharedNotes } from './Paths'
 import { CallRecord } from './CallRecord'
 import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
@@ -149,6 +149,15 @@ const FLUENT_METHODS_SHOWN = 3
  * is called on the substitute itself. When a step is a member read (`db.users.where({ id: 1 }).limit(1).exec()`), making
  * methods return the substitute cannot bring the calls back to it, so the remedy is to check the substitute the member
  * was called on, named by its whole path (`sub.users.where({ id: 1 }).limit(1).received(1).exec(...)`).
+ *
+ * E112 (R16-ADV-4, R16-ADV-6): both remedies are written as code that does what they say when it is run (see codePath):
+ * members as JavaScript accesses them (`sub['my-key']`, `sub[0]`, `sub[Symbol.for('k')]`), the whole path, and a
+ * substitute shared by a nested setup through a call with matchers as the concrete call it was returned to
+ * (`sub.to('room-a').compress(Arg.all()).returns(sub.to('room-a'))`: written with the matchers, the call in returns()
+ * would be a setup, not that substitute). When the path cannot be written as code (a symbol that is not registered, or
+ * more than FLUENT_PATH_CHARACTERS characters), the remedy is worded without it. Arguments are written as paths print
+ * them, so those that do not print as code (functions, matchers of a substitute shared by several calls, values that are
+ * cut) are written by hand.
  */
 const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: ExpectedCount): string | undefined => {
   if (key === SELF) return undefined
@@ -193,15 +202,30 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   } while (!rootSet.has(state))
   // (a call with matchers on the way is a nested setup that every matching call answers with one substitute: a setup of
   // that method with Arg.all() would not answer them, as the one with matchers is more specific, D4)
+  const received = `received(${count === undefined ? '' : count})`
   if (steps.some(step => step.kind !== 'call' || step.specifiesMatchers)) {
-    return `${lead} To check calls there, check that substitute: ` +
-      `${truncateText(asExpression({ path: recordPathOf(place, context) }), FLUENT_PATH_CHARACTERS)}.received(${count === undefined ? '' : count})${memberAccess(key)}(...)`
+    // E112: written as code, with the call a shared substitute was handed out to when there was one (see codePath)
+    const expression = codePath(place.owner, context, false, FLUENT_PATH_CHARACTERS)
+    const member = codeMember(key)
+    if (expression === undefined || member === undefined) {
+      return `${lead} To check calls there, check that substitute itself, with ${received} on it; its path cannot be ` +
+        `written as code (a symbol that is not registered with Symbol.for(), or more than ${FLUENT_PATH_CHARACTERS} characters).`
+    }
+    return `${lead} To check calls there, check that substitute: ${expression}.${received}${member}(...)`
   }
-  // every step is a call: each of those methods (once each, from the top) returns the checked substitute
-  const parent = asExpression(state)
+  // every step is a call: each of those methods (once each, from the top) returns the checked substitute (E112: written
+  // as code, with the call that a shared substitute was handed out to, the first of several: all of them answered it)
+  const parent = state.owner === undefined ? 'sub' : codePath(state.owner, context, true, FLUENT_PATH_CHARACTERS)
   const methods: PropertyKey[] = []
   for (let index = steps.length - 1; index >= 0; index--) if (!methods.includes(steps[index].key)) methods.push(steps[index].key)
-  const setups = methods.slice(0, FLUENT_METHODS_SHOWN).map(method => `${parent}${method === SELF ? '' : memberAccess(method)}(Arg.all()).returns(${parent})`)
+  const shown = methods.slice(0, FLUENT_METHODS_SHOWN)
+  const members = shown.map(method => method === SELF ? '' : codeMember(method))
+  if (parent === undefined || members.some(member => member === undefined)) {
+    return `${lead} A call that is not configured answers a new substitute. For a fluent API, make ` +
+      `${methods.length === 1 ? 'the method' : 'each method on the way'} return the substitute it is called on (a setup ` +
+      `with Arg.all() whose value is that substitute) or mimick an instance whose methods return this.`
+  }
+  const setups = members.map(member => `${parent}${member}(Arg.all()).returns(${parent})`)
   const others = methods.length - setups.length
   if (setups.length === 1) {
     return `${lead} A call that is not configured answers a new substitute. For a fluent API, make the method return the ` +

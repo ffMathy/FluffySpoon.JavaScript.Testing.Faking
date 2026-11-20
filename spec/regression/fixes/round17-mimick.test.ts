@@ -4,6 +4,7 @@ import { mock } from 'node:test'
 
 import { Substitute, Arg, mimick, configure } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { codeMember } from '../../../src/internals/Paths'
 
 // Round 17, engine (mimicked substitutes and messages): the round-16 findings R16FE-3, R16FE-4, R16-ADV-6, R16-ADV-4 and
 // the integrator's O2, decided in the fix spec as E114, E115, E112 and E120.
@@ -419,4 +420,188 @@ test('R16FE-4 (E115) Object.defineProperty and delete on a mimicked substitute g
   t.notThrows(() => Object.defineProperty(frozen, 'query', { value: () => 'defined', configurable: true }))
   t.is(frozen.query(), 'defined')
   t.true(delete frozen.unknown)
+})
+
+// ---- E112 (R16-ADV-4, R16-ADV-6): the remedies of the fluent-chain hint are code that works when it is run -------------
+
+/** The fluent-chain hint of a failure message: its line that says where the member was called. */
+const fluentHintOf = (message: string): string => message.split('\n').find(line => line.includes('further down')) ?? ''
+
+/** The parts of a list of setups as the hint writes it (`a, b and c`), split where no parenthesis, bracket or string is open. */
+const splitList = (text: string): string[] => {
+  const parts: string[] = []
+  let depth = 0
+  let quote: string | undefined
+  let start = 0
+  for (let index = 0; index < text.length; index++) {
+    const character = text[index]
+    if (quote !== undefined) {
+      if (character === '\\') index++
+      else if (character === quote) quote = undefined
+    } else if (character === "'" || character === '"') quote = character
+    else if ('([{'.includes(character)) depth++
+    else if (')]}'.includes(character)) depth--
+    else if (depth === 0 && (text.startsWith(', ', index) || text.startsWith(' and ', index))) {
+      parts.push(text.slice(start, index))
+      index += text.startsWith(', ', index) ? 1 : 4
+      start = index + 1
+    }
+  }
+  parts.push(text.slice(start))
+  return parts
+}
+
+type Remedy = { kind: 'check', expression: string } | { kind: 'setups', setups: string[], likewise: number } | { kind: 'worded', text: string }
+
+/** What the hint says to do: a check to run (without its arguments), setups to make, or a remedy worded without code. */
+const remedyOf = (hint: string): Remedy => {
+  const check = /check that substitute: (sub.*)\(\.\.\.\)$/.exec(hint)
+  if (check !== null) return { kind: 'check', expression: check[1] }
+  const setups = /return the substitute \((sub.*)\) or mimick an instance/.exec(hint)
+  if (setups === null) return { kind: 'worded', text: hint }
+  const parts = splitList(setups[1])
+  const likewise = /^likewise for the (\d+) other methods? on the way$/.exec(parts[parts.length - 1])
+  return likewise === null ? { kind: 'setups', setups: parts, likewise: 0 } : { kind: 'setups', setups: parts.slice(0, -1), likewise: Number(likewise[1]) }
+}
+
+const run = (code: string, sub: unknown) => new Function('sub', 'Arg', 'Symbol', code)(sub, Arg, Symbol)
+
+/**
+ * Makes the check fail, follows the remedy of its hint, and gives the hint: runs the check it names (with the arguments of
+ * the check), or makes the setups it names on a new substitute (`others`: the setups for the methods that "likewise" stands
+ * for) and runs the code and the check again. Either must pass.
+ */
+const followRemedy = (
+  t: ExecutionContext, code: (sub: any) => void, check: (sub: any) => void, args: string,
+  options: { arrange?: (sub: any) => void, others?: string[] } = {}
+): string => {
+  const sub = Substitute.for<any>()
+  options.arrange?.(sub)
+  code(sub)
+  const hint = fluentHintOf(failureOf(t, () => check(sub)))
+  const remedy = remedyOf(hint)
+  if (remedy.kind === 'check') {
+    t.notThrows(() => run(`${remedy.expression}${args}`, sub), `${hint}\nfollowed: ${remedy.expression}${args}`)
+  } else if (remedy.kind === 'setups') {
+    const fresh = Substitute.for<any>()
+    options.arrange?.(fresh)
+    t.is(remedy.likewise, options.others?.length ?? 0, hint)
+    for (const setup of [...remedy.setups, ...options.others ?? []]) t.notThrows(() => run(setup, fresh), `${hint}\nsetup: ${setup}`)
+    code(fresh)
+    t.notThrows(() => check(fresh), `${hint}\nfollowed: ${remedy.setups.join(' ; ')}`)
+  } else t.fail(`no remedy to follow: ${hint}`)
+  return hint
+}
+
+test('R16-ADV-4 (E112) the check that a remedy names is code for identifier, numeric, non-identifier and registered symbol keys, and passes when it is run', t => {
+  const run = (sub: any) => sub.received(1).run()
+  t.true(followRemedy(t, s => s.users.where({ id: 1 }).limit(1).run(), run, '()').includes("sub.users.where({ id: 1 }).limit(1).received(1).run(...)"))
+  t.true(followRemedy(t, s => s[0].x(1).run(), run, '()').includes('sub[0].x(1).received(1).run(...)'))
+  t.true(followRemedy(t, s => s['my-key'].x(1).run(), run, '()').includes("sub['my-key'].x(1).received(1).run(...)"))
+  t.true(followRemedy(t, s => s.p[Symbol.for('k')](1).run(), run, '()').includes("sub.p[Symbol.for('k')](1).received(1).run(...)"))
+  t.true(followRemedy(t, s => s.p["it's"].x("it's").run(), run, '()').includes(`sub.p["it's"].x("it's").received(1).run(...)`))
+  // the checked member itself written as code
+  t.true(followRemedy(t, s => s.p.x(1)['my-member'](2), sub => sub.received(1)['my-member'](2), '(2)').includes("sub.p.x(1).received(1)['my-member'](...)"))
+  t.true(followRemedy(t, s => s.p.x(1)[Symbol.for('m')](2), sub => sub.received(1)[Symbol.for('m')](2), '(2)').includes("sub.p.x(1).received(1)[Symbol.for('m')](...)"))
+})
+
+test('R16-ADV-4 (E112) the fluent remedy is code for numeric, non-identifier and registered symbol keys of the methods and of the substitute they return', t => {
+  const run = (sub: any) => sub.received(1).run()
+  t.true(followRemedy(t, s => s[0](1).run(), run, '()').includes('(sub[0](Arg.all()).returns(sub))'))
+  t.true(followRemedy(t, s => s['my-key'](1).run(), run, '()').includes("(sub['my-key'](Arg.all()).returns(sub))"))
+  t.true(followRemedy(t, s => s[Symbol.for('k')](1).run(), run, '()').includes("(sub[Symbol.for('k')](Arg.all()).returns(sub))"))
+  const nested = followRemedy(t, s => s['a-b'][1].child('x').info('m'), sub => sub['a-b'][1].received(1).info('m'), "('m')")
+  t.true(nested.includes("(sub['a-b'][1].child(Arg.all()).returns(sub['a-b'][1]))"), nested)
+})
+
+test('R16-ADV-4 (E112) paths of 1 to 12 steps are written in full, and the remedies work at every length', t => {
+  const names = 'abcdefghijkl'.split('')
+  for (let steps = 1; steps <= 12; steps++) {
+    // a property read first: the check remedy, with every step
+    const viaRead = (s: any) => names.slice(0, steps).reduce((value, name, index) => value[name](index), s.p).run()
+    const checkHint = followRemedy(t, viaRead, sub => sub.received(1).run(), '()')
+    // (the place named before it is a path as messages print it, shortened when it is long)
+    const remedy = checkHint.slice(checkHint.indexOf('check that substitute: '))
+    t.is(remedy, `check that substitute: sub.p${names.slice(0, steps).map((name, index) => `.${name}(${index})`).join('')}.received(1).run(...)`)
+    // only calls, of one method: one setup
+    const sameMethod = (s: any) => names.slice(0, steps).reduce((value, _name, index) => value.next(index), s).run()
+    followRemedy(t, sameMethod, sub => sub.received(1).run(), '()')
+    // only calls, of different methods: three setups named, the others likewise
+    const others = names.slice(3, steps).map(name => `sub.${name}(Arg.all()).returns(sub)`)
+    const distinct = (s: any) => names.slice(0, steps).reduce((value, name, index) => value[name](index), s).run()
+    followRemedy(t, distinct, sub => sub.received(1).run(), '()', { others })
+  }
+})
+
+test('R16-ADV-4 (E112) a path that cannot be written as code is not given: a symbol that is not registered, a path of more than 1,000 characters', t => {
+  const local = Symbol('local')
+  const symbolCheck = failureOf(t, () => {
+    const sub = Substitute.for<any>()
+    sub.p[local](1).run()
+    sub.received(1).run()
+  })
+  t.true(fluentHintOf(symbolCheck).endsWith('To check calls there, check that substitute itself, with received(1) on it; its path cannot be written as code ' +
+    '(a symbol that is not registered with Symbol.for(), or more than 1000 characters).'), symbolCheck)
+  t.false(/check that substitute: sub/.test(symbolCheck))
+
+  const symbolSetup = failureOf(t, () => {
+    const sub = Substitute.for<any>()
+    sub[local](1).run()
+    sub.received(1).run()
+  })
+  t.true(fluentHintOf(symbolSetup).endsWith('For a fluent API, make the method return the substitute it is called on (a setup with Arg.all() whose value is ' +
+    'that substitute) or mimick an instance whose methods return this.'), symbolSetup)
+
+  const long = 'x'.repeat(90)
+  const longCheck = failureOf(t, () => {
+    const sub = Substitute.for<any>()
+    sub.p.a(long).b(long).c(long).d(long).e(long).f(long).g(long).h(long).i(long).j(long).k(long).run()
+    sub.received(1).run()
+  })
+  t.true(fluentHintOf(longCheck).includes('its path cannot be written as code'), longCheck)
+
+  // well-known symbols are written by their name
+  t.is(codeMember(Symbol.iterator), '[Symbol.iterator]')
+  t.is(codeMember(Symbol.asyncIterator), '[Symbol.asyncIterator]')
+  t.is(codeMember(local), undefined)
+})
+
+test('R16-ADV-6 (E112) the finding: the fluent remedy for a substitute shared by a setup with matchers names the call it was returned to, and following it makes the check pass', t => {
+  const arrange = (io: any) => io.to(Arg.any()).emit(Arg.all()).returns(true)
+  const code = (io: any) => io.to('room-a').compress(true).emit('m')
+  const hint = followRemedy(t, code, io => io.to('room-a').received(1).emit('m'), "('m')", { arrange })
+  t.true(hint.includes("(sub.to('room-a').compress(Arg.all()).returns(sub.to('room-a')))"), hint)
+  t.false(hint.includes('Arg.any{any}).compress'), hint)
+})
+
+test('R16-ADV-6 (E112) shared substitutes: returned to several calls, the fluent remedy names one of them; the check remedy names the call or the call with matchers', t => {
+  const arrange = (io: any) => io.to(Arg.any()).emit(Arg.all()).returns(true)
+  const twoRooms = (io: any) => {
+    io.to('room-a').compress(true).emit('m')
+    io.to('room-b').compress(true).emit('n')
+  }
+  const several = followRemedy(t, twoRooms, io => io.to(Arg.any()).received(1).emit('m'), "('m')", { arrange })
+  t.true(several.includes("(sub.to('room-a').compress(Arg.all()).returns(sub.to('room-a')))"), several)
+
+  // a member read below the shared substitute: the check of that substitute, through the call it was returned to
+  const viaRead = followRemedy(t, io => io.to('room-a').volatile.emit('m'), io => io.to('room-a').received(1).emit('m'), "('m')", { arrange })
+  t.true(viaRead.includes("check that substitute: sub.to('room-a').volatile.received(1).emit(...)"), viaRead)
+
+  // a call with matchers on the way, returned to one call: written as that call
+  const nestedArrange = (s: any) => s.code(Arg.any()).header(Arg.all()).returns(true)
+  const nested = followRemedy(t, s => s.code(404).send(1), s => s.received(1).send(1), '(1)', { arrange: nestedArrange })
+  t.true(nested.includes('check that substitute: sub.code(404).received(1).send(...)'), nested)
+
+  // returned to several calls: the call with matchers, whose matchers are written by hand (as the README says)
+  const sub = Substitute.for<any>()
+  nestedArrange(sub)
+  sub.code(404).send(1)
+  sub.code(500).ok()
+  const message = failureOf(t, () => sub.received(1).send(1))
+  t.true(fluentHintOf(message).includes('check that substitute: sub.code(Arg.any{any}).received(1).send(...)'), message)
+  t.notThrows(() => sub.code(Arg.any()).received(1).send(1))
+
+  // unshared, as before
+  const plainHint = followRemedy(t, s => s.getLogger('x').child('y').info('m'), s => s.getLogger('x').received(1).info('m'), "('m')")
+  t.true(plainHint.includes("(sub.getLogger('x').child(Arg.all()).returns(sub.getLogger('x')))"), plainHint)
 })
