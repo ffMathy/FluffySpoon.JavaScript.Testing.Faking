@@ -455,7 +455,16 @@ export type OverloadsMimicksFunction<TOverloads, R> =
   <TImplementation extends OverloadsContextual<TOverloads, R>, TMore extends OverloadsContextual<TOverloads, R>[]>(
     implementation: TImplementation & ImplementationFits<TImplementation, EachOverloadImplementation<TOverloads, R>>,
     ...implementations: TMore & ImplementationFits<TMore, EachOverloadImplementation<TOverloads, R>[]>) => void
-type ImplementationFits<TImplementation, TEach> = TImplementation extends TEach ? unknown : TEach
+// The check is not distributive, so a union of implementations (`cond ? good : bad`, `typeof good | typeof bad`) fits
+// only when every one of them does, as for a union assigned to the member itself (R17TD-1, T82). An implementation
+// that does not fit is intersected with `TEach`, so that the error names the overload it does not fit; a union is not:
+// TypeScript 4.3 to 5.4 crash when they give a union of functions intersected with `TEach` as the contextual type of a
+// conditional expression ("Cannot read properties of undefined (reading 'flags')"). A union that does not fit gets an
+// object type instead, which no function is assignable to.
+type ImplementationFits<TImplementation, TEach> =
+  [TImplementation] extends [TEach] ? unknown :
+  true extends IsUnion<TImplementation, TImplementation> ? { readonly '@fluffy-spoon/substitute:every-implementation-must-fit': TEach } :
+  TEach
 type OverloadsContextual<TOverloads, R> = TOverloads extends any[] ?
   OverloadsContextualImplementation<OverloadArgumentLists<TOverloads[number]>, R> :
   never

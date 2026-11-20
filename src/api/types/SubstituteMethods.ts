@@ -1,5 +1,5 @@
 import { constants } from '../../shared'
-import { ConfigureView, TerminatingObject } from './Substitute'
+import { CheckViewOf, ConfigureView } from './Substitute'
 import { GenericKind, HasAnyMember, LibraryMemberName } from './Utilities'
 
 /**
@@ -41,9 +41,9 @@ type SymbolSubstituteMethods<T> = {
    * Asserts that the following member access, call or set happened `amount` times (1 or more when omitted).
    * Throws a `SubstituteException` when it did not. `amount` must be a non-negative integer.
    */
-  [received](amount?: number): TerminatingObject<T>
+  [received](amount?: number): CheckViewOf<T>
   /** Asserts that the following member access, call or set never happened. Same as `[received](0)`. */
-  [didNotReceive](): TerminatingObject<T>
+  [didNotReceive](): CheckViewOf<T>
   /**
    * Delegates every member access, call or set without a matching substitution to `instance`. Calls are still
    * recorded, and explicit substitutions take precedence. For an object type, `instance` may have only some of the
@@ -85,12 +85,12 @@ type StringSubstituteMethods<T> = {
    * Throws a `SubstituteException` when it did not. `amount` must be a non-negative integer.
    * `sub[received]()` is the symbol form.
    */
-  received(amount?: number): TerminatingObject<T>
+  received(amount?: number): CheckViewOf<T>
   /**
    * Asserts that the following member access, call or set never happened. Same as `received(0)`.
    * `sub[didNotReceive]()` is the symbol form.
    */
-  didNotReceive(): TerminatingObject<T>
+  didNotReceive(): CheckViewOf<T>
 }
 
 // If `T` has a public or private member named received, didNotReceive, returns, throws, resolves, rejects or

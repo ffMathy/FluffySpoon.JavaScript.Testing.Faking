@@ -22,7 +22,7 @@ if (!fs.existsSync(path.join(root, 'dist', 'index.d.ts'))) {
 const consumerPath = path.join(__dirname, '__jsdoc-consumer__.ts')
 const consumer = `
 import {
-  Substitute, Arg, SubstituteOf, SubstituteException,
+  Substitute, Arg, SubstituteOf, CheckViewOf, SubstituteException,
   received, didNotReceive, mimick, clearReceivedCalls, configure, returns, throws, resolves, rejects, mimicks
 } from '../dist'
 
@@ -32,6 +32,7 @@ interface Calculator {
 }
 const calculator = Substitute./*@Substitute.for*/for<Calculator>()
 const asSubstitute: /*@SubstituteOf*/SubstituteOf<Calculator> = calculator
+const asCheckView: /*@CheckViewOf*/CheckViewOf<Calculator> = calculator.received()
 
 calculator.add(/*@Arg*/Arg.any(), 2)
 calculator.add(Arg./*@Arg.any*/any('number'), Arg.any./*@Arg.any.not*/not('number'))
