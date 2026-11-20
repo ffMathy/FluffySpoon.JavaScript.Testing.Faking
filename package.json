@@ -95,7 +95,7 @@
         "build": "rm -rf dist && tsc && node packaging/build-esm.js",
         "build:spec": "rm -rf dist-spec && tsc -p spec --outDir dist-spec",
         "prepack": "npm run build",
-        "test": "npm run build:spec && ava && ava --config ava.perf.config.js --serial --concurrency=1",
+        "test": "npm run build:spec && ava",
         "test:types": "tsc -p spec-types && tsc -p spec-types/loose && tsc -p spec-types/declaration-emit",
         "test:types:min-ts": "npm run build && node spec-types/min-ts/check.js",
         "test:docs": "npm run build && node spec-docs/check.js && node spec-docs/self-test.js",

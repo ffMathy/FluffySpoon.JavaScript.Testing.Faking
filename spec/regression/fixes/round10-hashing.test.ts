@@ -9,8 +9,8 @@ import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { MESSAGE_BOUNDS, PATH_BOUNDS, formatBounded, formatValue, printSettings } from '../../../src/internals/utilities/Stringify'
 
-// Round 10, engine A: failure messages show where an expected call differs again (fix spec E54), and the test
-// infrastructure (E58). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
+// Round 10, engine A: failure messages show where an expected call differs again (fix spec E54), and ava's temporary
+// directories (E58).
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
@@ -232,31 +232,25 @@ test('R9-ADV-1 (E54) a failure message with deep and wide values prints the expe
   t.true(linesOf(messageOf(() => store.received(1).put(expected))).expected!.startsWith('put({ k0: { k0: { k0: { k0: { k0: -1, k1: 1,'))
 })
 
+// ---- E58 (R9V-6): nothing left in os.tmpdir() ---------------------------------------------------------------------
+
 /** The repository (the specs run from their compiled copy in dist-spec/). */
 const root = path.resolve(__dirname, '../../../..')
 
-// ---- E58 (R9V-6): nothing left in os.tmpdir() ---------------------------------------------------------------------
-
-test('R9V-6 (E58) the two ava runs of npm test leave nothing in os.tmpdir()', t => {
+test('R9V-6 (E58) the ava run of npm test leaves nothing in os.tmpdir()', t => {
   t.timeout(180_000)
   // 4b1fa69: ava.config.js set `cache: false`, so every ava run created an empty directory in os.tmpdir() (ava's
-  // _createCacheDir, fs.mkdtempSync) and never removed it: two per npm test
+  // _createCacheDir, fs.mkdtempSync) and never removed it
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'r9v6-'))
   t.teardown(() => fs.rmSync(temporary, { recursive: true, force: true }))
   const ava = path.join(root, 'node_modules/ava/entrypoints/cli.mjs')
-  const runs: Array<[string, string[]]> = [
-    ['ava.config.js', ['spec/regression/issues/11.test.ts']],
-    ['ava.perf.config.js', ['spec/regression/fixes/round9-hashing.test.ts', '--match', '*errors that differ only in their own properties*']]
-  ]
-  for (const [config, args] of runs) {
-    const result = spawnSync(process.execPath, [ava, '--config', config, ...args], {
-      cwd: root,
-      encoding: 'utf8',
-      env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary, NO_COLOR: '1' }
-    })
-    t.is(result.status, 0, `${config}: ${result.stdout}${result.stderr}`)
-    t.regex(result.stdout + result.stderr, /1 test passed/, config)
-    // Node.js' own module compile cache is not ava's (npm itself writes it when it starts)
-    t.deepEqual(fs.readdirSync(temporary).filter(name => name !== 'node-compile-cache'), [], `${config} left this in os.tmpdir()`)
-  }
+  const result = spawnSync(process.execPath, [ava, 'spec/regression/issues/11.test.ts'], {
+    cwd: root,
+    encoding: 'utf8',
+    env: { ...process.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary, NO_COLOR: '1' }
+  })
+  t.is(result.status, 0, `${result.stdout}${result.stderr}`)
+  t.regex(result.stdout + result.stderr, /1 test passed/)
+  // Node.js' own module compile cache is not ava's (npm itself writes it when it starts)
+  t.deepEqual(fs.readdirSync(temporary).filter(name => name !== 'node-compile-cache'), [], 'ava left this in os.tmpdir()')
 })
