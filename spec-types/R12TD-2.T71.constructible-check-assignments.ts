@@ -41,7 +41,7 @@ pet.didNotReceive().speak = hybrid
 pet[didNotReceive]().speak = Boolean
 // @ts-expect-error a member whose variants have different parameter lists
 pet.received().fmt = hybrid
-// @ts-expect-error fmt neither takes String
+// Accepted (T-6): `fmt` of Cat returns a string, and TypeScript accepts `String` for the union too.
 pet.received().fmt = String
 
 // Matchers fit, as in T67.

@@ -880,11 +880,7 @@ type VariantSignatures<TFunction, TView extends SubstituteView> = SignaturesInBo
   [union: number]: { signatures: CombinedSignatures<TFunction, TView> }
 }[VariantsKind<TFunction>]>
 type SignaturesInBox<TBox> = TBox extends { signatures: infer TSignatures } ? TSignatures : never
-/**
- * `any` for a union (told apart from its variants by type identity), `'single'` for any other type. In generic code
- * TypeScript cannot decide it and uses `'single'`.
- */
-export type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
+type VariantsKind<TFunction> = true extends IsUnion<TFunction, TFunction> ? any : 'single'
 type IsUnion<TVariant, TFunction> = TVariant extends unknown ? (Equals<TVariant, TFunction> extends true ? false : true) : never
 
 // Primitives, `never` and `any` are ruled out without distributing over a (possibly very large) union of literals

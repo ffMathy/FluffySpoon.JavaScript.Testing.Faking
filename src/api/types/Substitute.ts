@@ -1,5 +1,5 @@
 import { ConfigurationResult, SetupMethods } from './SubstitutionLevel'
-import { CallKind, FunctionSubstitute, VariantsKind } from './FunctionSubstitute'
+import { CallKind, FunctionSubstitute } from './FunctionSubstitute'
 import { GenericKind, IndexKind, IsUnion, ValueKind } from './Utilities'
 
 /**
@@ -123,36 +123,9 @@ type UnionVariantPatchOf<TVariant, T> = TVariant extends unknown ? VariantPatch<
 // to it against the member type of the constraint (`sub.received().total = 1` with `T extends Calculator`, T33), which
 // it never does for a conditional type.
 type AssertionMember<TValue> = {
-  call: AssertionCallMember<TValue>
+  call: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
   plain: TValue
 }[AssertionKind<ValueKind<TValue>, TValue>]
-
-// A member whose type is a union of function types (one per variant of a union `T`, such as lib.dom's
-// `addEventListener` in the union of all elements) is not intersected with that union: TypeScript would distribute
-// the intersection over the variants and compare the signatures of every variant with those of every other one when
-// the member is called, which made checks of such members slow to type-check (R8TD-8, T57). The signatures of the
-// assertion view already take every parameter list of every variant (see `FunctionSubstitute`), and the member's own
-// signatures return what is checked anyway. The member type is kept when it has properties of its own or includes
-// `null | undefined`. (`VariantsKind` is `'single'` in generic code.)
-// Instead, such a member gets a construct signature (`NotAssignable`), which no function has: assigning a function to
-// it in a check (`pet.received().speak = () => {}`) does not compile, as for any other callable member, whose call
-// signatures that take `Arg.all()` reject a function with parameters, and as TypeScript rejects a function that does
-// not fit the union (R9TD-5, T62). A call signature would have done that as well, but made calls of such members
-// costlier to type-check; a construct signature is not looked at for calls. It returns a branded type that only `any`
-// is assignable to, so that the function matcher `Arg.any('function')`, which is typed as any function or constructor
-// (constructing `any`), still fits (R11TD-2, T67), while a real constructor does not: `String`, `Boolean`, `Date` or a
-// class construct instances that lack the brand, and are rejected as TypeScript rejects them for the union (R12TD-2,
-// T71). (`unknown` would accept every constructor, `never` would reject `Arg.any('function')`.)
-// The brand is a string-keyed member of a type literal, which declaration emit writes out in place, so that a project
-// built with `declaration: true` can export a check view (`export const view = pet.received()`) or a function returning
-// one (R13TD-1, T73). A module-private interface or `unique symbol` there cannot be named in the emitted `.d.ts`.
-type AssertionCallMember<TValue> = {
-  single: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & TValue
-  [union: number]: FunctionSubstitute<NonNullable<TValue>, 'assertion'> & UnionAssertionRest<TValue>
-}[VariantsKind<NonNullable<TValue>>]
-type UnionAssertionRest<TValue> =
-  [keyof NonNullable<TValue>] extends [never] ? ([Extract<TValue, null | undefined>] extends [never] ? NotAssignable : TValue) : TValue
-type NotAssignable = new (...args: never[]) => { readonly '@fluffy-spoon/substitute:not-assignable': true }
 
 // For a concrete `any` kind (a member that is only null/undefined) this is `CallKind<never> | 'plain'`, i.e. `'plain'`.
 type AssertionKind<TKind, TValue> = TKind extends 'value' ? CallKind<NonNullable<TValue>> : 'plain'
