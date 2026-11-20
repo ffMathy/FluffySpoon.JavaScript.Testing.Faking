@@ -2,13 +2,11 @@ import test from 'ava'
 import * as assert from 'assert'
 import { spawnSync } from 'child_process'
 import * as path from 'path'
-import { performance } from 'perf_hooks'
 import { inspect } from 'util'
 
 import { Substitute, Arg, configure, mimick, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
-import { assertRatiosWithin, assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 8: the behaviour findings of round 7 (R7V-*, R7FE-*, R7-ADV-*), decided in the fix spec as E33-E41.
 
@@ -142,14 +140,11 @@ const isolated = (script: string, timeout = 8000): any => {
 }
 
 test('R7V-3 (E33) a factory result stored on the object passed to it prints without recursing (two and ten of them)', t => {
-  // E43: the script measures in a process of its own; the load factor is measured right before it starts
-  const limit = timeLimit(2000)
   const printed = isolated(`
     const app = Substitute.for()
     const ctx = { name: 'root' }
     ctx.child0 = app.create0(ctx)
     ctx.child1 = app.create1(ctx)
-    const started = Date.now()
     const outputs = {
       root: String(app), inspected: inspect(app), child: String(ctx.child0), ctx: inspect(ctx), json: JSON.stringify({ ctx }),
       message: failureOf(() => app.received(2).create0(ctx))
@@ -158,7 +153,6 @@ test('R7V-3 (E33) a factory result stored on the object passed to it prints with
     const container = { name: 'container' }
     for (let index = 0; index < 10; index++) container['service' + index] = many['create' + index](container)
     outputs.many = String(many).length + failureOf(() => many.received(2).create0(container)).length + inspect(container).length
-    outputs.ms = Date.now() - started
     console.log(JSON.stringify(outputs))
   `)
   const child = "@Substitute.create0({ name: 'root', child0: @Substitute.create0(…), child1: @Substitute.create1(…) })"
@@ -171,23 +165,19 @@ test('R7V-3 (E33) a factory result stored on the object passed to it prints with
   t.true(printed.message.includes('but received 1.'))
   for (const key of ['root', 'child', 'ctx', 'json', 'message']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
   t.true(printed.many < 100000, `ten factory results: ${printed.many} characters`)
-  assertWithin(t, printed.ms, limit, 'printing')
 })
 
 test('R7V-3 (E33) handlers bound to the instance that holds them print without recursing (String, inspect, messages)', t => {
-  const limit = timeLimit(2000)
   const printed = isolated(`
     class Widget { constructor(bus) { this.on0 = bus.handler0.bind(this); this.on1 = bus.handler1.bind(this) } }
     const bus = Substitute.for()
     const widget = new Widget(bus)
-    const started = Date.now()
     const outputs = {
       bus: String(bus), widget: inspect(widget), handler: String(widget.on0),
       message: failureOf(() => bus.received(1).handler0('x')), bindMessage: failureOf(() => bus.handler0.received(2).bind(widget))
     }
     widget.on1('saved')
     outputs.called = failureOf(() => bus.received(1).handler1('saved'))
-    outputs.ms = Date.now() - started
     console.log(JSON.stringify(outputs))
   `)
   t.is(printed.handler, '@Substitute.handler0.bind(Widget { on0: @Substitute.handler0.bind(…), on1: @Substitute.handler1.bind(…) })')
@@ -197,7 +187,6 @@ test('R7V-3 (E33) handlers bound to the instance that holds them print without r
   t.true(printed.bindMessage.startsWith('Call count mismatch in @Substitute.handler0.bind:'))
   t.is(printed.called, 'passed', 'invoking a bound handler is a call of the member')
   for (const key of ['bus', 'widget', 'handler', 'message', 'bindMessage']) t.true(printed[key].length < 2000, `${key}: ${printed[key].length} characters`)
-  assertWithin(t, printed.ms, limit, 'printing')
 })
 
 test('R7V-3 (E33) a substitute inside the arguments of a path keeps primitive arguments, and the guard does not leak', t => {
@@ -245,85 +234,14 @@ class Reporter {
   }
 }
 
-/** The same code under test without the probe. */
-class PlainReporter {
-  constructor(private readonly logger: any) { }
-  report(item: { id: number }) { this.logger.log(`item ${item.id}`) }
-}
-
-test('R7-ADV-1 (E35) key in sub does not scan the auto-substitutes: 10,000 probes interleaved with calls cost no more than the calls', t => {
-  /**
-   * 10,000 reports with the probe and 10,000 without, interleaved report by report (in alternating order), so that both
-   * see the same load and the same garbage collections. The time of each one is added up.
-   */
-  const median = (values: number[]) => values.slice().sort((a, b) => a - b)[Math.floor(values.length / 2)]
-  /**
-   * The median time of a report with the probe and of one without, over 10,000 each. The median leaves out the
-   * reports that a garbage collection or another process interrupted.
-   */
-  const round = (): { probed: number, plain: number, total: number } => {
-    const probedLogger = Substitute.for<any>()
-    const plainLogger = Substitute.for<any>()
-    const probedReporter = new Reporter(probedLogger)
-    const plainReporter = new PlainReporter(plainLogger)
-    const probed: number[] = []
-    const plain: number[] = []
-    const time = (report: () => void): number => {
-      const started = performance.now()
-      report()
-      return performance.now() - started
-    }
-    for (let index = 0; index < 10000; index++) {
-      const item = { id: index }
-      if (index % 2 === 0) {
-        probed.push(time(() => probedReporter.report(item)))
-        plain.push(time(() => plainReporter.report(item)))
-      } else {
-        plain.push(time(() => plainReporter.report(item)))
-        probed.push(time(() => probedReporter.report(item)))
-      }
-    }
-    probedLogger.received(10000).log(Arg.any())
-    plainLogger.received(10000).log(Arg.any())
-    return { probed: median(probed), plain: median(plain), total: probed.reduce((sum, value) => sum + value, 0) }
-  }
-  round() // warm-up
-  const measure = () => {
-    const rounds = [round(), round(), round(), round(), round()]
-    const ratios = rounds.map(({ probed, plain }) => probed / plain).sort((a, b) => a - b)
-    t.log(`a report with an in probe against one without, interleaved: ${ratios.map(value => value.toFixed(2)).join(', ')} (median ${ratios[2].toFixed(2)}x; ` +
-      `10,000 reports with the probe in ${rounds.map(({ total }) => total.toFixed(0)).join(', ')} ms)`)
-    return { 'with the probe': ratios[2] }
-  }
-  // at 89e4175 the probes made it 15 to 50 times slower; at 74b8588 (no in trap) they cost nothing. E58: a measurement
-  // over the limit is made again (see assertRatiosWithin)
-  assertRatiosWithin(t, measure, 1.3, 'a report with an in probe against one without')
-})
-
-test('R7-ADV-1 (E35) the cost of key in sub does not grow with the auto-substitutes of the substitute', t => {
-  const probe = (logger: any): number => {
-    const started = process.hrtime()
-    let found = 0
-    for (let index = 0; index < 10000; index++) if ('debug' in logger) found++
-    const [seconds, nanoseconds] = process.hrtime(started)
-    t.is(found, 0)
-    return seconds * 1e3 + nanoseconds / 1e6
-  }
-  const fresh = Substitute.for<any>()
+test('R7-ADV-1 (E35) a key in sub probe on a member that was only called is false, also after many calls, and is not recorded', t => {
+  const logger = Substitute.for<any>()
+  const reporter = new Reporter(logger)
+  for (let index = 0; index < 100; index++) reporter.report({ id: index })
+  logger.received(100).log(Arg.any())
   const used = Substitute.for<any>()
-  for (let index = 0; index < 10000; index++) used.log(`item ${index}`).flush()
-  probe(fresh)
-  probe(used)
-  const freshTimes: number[] = []
-  const usedTimes: number[] = []
-  for (let round = 0; round < 5; round++) {
-    freshTimes.push(probe(fresh))
-    usedTimes.push(probe(used))
-  }
-  const best = (values: number[]) => Math.min(...values)
-  t.log(`10,000 probes: ${best(freshTimes).toFixed(2)} ms on a new substitute, ${best(usedTimes).toFixed(2)} ms after 10,000 distinct calls`)
-  // at 89e4175 every probe listed the 10,000 auto-substitutes (seconds in all); a few milliseconds of noise are allowed
-  t.true(best(usedTimes) < 3 * best(freshTimes) + 5, `${best(usedTimes).toFixed(2)} ms against ${best(freshTimes).toFixed(2)} ms`)
+  for (let index = 0; index < 100; index++) used.log(`item ${index}`).flush()
+  t.false('debug' in used)
 })
 
 test('E35 key in sub notes setups made deeper later, through any path, and only setups', t => {

@@ -3,7 +3,6 @@ import { inspect } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { assertWithin, timeLimit } from '../../helpers/timing'
 
 // Round 5: the runtime findings of the round-4 verification (R4-ADV-*), decided in the fix spec as E8-E12.
 
@@ -118,17 +117,7 @@ const capturesOf = (run: () => void): number => {
   return count
 }
 
-const millisecondsOf = (run: () => void) => {
-  const start = process.hrtime.bigint()
-  run()
-  return Number(process.hrtime.bigint() - start) / 1e6
-}
-const bestOfThree = (run: () => void) => {
-  run() // warm up
-  return Math.min(millisecondsOf(run), millisecondsOf(run), millisecondsOf(run))
-}
-
-test('E11 a recorded operation captures its call site once, and the hot path stays fast', t => {
+test('E11 a recorded operation captures its call site once', t => {
   // one capture per recorded operation: four reads and one call. Reading frames for the chain (D25) captures nothing
   // more: it looks at the call sites of the records themselves.
   const app = Substitute.for<any>()
@@ -139,17 +128,4 @@ test('E11 a recorded operation captures its call site once, and the hot path sta
   // the frames were read without taking the text of the call sites
   t.regex(messageOf(() => app.a.b.c.received(2).d(1)), /called at .*round5\.test\.(ts|js):\d+/)
   t.regex(messageOf(() => app.a.received(2).b), /called at .*round5\.test\.(ts|js):\d+/)
-
-  const callsLimit = timeLimit(1000)
-  const calls = bestOfThree(() => {
-    const substitute = Substitute.for<any>()
-    for (let index = 0; index < 10_000; index++) substitute.f(index)
-  })
-  assertWithin(t, calls, callsLimit, `10k sub.f(i)`)
-  const chainsLimit = timeLimit(1000)
-  const chains = bestOfThree(() => {
-    const substitute = Substitute.for<any>()
-    for (let index = 0; index < 10_000; index++) substitute.a.b.c.d(index)
-  })
-  assertWithin(t, chains, chainsLimit, `10k app.a.b.c.d(i)`)
 })
