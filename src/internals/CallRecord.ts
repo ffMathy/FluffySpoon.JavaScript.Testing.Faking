@@ -32,6 +32,12 @@ export class CallRecord {
   public directReading?: boolean
   /** E23: true when the invocation was a construction (`new sub.Client(url)`), which messages show with `new`. */
   public constructed?: boolean
+  /**
+   * E111: true when the operation answered with the substitute it was made on itself, which a setup with matchers or the
+   * mimicked instance gives every call it matches (`io.to(Arg.any()).returns(io)`): only an operation on the same line
+   * continues its expression then (see the engine's continuesExpression).
+   */
+  public handedOutItself?: boolean
 
   constructor(
     public kind: RecordKind,

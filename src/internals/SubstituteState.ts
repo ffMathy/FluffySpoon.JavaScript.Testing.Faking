@@ -307,6 +307,47 @@ export class AutoEntry {
   public adjacentHandOut(): CallRecord | undefined {
     return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
   }
+
+  /** E111: forgets that `record` handed out this proxy (a check made through it used it up, see the engine's faceContextFunction). */
+  public forgetHandOut(record: CallRecord): void {
+    if (this._handedOutBy === record) this._handedOutBy = undefined
+  }
+
+  /** E110: the latest configured hand-out of this entry's proxy (see ConfiguredHandOut). (Left undeclared until one.) */
+  private _configuredHandOut?: ConfiguredHandOut
+
+  /** E110: notes a configured hand-out of this entry's proxy (see ConfiguredHandOut). */
+  public noteConfiguredHandOut(record: CallRecord, from: SubstituteState, shared: boolean): void {
+    this._configuredHandOut = configuredHandOutNoted(this._configuredHandOut, record, from, shared)
+  }
+
+  /** E110: what the latest configured hand-out of this entry's proxy was, if `record` made it. */
+  public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
+    const handOut = this._configuredHandOut
+    return handOut !== undefined && handOut.record === record ? handOut : undefined
+  }
+}
+
+/**
+ * E110 (R16V-2, the docs agent's E99 retention): a substitute that the operation of `record` answered as a configured
+ * value (a setup's value, a mimicked instance's value, also the substitute itself when a setup with matchers shares it):
+ * the substitute that answered (`from`, the one `record` belongs to), and whether that answer is shared (E99: a setup
+ * with matchers, or the mimicked instance, gives it every call that it matches). One per substitute, for its latest such
+ * hand-out, so that a check through it finds where its expression came from (the engine's concreteRoute), with nothing
+ * kept per call: a record noted otherwise (E99 kept a note per call) is reachable from outside its substitute (from the
+ * substitute it handed out, and from the records chained to it), and would keep that substitute alive.
+ */
+export type ConfiguredHandOut = { record: CallRecord, from: SubstituteState, shared: boolean }
+
+/** E110: `handOut` (the one a substitute had, if any) updated for a new configured hand-out, or a new one. */
+const configuredHandOutNoted = (
+  handOut: ConfiguredHandOut | undefined, record: CallRecord, from: SubstituteState, shared: boolean
+): ConfiguredHandOut => {
+  if (handOut === undefined) return { record, from, shared }
+  handOut.record = record
+  handOut.from = from
+  handOut.shared = shared
+  return handOut
 }
 
 type CallEntryIndex = {
@@ -554,6 +595,8 @@ const memberPath = (state: SubstituteState, key: PropertyKey): string =>
 export type ConfiguredAnswer = object
 
 /** E88: several received calls of one member, one after the other in its records, that the same answer answered. */
+const NO_RECORDS: readonly CallRecord[] = Object.freeze([])
+
 class AnswerRun {
   constructor(public readonly first: CallRecord, public last: CallRecord) { }
 }
@@ -607,6 +650,25 @@ export class SubstituteState {
   /** E39: the record that answered with this substitute, if that was the most recent operation of all. */
   public adjacentHandOut(): CallRecord | undefined {
     return this._handedOutAt === currentSequence() ? this._handedOutBy : undefined
+  }
+
+  /** E111: forgets that `record` handed out this substitute (a check made through it used it up, see the engine's faceContextFunction). */
+  public forgetHandOut(record: CallRecord): void {
+    if (this._handedOutBy === record) this._handedOutBy = undefined
+  }
+
+  /** E110: the latest configured hand-out of this substitute (see ConfiguredHandOut). (Left undeclared until one.) */
+  private _configuredHandOut?: ConfiguredHandOut
+
+  /** E110: notes a configured hand-out of this substitute (see ConfiguredHandOut). */
+  public noteConfiguredHandOut(record: CallRecord, from: SubstituteState, shared: boolean): void {
+    this._configuredHandOut = configuredHandOutNoted(this._configuredHandOut, record, from, shared)
+  }
+
+  /** E110: what the latest configured hand-out of this substitute was, if `record` made it. */
+  public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
+    const handOut = this._configuredHandOut
+    return handOut !== undefined && handOut.record === record ? handOut : undefined
   }
 
   public get mimicked(): { instance: any } | undefined {
@@ -764,6 +826,76 @@ export class SubstituteState {
       if (record === last) answer = last = undefined
     }
     return byRecord
+  }
+
+  /**
+   * E110 (R16V-2): what the received calls of one member answered, as configuredAnswers gives it, by position in
+   * receivedRecordsOf(key) (undefined where a record is not noted), without building a map: a check through a call goes
+   * through every received call of the member.
+   */
+  public configuredAnswersByPosition(key: PropertyKey): (ConfiguredAnswer | undefined)[] | undefined {
+    const answers = this._configuredAnswers
+    const records = this._recordsByKey.get(key)
+    if (answers === undefined || records === undefined) return undefined
+    const starts = new Map<CallRecord, number>()
+    for (let index = 0; index < answers.length; index += 2) {
+      const run = answers[index + 1] as CallRecord | AnswerRun
+      const first = run instanceof AnswerRun ? run.first : run
+      if (first.key === key) starts.set(first, index)
+    }
+    if (starts.size === 0) return undefined
+    const byPosition: (ConfiguredAnswer | undefined)[] = new Array(records.length)
+    let answer: ConfiguredAnswer | undefined
+    let last: CallRecord | undefined
+    for (let position = 0; position < records.length; position++) {
+      const record = records[position]
+      const start = starts.get(record)
+      if (start !== undefined) {
+        answer = answers[start] as ConfiguredAnswer
+        const run = answers[start + 1] as CallRecord | AnswerRun
+        last = run instanceof AnswerRun ? run.last : run
+      }
+      byPosition[position] = answer
+      if (record === last) answer = last = undefined
+    }
+    return byPosition
+  }
+
+  /** E110: the records of one member, retracted ones included (see configuredAnswersByPosition). */
+  public receivedRecordsOf(key: PropertyKey): readonly CallRecord[] {
+    return this._recordsByKey.get(key) ?? NO_RECORDS
+  }
+
+  /**
+   * E110 (R16V-2): forgets a retracted record that a check went through (the engine's concreteRoute, for a check through a
+   * concrete call whose answer a setup with matchers shares), when it is the latest record of its member, as the leading
+   * call of a check is: so that the records and answers of the member that later checks look at are those of real calls,
+   * and a check costs the same however many came before it. Otherwise it stays (retracted records are never counted or
+   * shown).
+   */
+  public dropRetracted(record: CallRecord): void {
+    const forKey = this._recordsByKey.get(record.key)
+    if (!record.retracted || forKey === undefined || forKey[forKey.length - 1] !== record) return
+    const previous = forKey.length > 1 ? forKey[forKey.length - 2] : undefined
+    // what it answered: noted in the latest pair of its member, alone or as the end of a run (see noteConfiguredAnswer)
+    const answers = this._configuredAnswers
+    const at = this._latestAnswers?.get(record.key)
+    if (answers !== undefined && at !== undefined) {
+      const run = answers[at + 1] as CallRecord | AnswerRun
+      if (run === record) {
+        // (a pair that is not the latest of all stays: it matches no record any more)
+        if (at === answers.length - 2) {
+          answers.length = at
+          this._latestAnswers!.delete(record.key)
+        }
+      } else if (run instanceof AnswerRun && run.last === record && previous !== undefined) {
+        if (run.first === previous) answers[at + 1] = previous
+        else run.last = previous
+      }
+    }
+    forKey.pop()
+    const records = this._records
+    if (records[records.length - 1] === record) records.pop()
   }
 
   /** Received calls of one member, in order, without retracted records. */
