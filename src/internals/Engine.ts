@@ -146,7 +146,7 @@ const functionDescriptor = (property: PropertyKey, name: () => string): Property
 
 const anonymous = () => ''
 
-/** The traps that every view shares (E58: one set for all of them, see createView). */
+/** The traps that every view shares (see createView). */
 const viewTraps = {
   defineProperty: function defineProperty(target: () => Printer): boolean {
     throw definePropertyError(target, defineProperty)
@@ -165,14 +165,7 @@ const viewTraps = {
  * getOwnPropertyDescriptor traps, if it has them, take the place of the shared ones (E48: an assertion view is told
  * that the code changes it; E65: a bound function has a name of its own).
  */
-const createView = (print: Printer, handler: ProxyHandler<any>): any => {
-  if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
-  if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
-  handler.deleteProperty = viewTraps.deleteProperty
-  handler.ownKeys = viewTraps.ownKeys
-  if (handler.getOwnPropertyDescriptor === undefined) handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
-  return new Proxy(viewTarget(print), handler)
-}
+const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(viewTarget(print), { ...viewTraps, ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -223,27 +216,11 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
       if (nested !== undefined) pending.push(nested)
     }
   }
-  const prefixes = new Map<SubstituteState, string>()
-  const prefixOf = (owner: SubstituteState): string => {
-    let prefix = prefixes.get(owner)
-    if (prefix === undefined) {
-      prefix = relativePath(owner, state)
-      prefixes.set(owner, prefix)
-    }
-    return prefix
-  }
+  const prefixOf = (owner: SubstituteState): string => relativePath(owner, state)
   // E99 (R15FE-5): received calls are shown with the call that a substitute shared by a setup with matchers was handed
   // out to, when there is one (see Paths.relativeRecordPath); setups keep the matchers
-  const recordPrefixes = new Map<SubstituteState, string>()
   const labels = recordLabelContext(RecordedArguments.literalsEqual)
-  const recordPrefixOf = (owner: SubstituteState): string => {
-    let prefix = recordPrefixes.get(owner)
-    if (prefix === undefined) {
-      prefix = relativeRecordPath(owner, state, labels)
-      recordPrefixes.set(owner, prefix)
-    }
-    return prefix
-  }
+  const recordPrefixOf = (owner: SubstituteState): string => relativeRecordPath(owner, state, labels)
 
   const lines: string[] = []
   // D26: an invocation through call/apply is shown once, as its direct-call reading
@@ -678,8 +655,7 @@ const looksAt = (subject: Face | object): boolean =>
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
-    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing() || isFunctionHelperKey(property)) &&
-      inheritsFromSubstitute(receiver)) {
+    if (inheritsFromSubstitute(receiver)) {
       const inherited = inheritedMember(target(), property, receiver)
       if (inherited !== AS_USUAL) return inherited
     }
@@ -1407,12 +1383,10 @@ const proxyOfState = (state: SubstituteState): any => state.owner !== undefined 
  * [mimick](), which a new [mimick]() replaces): a handle read from an earlier instance, or before the substitute mimicked
  * anything, calls what the instance has when it is called, as before. `fn` is undefined when the instance had no
  * function for the member then (only setups answer that handle's calls). `others`, on the member's first handle: the
- * handles read since with other functions, so that a read finds them again (a few: a getter can give a new function at
- * every read, as on an ordinary object).
+ * handles read since with other functions, so that a read finds them again.
  */
 type HandleRead = { readonly mimicked: object, readonly fn: Function | undefined, others?: Map<Function | undefined, AutoEntry> }
 const handleReads = new WeakMap<AutoEntry, HandleRead>()
-const OTHER_HANDLES = 8
 
 /** E114: the member handle that a read of `key` gives while the mimicked instance has `fn` for it (see above). */
 const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function | undefined): AutoEntry => {
@@ -1431,7 +1405,6 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
     other = new AutoEntry('get', state, key)
     handleReads.set(other, { mimicked, fn })
     handleProxies.set(entryProxy(other), other)
-    if (others.size >= OTHER_HANDLES) others.delete(others.keys().next().value)
     others.set(fn, other)
   }
   return other
@@ -1502,25 +1475,19 @@ const wrapsOwnHandle = (value: Function): boolean => {
  * the handle is a matcher's look there, E95).
  */
 type MockContext = { mockImplementationOnce(implementation: Function): void }
-const mockContexts = new WeakMap<Function, MockContext | null>()
 
 const mockContextOf = (wrapper: Function): MockContext | undefined => {
-  let context = mockContexts.get(wrapper)
-  if (context === undefined) {
-    let value: any
-    libraryGuard.matching++
-    try {
-      value = Reflect.get(wrapper, 'mock')
-    } catch {
-      value = undefined // a proxy of the code under test whose get trap throws: no mock
-    } finally {
-      libraryGuard.matching--
-    }
-    context = typeof value === 'object' && value !== null && typeof value.mockImplementationOnce === 'function' &&
-      typeof value.callCount === 'function' ? value as MockContext : null
-    mockContexts.set(wrapper, context)
+  let value: any
+  libraryGuard.matching++
+  try {
+    value = Reflect.get(wrapper, 'mock')
+  } catch {
+    value = undefined // a proxy of the code under test whose get trap throws: no mock
+  } finally {
+    libraryGuard.matching--
   }
-  return context ?? undefined
+  return typeof value === 'object' && value !== null && typeof value.mockImplementationOnce === 'function' &&
+    typeof value.callCount === 'function' ? value as MockContext : undefined
 }
 
 /** E129: the answer of a setup to a call through a handle for node:test's mock, shown to the mock (see mockContextOf). */
@@ -1976,11 +1943,9 @@ const NO_SELF: Self = { thisArg: undefined, explicit: false }
 const CONSTRUCT: Self = { thisArg: undefined, explicit: false, construct: true }
 
 const constructing = (newTarget: unknown): Self => {
-  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its prototype
-  // first (a substitute or an auto-substitute), then by its marker (the other values the library hands out). A subclass
-  // of a substitute inherits the marker, but it is not a proxy.
-  if (typeof newTarget !== 'function' || isFaceProxy(newTarget) ||
-    (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
+  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its marker (as are
+  // the other values the library hands out). A subclass of a substitute inherits the marker, but it is not a proxy.
+  if (typeof newTarget !== 'function' || (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
   return { thisArg: undefined, explicit: false, construct: true, newTarget }
 }
 
