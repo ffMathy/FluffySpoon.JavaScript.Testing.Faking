@@ -1363,13 +1363,26 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
 }
 
 /**
+ * E114: the member handles of mimicked substitutes that reads (and descriptors, E115) gave, by their proxies (see
+ * ownHandleOf): found by identity, so that nothing is asked of the value (it may be a revoked proxy).
+ */
+const handleProxies = new WeakMap<object, AutoEntry>()
+
+/** E114: the proxy of a member handle of a mimicked substitute, as a read gives it. */
+const handleProxy = (entry: AutoEntry): any => {
+  const proxy = entryProxy(entry)
+  handleProxies.set(proxy, entry)
+  return proxy
+}
+
+/**
  * E114: the member handle of this substitute that a value is: the proxy of a handle read from it (of any of its members),
  * not a function that wraps one (node:test's mock.method makes a proxy of the original).
  */
 const ownHandleOf = (state: SubstituteState, value: unknown): AutoEntry | undefined => {
-  if (!isFaceProxy(value)) return undefined
-  const face = (value as any)[INTERNAL] as Face | undefined
-  return face instanceof AutoEntry && face.kind === 'get' && face.parent === state && face.proxy === value ? face : undefined
+  if (typeof value !== 'function') return undefined
+  const entry = handleProxies.get(value)
+  return entry !== undefined && entry.parent === state ? entry : undefined
 }
 
 /** E114: the function a member handle was read with, when it was read from the instance mimicked now (see above). */
@@ -1466,7 +1479,7 @@ const invokedHandleRead = (state: SubstituteState, key: PropertyKey, subject: Fa
 const methodDescriptor = (state: SubstituteState, key: PropertyKey, descriptor: PropertyDescriptor): PropertyDescriptor => {
   if (!('value' in descriptor)) return descriptor
   const method = methodOf(state, descriptor.value)
-  return method === NO_METHOD ? descriptor : { ...descriptor, value: entryProxy(mimickedHandle(state, key, method)) }
+  return method === NO_METHOD ? descriptor : { ...descriptor, value: handleProxy(mimickedHandle(state, key, method)) }
 }
 
 /**
@@ -1603,7 +1616,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     state.addPendingRead(record)
     const entry = mimickedHandle(state, key, method)
     entry.handOut(record)
-    return entryProxy(entry)
+    return handleProxy(entry)
   }
 
   const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
@@ -1632,7 +1645,7 @@ const peekGet = (state: SubstituteState, key: PropertyKey): any => {
     const value = delegate ? mimicked.instance[key] : undefined
     const method = delegate ? methodOf(state, value) : undefined
     if (method === NO_METHOD) return fromMimicked(value, mimicked.instance, state)
-    return entryProxy(mimickedHandle(state, key, method)) // E114
+    return handleProxy(mimickedHandle(state, key, method)) // E114
   }
   return entryProxy(state.propertyEntry(key))
 }
