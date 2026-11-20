@@ -406,9 +406,11 @@ test('R16FE-4 (E115) Object.defineProperty and delete on a mimicked substitute g
   t.false('b' in real)
   t.deepEqual(Object.keys(sub), ['a'])
 
-  // without `configurable`, as on the instance
+  // without `configurable`, a new key is not configurable, as on any object (round 18, E130: R17-ADV-8): defined on the
+  // substitute itself, as below
   Object.defineProperty(sub, 'c', { value: 3, enumerable: true })
-  t.is(real.c, 3)
+  t.false('c' in real)
+  t.is(sub.c, 3)
   // a non-configurable property cannot be reported for the instance: it is defined on the substitute itself (E25)
   Object.defineProperty(sub, 'd', { value: 4, configurable: false })
   t.false('d' in real)

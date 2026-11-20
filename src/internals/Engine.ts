@@ -1020,6 +1020,11 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
     if (entry.kind === 'call' && isStringAssertionKey(entry.key)) return stringCheckMember(entry, property, chainHead, stackStart)
     const method = substitutionMethodOf(property)
     if (method !== undefined) return setupFunction(entry, method, chainHead(), stackStart)
+    // E129: `sub.m.mock` on a handle for node:test's mock of the member is the mock's context, as on the mock itself
+    if (property === 'mock' && entry.kind === 'get') {
+      const context = handleMockContext(entry)
+      if (context !== undefined) return context
+    }
   }
 
   // D26: call/apply/bind, unless the member with that name is configured as a property, or the substitute mimicks
@@ -1204,7 +1209,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
     const direct = directReadingOf(face)
     // E114: through a member handle of a mimicked substitute, as a direct call of it (see invoke)
     const handle = directArgs !== undefined && direct.state.mimicked !== undefined && direct.key !== SELF ? invokedHandleRead(direct.state, direct.key, face) : undefined
-    if (handle !== undefined && isPartOfDelegation(direct.state, direct.key, handle)) return partOfDelegation(direct.state, direct.key, handle, directArgs!, { thisArg, explicit: true })
+    if (handle !== undefined && runsInDelegation(direct.state, direct.key, handle, thisArg)) return partOfDelegation(direct.state, direct.key, handle, directArgs!, { thisArg, explicit: true })
     const read = direct.readSource === TAKE_PENDING_READ ? direct.state.takePendingRead(direct.key) : undefined
     const memberState = faceState(face)
 
@@ -1484,14 +1489,83 @@ const handleRead = (handle: AutoEntry, state: SubstituteState): HandleRead | und
  * E114: the function a value of the mimicked instance stands for, if it is a method (a function that is not a substitute):
  * one of the substitute's own member handles (put there by `sub.m = original`, jest's mockRestore() or a restore of
  * another tool) stands for the function it was read with, so that a call never goes round through the handle. NO_METHOD
- * for any other value, which reads as itself (D12).
+ * for any other value, which reads as itself (D12). E129: a function that wraps one of the handles is a method too (see
+ * wrapsOwnHandle).
  */
 const NO_METHOD: unique symbol = Symbol('no method')
 const methodOf = (state: SubstituteState, value: unknown): Function | undefined | typeof NO_METHOD => {
   if (typeof value !== 'function') return NO_METHOD
   const handle = ownHandleOf(state, value)
   if (handle !== undefined) return handleRead(handle, state)?.fn
-  return isSubstituteProxy(value) ? NO_METHOD : value
+  return isSubstituteProxy(value) && !wrapsOwnHandle(value) ? NO_METHOD : value
+}
+
+/**
+ * E129 (R17-ADV-4): the functions that wrap one of this copy's member handles without being one. node:test's mock of a
+ * member (`mock.method(sub, 'm')`, with or without an implementation, and `mock.fn(sub.m)`) is a Proxy whose target is
+ * the handle it found (see methodDescriptor), so it answers the library's marker as the handle does; but it is a method
+ * of the instance like any other (see methodOf). A read of the member then gives a handle for it, so that a call goes
+ * through the substitute first (its setups and the recording) and only then to the mock, which runs its implementation:
+ * the one it was given, or the original (the handle it wraps, whose call is part of that delegation, E114).
+ */
+const handleWrappers = new WeakSet<Function>()
+
+const wrapsOwnHandle = (value: Function): boolean => {
+  if (handleWrappers.has(value)) return true
+  // (a proxy whose prototype is that of the library's targets, found without reading through other copies' proxies)
+  if (handleProxies.has(value) || !isFaceProxy(value)) return false
+  const face = faceOfInspected(value)
+  if (!(face instanceof AutoEntry) || face.proxy === value || !handleReads.has(face)) return false
+  handleWrappers.add(value)
+  return true
+}
+
+/**
+ * E129: node:test's mock counts every call of the member, as it did when reads gave the mock itself: a call that a setup
+ * answers is shown to it as well (see configuredAnswer), with the setup's answer as its result, through the mock's own
+ * mockImplementationOnce(), so that neither its implementation nor the original runs for that call. The context is what
+ * the mock answers for `mock` (MockFunctionContext); any other wrapper has none (read with nothing recorded: what reaches
+ * the handle is a matcher's look there, E95).
+ */
+type MockContext = { mockImplementationOnce(implementation: Function): void }
+const mockContexts = new WeakMap<Function, MockContext | null>()
+
+const mockContextOf = (wrapper: Function): MockContext | undefined => {
+  let context = mockContexts.get(wrapper)
+  if (context === undefined) {
+    let value: any
+    libraryGuard.matching++
+    try {
+      value = Reflect.get(wrapper, 'mock')
+    } catch {
+      value = undefined // a proxy of the code under test whose get trap throws: no mock
+    } finally {
+      libraryGuard.matching--
+    }
+    context = typeof value === 'object' && value !== null && typeof value.mockImplementationOnce === 'function' &&
+      typeof value.callCount === 'function' ? value as MockContext : null
+    mockContexts.set(wrapper, context)
+  }
+  return context ?? undefined
+}
+
+/** E129: the answer of a setup to a call through a handle for node:test's mock, shown to the mock (see mockContextOf). */
+const shownToMock = (wrapper: Function, substitution: Substitution, args: any[], self: Self): any => {
+  const context = mockContextOf(wrapper)
+  if (context === undefined) return execute(substitution, args, self)
+  let answer: any
+  context.mockImplementationOnce(function configured() {
+    answer = execute(substitution, args, self)
+    return answer
+  })
+  Reflect.apply(wrapper, self.thisArg, args)
+  return answer
+}
+
+/** E129: the node:test mock context that `mock` reads on a member handle for a function that wraps one (see shownToMock). */
+const handleMockContext = (handle: AutoEntry): MockContext | undefined => {
+  const fn = handleReads.get(handle)?.fn
+  return fn !== undefined && handleWrappers.has(fn) ? mockContextOf(fn) : undefined
 }
 
 /**
@@ -1540,6 +1614,24 @@ const isPartOfDelegation = (state: SubstituteState, key: PropertyKey, read: Hand
 }
 
 /**
+ * E131 (R17-ADV-10): whether a call through a member handle is one that the mimicked instance makes itself: its `this` is
+ * the instance, while a call of this substitute (of any member) is being delegated to the instance. That is a call
+ * through `this` (`this.validate(order)` in `place()`) of a member that a spy or a wrapper replaced on the instance and
+ * that forwards to the handle it read (jest.spyOn, vi.spyOn, node:test's mock, `original.apply(this, args)`). Without the
+ * spy, `this.validate` would be the instance's own function, which is no call of the substitute; with it, the call is the
+ * instance's own as well (see partOfDelegation): not recorded and not matched against the setups. The spy still runs.
+ */
+const isInstanceOwnCall = (state: SubstituteState, thisArg: unknown): boolean => {
+  if (delegations.length === 0 || thisArg !== state.mimicked!.instance) return false
+  for (let index = delegations.length - 2; index >= 0; index -= 2) if (delegations[index] === state) return true
+  return false
+}
+
+/** E114, E131: whether a call through a member handle runs as part of what is being delegated (see partOfDelegation). */
+const runsInDelegation = (state: SubstituteState, key: PropertyKey, read: HandleRead, thisArg: unknown): boolean =>
+  isPartOfDelegation(state, key, read) || isInstanceOwnCall(state, thisArg)
+
+/**
  * E114: a call that is part of the call being delegated (see isPartOfDelegation): that call was recorded and matched
  * against the setups already, so this one is neither. It runs the handle's function, as the wrapper meant (for a handle
  * read when the instance had no function for the member: the auto-substitute that call answers otherwise).
@@ -1579,10 +1671,15 @@ const methodDescriptor = (state: SubstituteState, key: PropertyKey, descriptor: 
  * the substitute itself, as before (E25): the substitute reports the instance's members as configurable (E51), which a
  * Proxy may only do for one that is configurable. Undefined: not defined on the instance (the substitute mimicks no
  * object, or the instance refused the definition).
+ * E130 (R17-ADV-8): so is a new key defined without `configurable`, which then defaults to false, as on any object
+ * (`Object.defineProperty(sub, kBrand, { value: true })`, a library's brand): the substitute reports it as its own, with
+ * the attributes it was defined with, and refuses to redefine it, as an object does. A key the instance has as its own
+ * keeps its attributes, as on the instance.
  */
 const defineOnInstance = (face: Face, key: PropertyKey, descriptor: PropertyDescriptor): boolean | undefined => {
   const instance = mimickedInstanceOf(face)
   if (instance === undefined || descriptor.configurable === false) return undefined
+  if (descriptor.configurable === undefined && !hasOwnProperty.call(instance, key)) return undefined
   const state = face instanceof AutoEntry ? face.materializedState! : face
   let defined = descriptor
   if ('value' in descriptor) {
@@ -1821,7 +1918,7 @@ const invoke = (
   if (state.mimicked !== undefined && key !== SELF) {
     const read = invokedHandleRead(state, key, subject)
     if (read !== undefined) {
-      if (isPartOfDelegation(state, key, read)) return partOfDelegation(state, key, read, args, self)
+      if (runsInDelegation(state, key, read, self.thisArg)) return partOfDelegation(state, key, read, args, self)
       self = { thisArg: self.thisArg, explicit: self.explicit, construct: self.construct, newTarget: self.newTarget, read }
     }
   }
@@ -1960,6 +2057,9 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
     // (no record: a matcher's look, E95)
     if (record === undefined) return peekExecute(substitution, args, self)
     if (substitution.method === 'auto') substitution.entry!.handOut(record)
+    // E129: through a handle for node:test's mock of the member, the mock sees the call as well (see shownToMock)
+    const read = self.read
+    if (read !== undefined && read.fn !== undefined && self.construct !== true && handleWrappers.has(read.fn)) return shownToMock(read.fn, substitution, args, self)
     return execute(substitution, args, self)
   }
 
@@ -3174,7 +3274,8 @@ const configureMember = (state: SubstituteState, key: PropertyKey, configuring =
       const mimickedValue = substitution === undefined && instance !== undefined && hasMember(instance, key)
         ? fromMimicked(instance[key], instance, state) : undefined
       // a real method of a mimicked instance reads as a handle (see realGet), so nested setups configure that handle
-      const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || isSubstituteProxy(mimickedValue))
+      // (E129: also a function that wraps one, see wrapsOwnHandle)
+      const mimicked = mimickedValue !== undefined && (typeof mimickedValue !== 'function' || (isSubstituteProxy(mimickedValue) && !wrapsOwnHandle(mimickedValue)))
         ? { value: mimickedValue } : undefined
       if (forwards(substitution, mimicked)) {
         const forward = (start: Function) =>
