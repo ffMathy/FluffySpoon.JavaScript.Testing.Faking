@@ -313,18 +313,17 @@ export class AutoEntry {
     if (this._handedOutBy === record) this._handedOutBy = undefined
   }
 
-  /** E110: the latest configured hand-out of this entry's proxy (see ConfiguredHandOut). (Left undeclared until one.) */
-  private _configuredHandOut?: ConfiguredHandOut
+  /** E110, E122: the configured hand-outs of this entry's proxy in the latest expression (see HandOutNotes). (Left undeclared until one.) */
+  private _configuredHandOut?: HandOutNotes
 
-  /** E110: notes a configured hand-out of this entry's proxy (see ConfiguredHandOut). */
+  /** E110, E122: notes a configured hand-out of this entry's proxy (see HandOutNotes). */
   public noteConfiguredHandOut(record: CallRecord, from: SubstituteState, shared: boolean): void {
     this._configuredHandOut = configuredHandOutNoted(this._configuredHandOut, record, from, shared)
   }
 
-  /** E110: what the latest configured hand-out of this entry's proxy was, if `record` made it. */
+  /** E110, E122: the configured hand-out of this entry's proxy that `record` made, if it is one of the latest expression. */
   public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
-    const handOut = this._configuredHandOut
-    return handOut !== undefined && handOut.record === record ? handOut : undefined
+    return configuredHandOutOf(this._configuredHandOut, record)
   }
 }
 
@@ -332,22 +331,68 @@ export class AutoEntry {
  * E110 (R16V-2, the docs agent's E99 retention): a substitute that the operation of `record` answered as a configured
  * value (a setup's value, a mimicked instance's value, also the substitute itself when a setup with matchers shares it):
  * the substitute that answered (`from`, the one `record` belongs to), and whether that answer is shared (E99: a setup
- * with matchers, or the mimicked instance, gives it every call that it matches). One per substitute, for its latest such
- * hand-out, so that a check through it finds where its expression came from (the engine's concreteRoute), with nothing
- * kept per call: a record noted otherwise (E99 kept a note per call) is reachable from outside its substitute (from the
- * substitute it handed out, and from the records chained to it), and would keep that substitute alive.
+ * with matchers, or the mimicked instance, gives it every call that it matches). Kept on the substitute handed out, so
+ * that a check through it finds where its expression came from (the engine's concreteRoute), with nothing kept per call:
+ * a record noted otherwise (E99 kept a note per call) is reachable from outside its substitute (from the substitute it
+ * handed out, and from the records chained to it), and would keep that substitute alive.
  */
 export type ConfiguredHandOut = { record: CallRecord, from: SubstituteState, shared: boolean }
 
-/** E110: `handOut` (the one a substitute had, if any) updated for a new configured hand-out, or a new one. */
+/**
+ * E122 (R17-ADV-1, R17-ADV-2): the configured hand-outs of a substitute in the latest expression that handed it out, in
+ * the order they were made: one note as a rule, an array when the expression handed the substitute out again (a
+ * self-returning builder, `db('orders').where('id', 1).where(...)`, or a cycle, `io.to('b').back(1).to('a')`), so that a
+ * check through it follows the route step by step past each of them. A hand-out that does not continue the expression
+ * of the latest one (its record is not chained to that one's) starts over: what is kept is bounded by the latest
+ * expression, and keeps nothing alive once another expression hands the substitute out.
+ */
+export type HandOutNotes = ConfiguredHandOut | ConfiguredHandOut[]
+
+/** E122: at most this many hand-outs of one substitute are kept for one expression (the oldest go first). */
+const MAX_HAND_OUT_NOTES = 1000
+
+/**
+ * E122: whether `record` continues the expression of `latest` (an earlier record): `latest` is among the records it is
+ * chained to (CallRecord.chainPrevious). The records of an expression are made one after the other, so the search stops
+ * at the first older record, after at most MAX_HAND_OUT_NOTES steps.
+ */
+const continuesHandOut = (latest: CallRecord, record: CallRecord): boolean => {
+  const seq = latest.seq
+  let previous = record.chainPrevious
+  for (let steps = 0; previous !== undefined && steps < MAX_HAND_OUT_NOTES; steps++) {
+    if (previous === latest) return true
+    if (previous.seq < seq) return false
+    previous = previous.chainPrevious
+  }
+  return false
+}
+
+/** E110, E122: `notes` (those a substitute had, if any) updated for a new configured hand-out (see HandOutNotes). */
 const configuredHandOutNoted = (
-  handOut: ConfiguredHandOut | undefined, record: CallRecord, from: SubstituteState, shared: boolean
-): ConfiguredHandOut => {
-  if (handOut === undefined) return { record, from, shared }
-  handOut.record = record
-  handOut.from = from
-  handOut.shared = shared
-  return handOut
+  notes: HandOutNotes | undefined, record: CallRecord, from: SubstituteState, shared: boolean
+): HandOutNotes => {
+  if (notes === undefined) return { record, from, shared }
+  if (Array.isArray(notes)) {
+    if (continuesHandOut(notes[notes.length - 1].record, record)) {
+      if (notes.length >= MAX_HAND_OUT_NOTES) notes.shift()
+      notes.push({ record, from, shared })
+      return notes
+    }
+    notes = notes[0]
+  } else if (record.chainPrevious !== undefined && continuesHandOut(notes.record, record)) return [notes, { record, from, shared }]
+  // (another expression: the note is reused, E110)
+  notes.record = record
+  notes.from = from
+  notes.shared = shared
+  return notes
+}
+
+/** E110, E122: the note of `notes` for the hand-out that `record` made, if there is one (the latest first). */
+const configuredHandOutOf = (notes: HandOutNotes | undefined, record: CallRecord): ConfiguredHandOut | undefined => {
+  if (notes === undefined) return undefined
+  if (!Array.isArray(notes)) return notes.record === record ? notes : undefined
+  for (let index = notes.length - 1; index >= 0; index--) if (notes[index].record === record) return notes[index]
+  return undefined
 }
 
 type CallEntryIndex = {
@@ -657,18 +702,17 @@ export class SubstituteState {
     if (this._handedOutBy === record) this._handedOutBy = undefined
   }
 
-  /** E110: the latest configured hand-out of this substitute (see ConfiguredHandOut). (Left undeclared until one.) */
-  private _configuredHandOut?: ConfiguredHandOut
+  /** E110, E122: the configured hand-outs of this substitute in the latest expression (see HandOutNotes). (Left undeclared until one.) */
+  private _configuredHandOut?: HandOutNotes
 
-  /** E110: notes a configured hand-out of this substitute (see ConfiguredHandOut). */
+  /** E110, E122: notes a configured hand-out of this substitute (see HandOutNotes). */
   public noteConfiguredHandOut(record: CallRecord, from: SubstituteState, shared: boolean): void {
     this._configuredHandOut = configuredHandOutNoted(this._configuredHandOut, record, from, shared)
   }
 
-  /** E110: what the latest configured hand-out of this substitute was, if `record` made it. */
+  /** E110, E122: the configured hand-out of this substitute that `record` made, if it is one of the latest expression. */
   public configuredHandOut(record: CallRecord): ConfiguredHandOut | undefined {
-    const handOut = this._configuredHandOut
-    return handOut !== undefined && handOut.record === record ? handOut : undefined
+    return configuredHandOutOf(this._configuredHandOut, record)
   }
 
   public get mimicked(): { instance: any } | undefined {

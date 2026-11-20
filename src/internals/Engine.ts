@@ -2419,12 +2419,20 @@ type RouteStep = {
    */
   readonly shared?: SubstituteState
 }
-type CheckRoute = { readonly origin: SubstituteState, readonly steps: readonly RouteStep[] }
+/**
+ * `undetermined` (E122): the route of a check through a concrete call (see concreteRoute) went up through a record that
+ * handed out a substitute as a configured value, which is no longer known to have come from where (that substitute was
+ * handed out since by another expression), with the substitute it handed out: the check is a usage error then.
+ */
+type CheckRoute = {
+  readonly origin: SubstituteState, readonly steps: readonly RouteStep[], readonly undetermined?: { readonly record: CallRecord, readonly answered: SubstituteState }
+}
 
 const memberStep = (key: PropertyKey): RouteStep => ({ kind: 'get', key, argumentList: undefined, matchesCall: () => false })
 const callStep = (key: PropertyKey, specification: RecordedArguments): RouteStep =>
   ({ kind: 'call', key, argumentList: specification.value, matchesCall: actualArguments => specification.matches(actualArguments) })
-const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute => ({ origin: route.origin, steps: [...route.steps, step] })
+const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute =>
+  ({ origin: route.origin, steps: [...route.steps, step], undetermined: route.undetermined })
 
 /**
  * E99: the step of a record of a check expression: its read, or its call with the arguments it was made with (`shared`:
@@ -2503,6 +2511,10 @@ const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutSt
  * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf), with nothing noted per
  * call. The records of the expression, which the check has retracted, are then forgotten where they are the latest of
  * their member (see SubstituteState.dropRetracted), so that later checks do not look at them again.
+ * E122 (R17-ADV-1, R17-ADV-2): a substitute that the expression handed out several times (a self-returning builder, a
+ * cycle) has a note for each of those hand-outs (see SubstituteState.HandOutNotes), so the route goes on past each. A
+ * record above a step that E99 narrows whose hand-out is no longer known (see CheckRoute.undetermined) makes the check a
+ * usage error rather than a check of the route below it, which could pass wrongly.
  */
 const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): CheckRoute | undefined => {
   if (head === undefined || sharedHandOutCount === 0) return undefined
@@ -2510,9 +2522,14 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   const answers: SubstituteState[] = []
   let top = 0
   let answered = state
+  let undetermined: CheckRoute['undetermined']
   for (let record: CallRecord | undefined = head; record !== undefined && found.length < MAX_EXPRESSION_STEPS;) {
     const step = handOutStepOf(answered, record)
-    if (step === undefined) break
+    if (step === undefined) {
+      // (a substitute itself is handed out as a configured value only, which is noted, see handOutShared)
+      if (top > 0 && answered.owner === undefined) undetermined = { record, answered }
+      break
+    }
     found.push(step)
     answers.push(answered)
     if (step.shared) top = found.length
@@ -2526,7 +2543,7 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(found[index].record, found[index].shared ? answers[index] : undefined))
   // (from the bottom up: each is the latest record of its member then)
   for (const step of found) step.owner.dropRetracted(step.record)
-  return { origin: found[top - 1].owner, steps }
+  return { origin: found[top - 1].owner, steps, undetermined }
 }
 
 /** E99: what a check opened on `state` counts, when its expression reached `state` from `head` (see concreteRoute). */
@@ -2698,6 +2715,23 @@ const sharedSubstituteError = (
   )
 }
 
+/**
+ * E122: a check through a concrete call whose expression went, further up, through a call (`record`) that handed out the
+ * substitute `answered` as a configured value, while where that call was made is no longer known (`answered` was handed
+ * out since, by another expression): which calls came through the route cannot be told. A usage error, naming the call.
+ */
+const undeterminedRouteError = (route: CheckRoute, record: CallRecord, answered: SubstituteState, start: Function | undefined) => {
+  const call = record.kind === 'call' ? `${memberLabel(record.key)}${formatArguments(record.args ?? [], false)}` : memberLabel(record.key)
+  return SubstituteException.generic(
+    `Cannot check through ${routePath(route)}: before it, the expression went through ${call}, which answered ` +
+    `${printAnswer(answered)}, and which call that was, and so which calls came through the expression, cannot be told ` +
+    `any more (${printAnswer(answered)} was handed out by another expression since). Check the calls of each substitute ` +
+    `directly instead (for example ${asExpression(route.origin.path)}.received(1)${stepText(route.steps[0])}), or check a ` +
+    `concrete call in an expression of its own.`,
+    start
+  )
+}
+
 /** E99: a substitute that calls answered, as messages show it. */
 const printAnswer = (answer: object): string => answer instanceof AutoEntry || answer instanceof SubstituteState ? answer.path : formatValue(answer, false)
 
@@ -2801,6 +2835,7 @@ type RouteEnd = { readonly checked: readonly Checked[], readonly foreign?: Funct
 
 /** Follows a route (see above). E88, E89, E99, E105: a usage error when it cannot be followed (`start`: where). */
 const followRoute = (route: CheckRoute, start: Function | undefined, follow: Follow = 'count'): RouteEnd => {
+  if (route.undetermined !== undefined && follow === 'count') throw undeterminedRouteError(route, route.undetermined.record, route.undetermined.answered, start)
   let checked: Checked[] = [checkedOf(route.origin)]
   const steps = route.steps
   for (let index = 0; index < steps.length; index++) {
