@@ -345,7 +345,14 @@ export class AutoEntry {
  * a record noted otherwise (E99 kept a note per call) is reachable from outside its substitute (from the substitute it
  * handed out, and from the records chained to it), and would keep that substitute alive.
  */
-export type ConfiguredHandOut = { record: CallRecord, from: SubstituteState, shared: boolean }
+export type ConfiguredHandOut = {
+  record: CallRecord, from: SubstituteState, shared: boolean,
+  /**
+   * E122, E126: whether this hand-out was noted as continuing the expression of the note before it while the link of its
+   * record to that note's record, a hand-out of the substitute itself, was not decided yet (see configuredHandOutNoted).
+   */
+  pending: boolean
+}
 
 /**
  * E122 (R17-ADV-1, R17-ADV-2): the configured hand-outs of a substitute in the latest expression that handed it out, in
@@ -376,23 +383,51 @@ const continuesHandOut = (latest: CallRecord, record: CallRecord): boolean => {
   return false
 }
 
-/** E110, E122: `notes` (those a substitute had, if any) updated for a new configured hand-out (see HandOutNotes). */
+/**
+ * E110, E122: `notes` (those a substitute had, if any) updated for a new configured hand-out (see HandOutNotes).
+ * E126: a hand-out by an operation whose link to the latest note's record, a hand-out of the substitute itself (a fluent
+ * step, `emitter.on('a', f).on('b', f)`), is not decided yet (see CallRecord.linkPendsTo) is noted as continuing that
+ * expression for now. Whether it does is decided only when the notes are read (see settledNotes), from where both
+ * operations are, so that the calls of a fluent method read no stack frames until a check follows them.
+ */
 const configuredHandOutNoted = (
   notes: HandOutNotes | undefined, record: CallRecord, from: SubstituteState, shared: boolean
 ): HandOutNotes => {
-  if (notes === undefined) return { record, from, shared }
+  if (notes === undefined) return { record, from, shared, pending: false }
   if (Array.isArray(notes)) {
-    if (continuesHandOut(notes[notes.length - 1].record, record)) {
+    const latest = notes[notes.length - 1].record
+    const pending = record.linkPendsTo(latest)
+    if (pending || continuesHandOut(latest, record)) {
       if (notes.length >= MAX_HAND_OUT_NOTES) notes.shift()
-      notes.push({ record, from, shared })
+      notes.push({ record, from, shared, pending })
       return notes
     }
     notes = notes[0]
-  } else if (record.chainPrevious !== undefined && continuesHandOut(notes.record, record)) return [notes, { record, from, shared }]
+  } else if (record.linkPendsTo(notes.record)) return [notes, { record, from, shared, pending: true }]
+  else if (record.chainPrevious !== undefined && continuesHandOut(notes.record, record)) return [notes, { record, from, shared, pending: false }]
   // (another expression: the note is reused, E110)
   notes.record = record
   notes.from = from
   notes.shared = shared
+  notes.pending = false
+  return notes
+}
+
+/**
+ * E122, E126: `notes` with the pending notes decided (see configuredHandOutNoted): the latest one that does not continue
+ * the expression of the note before it started another expression, so the notes before it are dropped, as they would
+ * have been when it was noted.
+ */
+const settledNotes = (notes: ConfiguredHandOut[]): ConfiguredHandOut[] => {
+  for (let index = notes.length - 1; index > 0; index--) {
+    const note = notes[index]
+    if (!note.pending) continue
+    note.pending = false
+    if (note.record.chainPrevious !== notes[index - 1].record) {
+      notes.splice(0, index)
+      break
+    }
+  }
   return notes
 }
 
@@ -405,6 +440,7 @@ const continuesNotes = (notes: HandOutNotes | undefined, record: CallRecord): bo
 const configuredHandOutOf = (notes: HandOutNotes | undefined, record: CallRecord): ConfiguredHandOut | undefined => {
   if (notes === undefined) return undefined
   if (!Array.isArray(notes)) return notes.record === record ? notes : undefined
+  notes = settledNotes(notes)
   for (let index = notes.length - 1; index >= 0; index--) if (notes[index].record === record) return notes[index]
   return undefined
 }

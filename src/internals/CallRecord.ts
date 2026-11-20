@@ -93,6 +93,14 @@ export class CallRecord {
     site.pendingSelfLink = this.seq
   }
 
+  /**
+   * E126, E122: whether this operation's link to `candidate`, a hand-out of the substitute itself, is still to be decided
+   * (see linkToSelfHandOut), without deciding it (see SubstituteState.configuredHandOutNoted).
+   */
+  public linkPendsTo(candidate: CallRecord): boolean {
+    return this._chainPrevious === candidate && (this._stack as PendingLinkSite).pendingSelfLink === this.seq
+  }
+
   /** The captured call site itself (E48: the stack of a report about this operation). */
   public get site(): StackHolder {
     return this._stack
