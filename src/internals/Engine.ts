@@ -2502,20 +2502,11 @@ const stateOf = (checked: SubstituteState | AutoEntry): SubstituteState | undefi
 /** Collects substitutes without repeats, in the order they are added. */
 class CheckedList {
   readonly items: Checked[] = []
-  // (E110: only once there are several, as a step mostly leads to one substitute, over and over)
-  private seen?: Set<Checked>
+  private readonly seen = new Set<Checked>()
   add(checked: Checked | undefined): void {
-    if (checked === undefined) return
-    const items = this.items
-    if (items.length === 0) {
-      items.push(checked)
-      return
-    }
-    if (items[0] === checked) return
-    const seen = this.seen ?? (this.seen = new Set(items))
-    if (seen.has(checked)) return
-    seen.add(checked)
-    items.push(checked)
+    if (checked === undefined || this.seen.has(checked)) return
+    this.seen.add(checked)
+    this.items.push(checked)
   }
 }
 
@@ -2563,22 +2554,9 @@ const concreteStep = (record: CallRecord, shared: SubstituteState | undefined): 
     kind: 'call',
     key: record.key,
     argumentList: args,
-    matchesCall: actualArguments => sameArguments(args, actualArguments),
+    matchesCall: actualArguments => RecordedArguments.literalsEqual(args, actualArguments),
     shared
   }
-}
-
-/**
- * E110: whether the arguments of a received call are those of a call of a check expression (RecordedArguments.literalsEqual),
- * the same values first (as for the calls of a loop that a check goes through, call after call).
- */
-const sameArguments = (expected: readonly unknown[], actual: readonly unknown[]): boolean => {
-  if (expected.length === actual.length) {
-    let index = 0
-    while (index < expected.length && Object.is(expected[index], actual[index])) index++
-    if (index === expected.length) return true
-  }
-  return RecordedArguments.literalsEqual(expected, actual)
 }
 
 /** `.on('saved', Arg.any{any})`, `.items`, `('a')`: a step as a path shows it. */
@@ -2979,14 +2957,9 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   /**
    * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitutes whose records were listed so far, with those records, for this use
    * of the check view only (see use), so that a report made from it and thrown later (D9) names each record's substitute,
-   * and another use counts afresh. (Created when records are first listed: the check itself, before a use, lists none.)
-   * E110: while the records listed are those of one substitute (`_first`), as a rule, nothing is kept per record. E121
-   * (R17V-2): once those of another substitute are listed, each record's substitute is kept in a map (`_owners`, with
-   * those of `_first`), so that listing the records of many substitutes costs O(1) per record, as at cd1bf29.
+   * and another use counts afresh.
    */
-  private _first?: Checked
-  private _firstRecords?: readonly CallRecord[]
-  private _owners?: Map<CallRecord, Checked>
+  private readonly _owners = new Map<CallRecord, Checked>()
 
   constructor(private readonly route: CheckRoute, private _end?: RouteEnd) { }
 
@@ -3045,7 +3018,6 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * shares, made through other calls than the concrete one the check goes through.
    */
   public uncountedFor(key: PropertyKey): CallRecord[] {
-    if (!this.route.steps.some(step => step.shared !== undefined)) return []
     const counted = new Set(this.checked)
     const listed = followRoute(this.route, undefined, 'list')
     const uncounted = listed.checked.filter(checked => !counted.has(checked))
@@ -3059,59 +3031,26 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * has the same owner.)
    */
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined, since: number): CallRecord[] {
-    let records: CallRecord[] | undefined
+    const records: CallRecord[] = []
     let several = false
-    // (indexed loops, and the owners noted in the same loop: a check of many substitutes runs this once or twice, mostly
-    // before it is optimized)
-    for (let index = 0; index < checkedList.length; index++) {
-      const checked = checkedList[index]
+    for (const checked of checkedList) {
       if (isForeign(checked)) continue
       const at = recordedAt(checked, key)
       if (at === undefined) continue
-      let own = at.state.recordsFor(at.key)
-      if (except !== undefined) own = own.filter(record => !except.has(record))
       // (E123: not those received before a clear further up the route, see followRoute)
-      if (since > 0) own = own.filter(record => record.seq > since)
+      const own = at.state.recordsFor(at.key).filter(record => except?.has(record) !== true && record.seq > since)
       if (own.length === 0) continue
-      const owners = this._owners
-      if (owners === undefined) this.noteOwner(checked, own)
-      if (records === undefined) {
-        records = own
-        if (owners !== undefined) for (let at = 0; at < own.length; at++) owners.set(own[at], checked)
-      } else {
-        if (!several) records = records.slice()
-        several = true
-        for (let at = 0; at < own.length; at++) {
-          const record = own[at]
-          if (owners !== undefined) owners.set(record, checked)
-          records.push(record)
-        }
+      if (records.length > 0) several = true
+      for (const record of own) {
+        this._owners.set(record, checked)
+        records.push(record)
       }
     }
-    if (records === undefined) return []
     return several ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
-  /** E121: notes that `records` (listed now) belong to `checked` (see _first), while no map is kept. */
-  private noteOwner(checked: Checked, records: readonly CallRecord[]): void {
-    // (a check lists the records of the same member again when it is invoked, see assertionMember)
-    if (this._first === undefined || this._first === checked) {
-      this._first = checked
-      this._firstRecords = records
-      return
-    }
-    const owners = this._owners = new Map<CallRecord, Checked>()
-    const first = this._first
-    const firstRecords = this._firstRecords!
-    for (let at = 0; at < firstRecords.length; at++) owners.set(firstRecords[at], first)
-    this._firstRecords = undefined
-    for (let at = 0; at < records.length; at++) owners.set(records[at], checked)
-  }
-
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
-    // (the records listed are those of one substitute, as a rule)
-    const owners = this._owners
-    const owner = owners === undefined ? this._first : owners.get(record)
+    const owner = this._owners.get(record)
     return owner === undefined || isForeign(owner) ? undefined : owner
   }
 }
