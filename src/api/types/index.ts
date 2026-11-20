@@ -13,5 +13,7 @@ export type ObjectSubstitute<T> =
     ObjectSubstituteTransformation<T> &
     UnionVariantPatch<T>
 
+// The type of a check view (R17FE-2, T83), for annotating helpers that return one.
+export { CheckViewOf } from './Substitute'
 export { received, didNotReceive, clearReceivedCalls, mimick, configure } from './SubstituteMethods'
 export { returns, throws, resolves, rejects, mimicks } from './SubstitutionLevel'

@@ -343,6 +343,86 @@ test('P34 declarations emitted with moduleResolution node for check views and ma
   }
 })
 
+// R17FE-2 / T83: a test-utils module that exports generic helpers returning check views, annotated with the exported
+// `CheckViewOf<T>` (string and symbol forms), compiles with `isolatedDeclarations`, which needs an annotation on every
+// export (before T83 the symbol forms had none that compiled in generic code), under node10 and nodenext resolution.
+// Projects with node10, node16, nodenext (ES modules and CommonJS) and bundler resolution read the emitted declarations.
+// A check view whose type TypeScript infers is written with the package's own specifier.
+const checkViewProducer = [
+  "import { Arg, CheckViewOf, Substitute, SubstituteOf, didNotReceive, received } from '@fluffy-spoon/substitute'",
+  'export interface Mailer { send(to: string, body: string): Promise<void>; sent: number }',
+  'export function sentOnce<T>(sub: SubstituteOf<T>): CheckViewOf<T> { return sub.received(1) }',
+  'export function neverSent<T>(sub: SubstituteOf<T>): CheckViewOf<T> { return sub.didNotReceive() }',
+  'export function sentOnceSymbol<T>(sub: SubstituteOf<T>): CheckViewOf<T> { return sub[received](1) }',
+  'export function neverSentSymbol<T>(sub: SubstituteOf<T>): CheckViewOf<T> { return sub[didNotReceive]() }',
+  'export function makeMailer(): SubstituteOf<Mailer> {',
+  '  const mailer = Substitute.for<Mailer>()',
+  '  mailer.send(Arg.any(), Arg.any()).resolves()',
+  '  return mailer',
+  '}',
+  ''
+].join('\n')
+const inferredCheckViewProducer = [
+  "import { Substitute } from '@fluffy-spoon/substitute'",
+  'export const queueView = Substitute.for<Iterable<number> & { size(): number }>().received()',
+  ''
+].join('\n')
+const checkViewConsumer = [
+  "import { makeMailer, sentOnce, sentOnceSymbol, neverSent, neverSentSymbol } from './declarations/producer.js'",
+  "import { queueView } from './declarations/inferred.js'",
+  "import { Arg } from '@fluffy-spoon/substitute'",
+  'const mailer = makeMailer()',
+  "sentOnce(mailer).send('ann@example.com', Arg.any())",
+  "sentOnceSymbol(mailer).send('ann@example.com', 'hello')",
+  'neverSent(mailer).sent',
+  'neverSentSymbol(mailer).send(Arg.all())',
+  'queueView.size()',
+  '// @ts-expect-error send takes strings (the emitted types resolved)',
+  "sentOnceSymbol(mailer).send(1, 'hello')",
+  '// @ts-expect-error the view has the members of Mailer only',
+  'neverSent(mailer).receive()',
+  'export {}',
+  ''
+].join('\n')
+const checkViewProducerModes = [
+  { name: 'node10', options: ['--module', 'commonjs', '--moduleResolution', 'node'] },
+  { name: 'nodenext', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] }
+]
+const checkViewConsumerModes = [
+  { name: 'node10', file: 'consumer.ts', options: ['--module', 'commonjs', '--moduleResolution', 'node'] },
+  ...declarationConsumerModes
+]
+
+test('R17FE-2 T83 generic helpers annotated with CheckViewOf<T> emit declarations with isolatedDeclarations, read under node10, node16, nodenext and bundler', async t => {
+  t.timeout(minutes(4))
+  const tsc = require.resolve('typescript/bin/tsc', { paths: [root] })
+  for (const producerMode of checkViewProducerModes) {
+    const directory = path.join(state.consumer, `t83-${producerMode.name}`)
+    fs.mkdirSync(path.join(directory, 'producer'), { recursive: true })
+    fs.writeFileSync(path.join(directory, 'producer', 'producer.ts'), checkViewProducer)
+    fs.writeFileSync(path.join(directory, 'producer', 'inferred.ts'), inferredCheckViewProducer)
+    const emit = (isolated, file) => run(process.execPath, [
+      tsc, '--declaration', '--emitDeclarationOnly', ...(isolated ? ['--isolatedDeclarations'] : []), '--strict',
+      '--target', 'es2019', ...producerMode.options, '--rootDir', 'producer', '--outDir', 'declarations', path.join('producer', file)
+    ], directory)
+    const isolated = await emit(true, 'producer.ts')
+    t.is(isolated.status, 0, `${producerMode.name}, isolatedDeclarations: ${isolated.output}`)
+    // (A check view whose type is inferred needs no annotation, but cannot be emitted with isolatedDeclarations.)
+    const inferred = await emit(false, 'inferred.ts')
+    t.is(inferred.status, 0, `${producerMode.name}, inferred check view: ${inferred.output}`)
+    const declarations = fs.readFileSync(path.join(directory, 'declarations', 'producer.d.ts'), 'utf8')
+    t.regex(declarations, /function sentOnceSymbol<T>\(sub: SubstituteOf<T>\): CheckViewOf<T>;/)
+    const inferredDeclarations = fs.readFileSync(path.join(directory, 'declarations', 'inferred.d.ts'), 'utf8')
+    t.regex(inferredDeclarations, /import\("@fluffy-spoon\/substitute"\)\.CheckViewOf</, 'an inferred check view is named through the package root')
+    for (const mode of checkViewConsumerModes) {
+      fs.writeFileSync(path.join(directory, mode.file), checkViewConsumer)
+      // Without skipLibCheck, so that an unresolved import in the emitted .d.ts is an error.
+      const result = await run(process.execPath, [tsc, '--noEmit', '--strict', '--target', 'es2019', ...mode.options, mode.file], directory)
+      t.is(result.status, 0, `declarations emitted with ${producerMode.name}, read with ${mode.name}: ${result.output}`)
+    }
+  }
+})
+
 test('P34 exports maps every directory that the published declarations import to its index', t => {
   const dist = path.join(state.consumer, 'node_modules', '@fluffy-spoon', 'substitute', 'dist')
   // The directories with an index.d.ts that a published .d.ts imports (`from '../shared'`, `from './types'`, ...).

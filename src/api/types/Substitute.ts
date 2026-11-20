@@ -188,13 +188,20 @@ type SymbolAssertionMembers<T, K extends keyof T> =
   [K] extends [never] ? unknown : { -readonly [P in K]: AssertionMemberOf<T, P> }
 
 /**
- * The object returned by `received()` / `didNotReceive()`: calls return nothing, property reads and writes keep the
- * member type (`sub.received().isEnabled = true`). A substitute of a function type is callable here as well
- * (`listener.received(1)('saved')`, T37).
+ * The type of a check view of a substitute for `T`: what `received()` / `didNotReceive()` and `[received]()` /
+ * `[didNotReceive]()` return, so that a helper can be annotated with it, also in generic code and under
+ * `isolatedDeclarations`: `function once<T>(sub: SubstituteOf<T>): CheckViewOf<T> { return sub.received(1) }`.
+ * Calls on it return nothing, and property reads and writes keep the member type (`sub.received().isEnabled = true`).
+ * A substitute of a function type is callable here as well (`listener.received(1)('saved')`).
  */
-export type TerminatingObject<T> =
+export type CheckViewOf<T> =
   { indexed: IndexedAssertionMembers<T>, plain: AssertionMembers<T> & SymbolAssertionMembers<T, keyof T & symbol> }[IndexKind<T>] &
   FunctionSubstitute<NonNullable<T>, 'assertion'>
+
+// The name of `CheckViewOf` before it was exported from the package (R17FE-2, T83). Declaration files that a project
+// emitted with that version refer to a check view as `import("@fluffy-spoon/substitute/dist/api/types/Substitute")
+// .TerminatingObject<T>` and keep working.
+export type TerminatingObject<T> = CheckViewOf<T>
 
 type ConfigurationMember<TValue> =
   FunctionSubstitute<NonNullable<TValue>, 'configure'> & ConfigurationResult<TValue, () => TValue>

@@ -6,9 +6,10 @@
 //   node spec-types/min-ts/check.js 3.9 4.0 4.4   # after `npm run build`: check other versions
 //
 // The consumer is compiled with `strict`, without @types/node and with skipLibCheck both off and on. The declaration-emit
-// fixtures spec-types/declaration-emit/R13TD-1.T73.check-views.ts and R14TD-1.annotated-generic-helpers.ts (importing
-// the package instead of ../../src) are compiled with `declaration: true` and `emitDeclarationOnly` too, into the
-// temporary directory (R13TD-1, T73; R14TD-1). (The R14TD-2 / T77 fixture needs @types/node and a newer TypeScript.)
+// fixtures spec-types/declaration-emit/R13TD-1.T73.check-views.ts, R14TD-1.annotated-generic-helpers.ts and
+// R17FE-2.T83.check-view-type.ts (importing the package instead of ../../src) are compiled with `declaration: true` and
+// `emitDeclarationOnly` too, into the temporary directory (R13TD-1, T73; R14TD-1; R17FE-2, T83). (The R14TD-2 / T77
+// fixture needs @types/node and a newer TypeScript.)
 //
 // Afterwards it runs spec-types/TD-10.T32.jsdoc.js, which checks (with the project's own TypeScript) that the public
 // API in the same built typings carries documentation comments, and spec-types/R6V-5.R6TD-2.T44.check-cost.js, which
@@ -60,7 +61,8 @@ try {
   fs.copyFileSync(path.join(__dirname, 'consumer.ts'), path.join(workDirectory, 'consumer.ts'))
   const declarationFixtures = {
     'declaration-emit.ts': 'R13TD-1.T73.check-views.ts',
-    'declaration-emit-generic.ts': 'R14TD-1.annotated-generic-helpers.ts'
+    'declaration-emit-generic.ts': 'R14TD-1.annotated-generic-helpers.ts',
+    'declaration-emit-check-view-type.ts': 'R17FE-2.T83.check-view-type.ts'
   }
   for (const [name, fixture] of Object.entries(declarationFixtures)) {
     fs.writeFileSync(
