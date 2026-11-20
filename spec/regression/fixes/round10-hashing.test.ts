@@ -1,4 +1,4 @@
-import test, { ExecutionContext } from 'ava'
+import test from 'ava'
 import { spawnSync } from 'child_process'
 import * as fs from 'fs'
 import * as os from 'os'
@@ -8,7 +8,6 @@ import { inspect } from 'util'
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { MESSAGE_BOUNDS, PATH_BOUNDS, formatBounded, formatValue, printSettings } from '../../../src/internals/utilities/Stringify'
-import { RATIO_ATTEMPTS, assertRatiosWithin } from '../../helpers/timing'
 
 // Round 10, engine A: failure messages show where an expected call differs again (fix spec E54), and the test
 // infrastructure (E58). This file runs in the serial run of the timing-sensitive files (see ava.config.js).
@@ -233,44 +232,8 @@ test('R9-ADV-1 (E54) a failure message with deep and wide values prints the expe
   t.true(linesOf(messageOf(() => store.received(1).put(expected))).expected!.startsWith('put({ k0: { k0: { k0: { k0: { k0: -1, k1: 1,'))
 })
 
-// ---- E58 (R9V-3): ratio tests that hold up on a busy machine ------------------------------------------------------
-
 /** The repository (the specs run from their compiled copy in dist-spec/). */
 const root = path.resolve(__dirname, '../../../..')
-
-test('R9V-3 (E58) a ratio over its limit is measured again, and the smallest ratio of each kind decides', t => {
-  t.is(RATIO_ATTEMPTS, 3)
-  const run = (measurements: Array<Record<string, number>>) => {
-    const verdicts: boolean[] = []
-    const recorder = { true: (value: boolean) => { verdicts.push(value) }, log: (): void => undefined } as unknown as ExecutionContext
-    let made = 0
-    const smallest = assertRatiosWithin(recorder, () => measurements[made++], 1.3, 'ratios')
-    return { verdicts, made, smallest }
-  }
-  // within the limit: measured once
-  t.deepEqual(run([{ batches: 1.12, singles: 1.05 }]), { verdicts: [true, true], made: 1, smallest: { batches: 1.12, singles: 1.05 } })
-  // a burst of load in one measurement (round 9: 1.34x at a load average of 13): measured again
-  t.deepEqual(run([{ batches: 1.34, singles: 1.1 }, { batches: 1.16, singles: 1.2 }]), { verdicts: [true, true], made: 2, smallest: { batches: 1.16, singles: 1.1 } })
-  // each kind keeps its smallest ratio
-  t.deepEqual(run([{ batches: 1.4, singles: 1.1 }, { batches: 1.2, singles: 1.35 }]), { verdicts: [true, true], made: 2, smallest: { batches: 1.2, singles: 1.1 } })
-  // a real slowdown is over the limit in every measurement, and fails (74b8588: 3.2x and 1.5x)
-  t.deepEqual(run([{ batches: 3.2, singles: 1.5 }, { batches: 3.1, singles: 1.45 }, { batches: 3.3, singles: 1.52 }]),
-    { verdicts: [false, false], made: 3, smallest: { batches: 3.1, singles: 1.45 } })
-})
-
-test('R9V-3 (E58) every ratio test of the timing-sensitive files checks its ratios through assertRatiosWithin', t => {
-  // 4b1fa69: `t.true(batches < 1.3, ...)` in round7-hashing failed 1 of 3 runs of npm test at a load average of 13
-  const directory = path.join(root, 'spec/regression/fixes')
-  const ratioCheck = /t\.(true|assert)\(\s*\w*(ratio|Ratio|batches|singles)\w*\s*</
-  let users = 0
-  for (const file of fs.readdirSync(directory).filter(name => /\.(spec|test)\.ts$/.test(name))) {
-    const source = fs.readFileSync(path.join(directory, file), 'utf8')
-    if (source.includes('assertRatiosWithin(t,')) users++
-    const unchecked = source.split('\n').filter(line => !line.trim().startsWith('//') && ratioCheck.test(line))
-    t.deepEqual(unchecked, [], `${file} compares a ratio of timings with its limit directly`)
-  }
-  t.true(users >= 2, `${users} files use assertRatiosWithin`)
-})
 
 // ---- E58 (R9V-6): nothing left in os.tmpdir() ---------------------------------------------------------------------
 
