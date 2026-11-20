@@ -1,6 +1,6 @@
 import { constants } from '../../shared'
 import { OverloadsMimicksFunction } from './FunctionSubstitute'
-import { HasMember, LibraryMemberName, Primitive } from './Utilities'
+import { HasMember, LibraryMemberName } from './Utilities'
 
 /**
  * Symbol form of `.returns(...)`: `sub.add(1, 2)[returns](3)`. Always available, also where the value has its own member
@@ -62,11 +62,8 @@ type PromiseValue<TReturnType> = NonNullable<TReturnType> extends infer TValue ?
 type PromiseValueOf<TValue, TReturnType> = TValue extends PromiseLike<infer U> ?
   (NativePromiseFits<TValue, U, TReturnType> extends true ? U : never) :
   never
-// (`PromiseLike<any>` first: inferring the value of every member type that is not a promise at all costs more.)
 type IsPromise<TReturnType> = true extends EachIsPromise<NonNullable<TReturnType>, TReturnType> ? true : false
-type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<any> ?
-  (TValue extends PromiseLike<infer U> ? NativePromiseFits<TValue, U, TReturnType> : false) :
-  false
+type EachIsPromise<TValue, TReturnType> = TValue extends PromiseLike<infer U> ? NativePromiseFits<TValue, U, TReturnType> : false
 type NativePromiseFits<TValue, U, TReturnType> =
   TValue extends Promise<any> ? ([Exclude<keyof TValue, keyof Promise<any>>] extends [never] ? true : NativePromiseOf<U, TReturnType>) :
   NativePromiseOf<U, TReturnType>
@@ -135,8 +132,6 @@ type StringForm<TCheck, TName extends LibraryMemberName, TMethod> = TCheck exten
   never
 
 type CheckedStringSetupMethods<TReturnType, TImplementation> =
-  // Primitives (and unions of literals, however large) have no conflicting member: skip the per-member check (TD-8).
-  [NonNullable<TReturnType>] extends [Primitive] ? StringSetupMethods<TReturnType, TImplementation> :
   StringForm<NonNullable<TReturnType> & {}, 'returns', StringReturns<TReturnType>> &
   StringForm<NonNullable<TReturnType> & {}, 'throws', StringThrows> &
   StringForm<NonNullable<TReturnType> & {}, 'mimicks', StringMimicks<TImplementation>> &
