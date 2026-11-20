@@ -436,6 +436,20 @@ pgPool.query(Arg.all()).resolves(pgResult)
 pgPool.query(Arg.all()).mimicks(async () => pgResult)
 pgPool[configure]().query(Arg.all()).resolves(pgResult)
 pgPool.query(Arg.any('string'), Arg.all()).resolves(pgResult)
+// R16FE-1 / T80: its implementation may leave out trailing parameters, and untyped parameters take the types of all
+// overloads at their position (TypeScript 4.2 and older give a function passed for several signatures no contextual
+// type)
+interface RowRepo {
+  remove(rows: PgResult[], options?: { chunk?: number }): Promise<PgResult[]>
+  remove(row: PgResult, options?: { chunk?: number }): Promise<PgResult>
+}
+const rowRepo = Substitute.for<RowRepo>()
+rowRepo.remove(Arg.all()).mimicks(row => Promise.resolve(row as any))
+rowRepo.remove(Arg.all()).mimicks((row: any) => Promise.resolve(row))
+rowRepo.remove(Arg.all()).mimicks((row, options) => Promise.resolve(options && options.chunk ? row as any : pgResult))
+rowRepo.remove(Arg.all()).mimicks(async () => pgResult, async row => row as any)
+rowRepo[configure]().remove(Arg.all()).mimicks(row => Promise.resolve(row as any))
+pgPool.query(Arg.all()).mimicks(async query => pgResult)
 
 // R15FE-2 / T78: an overload whose parameters become impossible (hono's Context.get with an empty ContextVariableMap)
 // is left out, so the remaining overload has the setup API
