@@ -3,7 +3,7 @@ import { inspect } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { DifferenceSearch, MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, firstVisibleDifference, formatValue, messageBounds } from '../../../src/internals/utilities/Stringify'
+import { MAX_MESSAGE_DEPTH, leastDifference } from '../../../src/internals/utilities/Stringify'
 
 // Round 13: how printouts and failure messages print values (fix spec E74, E78, E79), the findings of round 12
 // R12-ADV-1, R12V-2 and R12-ADV-2.
@@ -42,19 +42,17 @@ const errors = (length: number): Error[] => {
 
 // ---- E74 (R12-ADV-1): long arrays --------------------------------------------------------------------------------
 
-test('R12-ADV-1 (E74) an array of more than 1,000 items whose first items print in a short form prints them without listing its keys', t => {
-  // the keys of an array other than its indices are listed only for an array of at most 1,000 items, as listing them
-  // lists every index (a million errors cost a listing of a million keys at each print at caec697)
+test('R12-ADV-1 (E74) an array of more than 1,000 items whose first items print in a short form prints them and its other keys', t => {
+  // the keys of an array other than its indices show after its items at any length (f9ce534 left them out of the copy
+  // of an array of more than 1,000 items)
   const rows = (length: number) => Object.assign(errors(length), { total: length })
   const queue = Substitute.for<any>()
   queue.retry(rows(1000))
   queue.retry(rows(1001))
   const printout = plain(String(queue)).replace(/\s+/g, ' ')
   t.true(printout.includes('[Error: failed 19], ... 980 more items, total: 1000 ])'), printout)
-  // as 98a8973 printed it
-  t.true(printout.includes('[Error: failed 19], ... 981 more items ])'), printout)
-  t.false(printout.includes('total: 1001'), printout)
-  // an array that prints as it is shows them, as util.inspect does
+  t.true(printout.includes('[Error: failed 19], ... 981 more items, total: 1001 ])'), printout)
+  // as an array that prints as it is shows them, as util.inspect does
   const numbers = Object.assign(Array.from({ length: 1001 }, (_, index) => index), { total: 1001 })
   const other = Substitute.for<any>()
   other.retry(numbers)
@@ -188,19 +186,8 @@ test('R12V-2 (E78) orders inside the members of a Set and the properties of erro
   t.is(differing.expected, "add(Set(2) { { c: 3 }, { b: 2, a: 9 } }, { body: { user: { address: [Object] } } })")
 })
 
-test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, Sets, errors and functions print differently in more than their order', t => {
-  let printed = 0
-  const search = (): DifferenceSearch => ({
-    bounds: MESSAGE_BOUNDS,
-    maxDepth: MAX_MESSAGE_DEPTH,
-    textOf: (value, depth) => {
-      printed++
-      return formatValue(value, false, messageBounds(depth))
-    },
-    keys: new Map(),
-    entries: 100_000
-  })
-  const least = (expected: unknown[], actual: unknown[]) => firstVisibleDifference(search(), expected, actual, -1)
+test('R12V-2 (E78) leastDifference finds the least depth at which Maps, Sets, errors and functions print differently in more than their order', t => {
+  const least = (expected: unknown[], actual: unknown[]) => leastDifference(expected, actual, 0, MAX_MESSAGE_DEPTH)
   // only the order differs: they print alike up to four levels deep
   t.is(least([new Set(['a', 'b'])], [new Set(['b', 'a'])]), Infinity)
   t.is(least([new Map<string, unknown>([['a', 1], ['b', { c: 1 }]])], [new Map<string, unknown>([['b', { c: 1 }], ['a', 1]])]), Infinity)
@@ -220,11 +207,9 @@ test('R12V-2 (E78) firstVisibleDifference finds the least depth at which Maps, S
   t.is(least([Object.assign(new Error('m'), { a: 1 })], [Object.assign(new Error('m'), { a: 2 })]), 0)
   t.is(least([Object.assign(function f() { }, { a: 1 })], [Object.assign(function g() { }, { a: 1 })]), 0)
   t.is(least([{ f: Object.assign(function f() { }, { a: { b: 1 } }) }], [{ f: Object.assign(function f() { }, { a: { b: 2 } }) }]), 2)
-  // a Map or a Set in its order is compared without printing, as before (R11V-5)
-  printed = 0
+  // a Map or a Set in its order (R11V-5)
   t.is(least([new Map([['a', { b: { c: 1 } }]])], [new Map([['a', { b: { c: 2 } }]])]), 2)
   t.is(least([new Set([{ x: 1 }])], [new Set([{ x: 2 }])]), 1)
-  t.is(printed, 0)
 })
 
 // ---- E79 (R12-ADV-2): numbering of substitutes, with matchers and key order -----------------------------------------

@@ -6,7 +6,7 @@ import * as library from '../../../src'
 import { Substitute, Arg, didNotReceive, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import {
-  MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, deepestMatcher, firstVisibleDifference, formatArguments, formatValue, messageBounds, noteMatcherHolder
+  MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, deepestMatcher, formatArguments, formatValue, leastDifference, messageBounds, noteMatcherHolder
 } from '../../../src/internals/utilities/Stringify'
 import { VIEW_SITES_PER_RUN } from '../../../src/internals/Assertions'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
@@ -262,7 +262,7 @@ test('R10-ADV-1 (E59) where only a matcher that does not match tells the lines a
 class Point { constructor(readonly x: unknown, readonly y: unknown) { } }
 class OtherPoint { constructor(readonly x: unknown, readonly y: unknown) { } }
 
-test('R10-ADV-1, R10V-1 (E59, E60) firstVisibleDifference finds the least depth at which two calls print differently, matchers left out', t => {
+test('R10-ADV-1, R10V-1 (E59, E60) leastDifference finds the least depth at which two calls print differently, matchers left out', t => {
   let seed = 7
   const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
   const below = (count: number) => Math.floor(random() * count)
@@ -355,8 +355,7 @@ test('R10-ADV-1, R10V-1 (E59, E60) firstVisibleDifference finds the least depth 
     }
     const matchers = deepestMatcher(expected, 32)
     if (matchers >= 0) withMatchers++
-    const search = { bounds: MESSAGE_BOUNDS, maxDepth: MAX_MESSAGE_DEPTH, textOf: (value: unknown, depth: number) => formatValue(value, false, messageBounds(depth)), keys: new Map(), entries: 100_000 }
-    const depth = firstVisibleDifference(search, expected, actual, -1)
+    const depth = leastDifference(expected, actual, 0, MAX_MESSAGE_DEPTH)
     // (with matchers, a message compares the lines from the depth that shows the matchers' containers on)
     const from = matchers < 0 ? 0 : Math.min(MAX_MESSAGE_DEPTH, Math.max(MESSAGE_BOUNDS.depth, matchers - 1))
     compared++

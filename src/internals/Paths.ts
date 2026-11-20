@@ -174,11 +174,8 @@ const recordPieces = (context: RecordLabelContext) => (entry: PathEntry): string
  * E99: the path of an auto-substitute as its received calls are shown (`@Substitute.to('room-a')`, see above); its path
  * when it is not below a nested setup through a call with matchers.
  */
-export const recordPath = (entry: PathEntry, context: RecordLabelContext): string => {
-  if (libraryGuard.rootNumbers !== undefined) return `${rootLabel(rootOf(entry))}${pathPieces(entry, undefined, recordPieces(context))}`
-  libraryGuard.rootLabels++
-  return `@Substitute${pathPieces(entry, undefined, recordPieces(context))}`
-}
+export const recordPath = (entry: PathEntry, context: RecordLabelContext): string =>
+  `${rootLabel(rootOf(entry))}${pathPieces(entry, undefined, recordPieces(context))}`
 
 /** E99: relativePath, as the received calls of `state` are shown (see above). */
 export const relativeRecordPath = (state: PathState, ancestor: PathState, context: RecordLabelContext): string => {
@@ -354,15 +351,8 @@ export const codePath = (
  * substitute of another copy among the arguments (duplicate installs) is numbered in the message, too.
  */
 
-/**
- * E60: how many root labels have been shown so far (in paths and printouts, E71: by any copy), so that a failure message
- * can tell which printed values show a substitute, and reuse the others when it is built again with the roots numbered.
- */
-export const rootLabelCount = (): number => libraryGuard.rootLabels
-
 /** How a root substitute is shown: `@Substitute`, or `@Substitute#n` while roots are numbered. */
 export const rootLabel = (root: PathState): string => {
-  libraryGuard.rootLabels++
   const rootNumbers = libraryGuard.rootNumbers
   if (rootNumbers === undefined) return '@Substitute'
   let number = rootNumbers.get(root)
@@ -393,11 +383,7 @@ const rootOf = (entry: PathEntry): PathState => {
 }
 
 /** The path of an auto-substitute: `@Substitute.logger`, `@Substitute.getUser(1)`, `@Substitute('saved')`. */
-export const entryPath = (entry: PathEntry): string => {
-  if (libraryGuard.rootNumbers !== undefined) return `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
-  libraryGuard.rootLabels++
-  return `@Substitute${pathPieces(entry)}`
-}
+export const entryPath = (entry: PathEntry): string => `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
 
 /** The path of a substitute (`@Substitute` for a root) relative to one of its ancestors: `logger`, `getUser(1)`, `('x')`. */
 export const relativePath = (state: PathState, ancestor: PathState): string => {

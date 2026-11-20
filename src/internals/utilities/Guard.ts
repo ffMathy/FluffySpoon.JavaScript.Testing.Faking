@@ -31,8 +31,6 @@ export type LibraryGuard = {
    * of the roots shown so far, so that a substitute of another copy among the arguments is numbered in the same message.
    */
   rootNumbers?: Map<object, number>
-  /** E71: how many root labels the copies have shown (see Paths.rootLabelCount). */
-  rootLabels: number
   /**
    * E113 (R16V-3): the functions that `x.bind(...)` gave on a substitute of any copy (see the engine's createBoundProxy).
    * They answer the library's substitute marker, but they are no substitute. Created by the first copy that needs it
@@ -89,7 +87,7 @@ const isGuard = (value: unknown): value is LibraryGuard =>
   typeof (value as LibraryGuard).printing === 'number' && typeof (value as LibraryGuard).comparing === 'number'
 
 const sharedGuard = (): LibraryGuard => {
-  const own: LibraryGuard = { printing: 0, comparing: 0, matching: 0, looking: undefined, rootNumbers: undefined, rootLabels: 0 }
+  const own: LibraryGuard = { printing: 0, comparing: 0, matching: 0, looking: undefined, rootNumbers: undefined }
   // (Node.js 10 has no globalThis)
   const scope: Record<symbol, unknown> | undefined = typeof globalThis === 'object' && globalThis !== null ? globalThis as any
     : typeof global === 'object' && global !== null ? global as any : undefined
@@ -98,7 +96,7 @@ const sharedGuard = (): LibraryGuard => {
     const existing = scope[GUARD_KEY]
     if (isGuard(existing)) {
       // (made by an earlier version of the library, which does not share the numbering)
-      if (typeof existing.rootLabels !== 'number') Object.assign(existing, { rootNumbers: undefined, rootLabels: 0 })
+      if (!('rootNumbers' in existing)) existing.rootNumbers = undefined
       if (typeof existing.matching !== 'number') existing.matching = 0
       if (!('looking' in existing)) (existing as LibraryGuard).looking = undefined
       return existing
