@@ -350,13 +350,13 @@ test('R15V-2 (E102) a throwing getter of an argument is read once per comparison
   t.is(count(() => { try { checked.received(5).save({ name: Arg.any() }) } catch { /* fails: they cannot be read */ } }), 5)
   const one = Substitute.for<any>()
   one.save({ name: Arg.any() }).returns(1)
-  t.is(count(() => one.save(lazy())), 2) // the matcher search and the hash, then one comparison
+  t.is(count(() => one.save(lazy())), 1) // the comparison with the setup (the search for matchers runs no getter)
   const ten = Substitute.for<any>()
   for (let index = 0; index < 10; index++) ten.save({ name: Arg.is(name => name === `u${index}`) }).returns(index)
-  t.is(count(() => ten.save(lazy())), 11)
+  t.is(count(() => ten.save(lazy())), 10)
   const deeper = Substitute.for<any>()
   deeper.save({ user: { name: Arg.any() } }).returns(1)
-  t.is(count(() => deeper.save({ user: lazy() })), 2)
+  t.is(count(() => deeper.save({ user: lazy() })), 1)
 })
 
 test('R15V-2 (E102) such a value still matches by identity, and never matches an equal-looking container', t => {

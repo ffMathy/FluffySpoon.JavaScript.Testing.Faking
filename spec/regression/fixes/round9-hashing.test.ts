@@ -1,51 +1,14 @@
 import test from 'ava'
-import { inspect, isDeepStrictEqual } from 'util'
+import { inspect } from 'util'
 
 import { Substitute, Arg } from '../../../src'
 import { MAX_LISTED_CHARACTERS, SubstituteException } from '../../../src/internals/SubstituteException'
-import { structuralHash } from '../../../src/internals/utilities/ArgumentHash'
 import { MESSAGE_BOUNDS, formatValue } from '../../../src/internals/utilities/Stringify'
 
-// Round 9, engine A: the hash of URLs and other values that Node.js compares by internal state or by identity (fix spec
+// Round 9, engine A: URLs and other values that Node.js compares by internal state or by identity as arguments (fix spec
 // E42), and bounded printing (E44, E45).
 
 // ---- E42: URLs, promises, WeakMaps and WeakSets ---------------------------------------------------------------------
-
-test('R8FE-7 (E42) URLs that the running Node.js finds deep strictly equal share a hash, and other URLs do not', t => {
-  const spellings = [
-    'https://api.example.com/items?page=1', 'HTTPS://API.EXAMPLE.COM/items?page=1', 'https://api.example.com:443/items?page=1',
-    'https://api.example.com/items?page=2', 'https://api.example.com/items?page=1#top', 'https://api.example.com/items?page=1#end',
-    'https://api.example.com/./items?page=1', 'https://user@api.example.com/items?page=1', 'http://api.example.com/items?page=1',
-    'https://api.example.com/items', 'https://api.example.com/Items?page=1', 'file:///tmp/a', 'file:///tmp/b'
-  ]
-  const values = spellings.map(spelling => new URL(spelling))
-  let unequalPairs = 0
-  for (const a of values) {
-    for (const b of values) {
-      const equal = isDeepStrictEqual(a, b)
-      if (equal) t.is(structuralHash(a), structuralHash(b), `${a.href} and ${b.href} are equal`)
-      else {
-        unequalPairs++
-        // Node.js 20 and later compare URLs by href (as do 22, 24 and 26, which npm test runs on)
-        t.not(structuralHash(a), structuralHash(b), `${a.href} and ${b.href}`)
-      }
-      // inside other values, too
-      if (equal) t.is(structuralHash({ url: a, list: [a] }), structuralHash({ url: b, list: [b] }))
-    }
-  }
-  t.true(unequalPairs > 100, `${unequalPairs} unequal pairs`)
-
-  // a URL with own properties of its own: those count as well
-  const tagged = Object.assign(new URL('https://a.example/'), { tag: 1 })
-  const otherTag = Object.assign(new URL('https://a.example/'), { tag: 2 })
-  t.is(isDeepStrictEqual(tagged, otherTag), false)
-  t.not(structuralHash(tagged), structuralHash(otherTag))
-  t.is(structuralHash(tagged), structuralHash(Object.assign(new URL('HTTPS://A.EXAMPLE'), { tag: 1 })))
-
-  // an object that only inherits from URL.prototype has no href to read: it is hashed by its keys, and never throws
-  const fake = Object.create(URL.prototype)
-  t.is(structuralHash(fake), structuralHash(Object.create(URL.prototype)))
-})
 
 test('R8FE-7 (E42) calls with URLs match setups and checks as before: by href', t => {
   const http = Substitute.for<any>()
@@ -61,7 +24,7 @@ test('R8FE-7 (E42) calls with URLs match setups and checks as before: by href', 
   t.throws(() => http.received(1).fetch(new URL('https://api.example.com/users/3')))
 })
 
-test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and the same one finds its setup', t => {
+test('R8FE-7 (E42) promises, WeakMaps and WeakSets: the same one finds its setup', t => {
   const kinds: Array<[string, () => object]> = [
     ['promises', () => Promise.resolve(1)],
     ['pending promises', () => new Promise(() => { })],
@@ -70,12 +33,6 @@ test('R8FE-7 (E42) promises, WeakMaps and WeakSets: equal ones share a hash, and
   ]
   for (const [name, create] of kinds) {
     const a = create()
-    const b = create()
-    // Node.js 24 and later compare promises by identity, Node.js 22 and later WeakMaps and WeakSets; earlier versions
-    // find any two of them equal
-    if (isDeepStrictEqual(a, b)) t.is(structuralHash(a), structuralHash(b), name)
-    else t.not(structuralHash(a), structuralHash(b), name)
-    t.is(structuralHash(a), structuralHash(a))
     // the same one finds its setup
     const tracker = Substitute.for<any>()
     tracker.track(a).returns('tracked')

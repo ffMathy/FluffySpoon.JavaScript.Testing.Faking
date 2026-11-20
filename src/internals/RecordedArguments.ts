@@ -1,15 +1,14 @@
-import { inspect, InspectOptions, isDeepStrictEqual, types } from 'util'
+import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
 // (from the module itself rather than '../shared', whose re-exports are getters in CommonJS output: the matcher search
 // runs on the arguments of every call, and a getter per lookup cost more than E75's own check)
 import {
-  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, evaluateMatcherInLook, foreignMatcherKind, foreignMatcherOf, isAllArguments,
+  MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
   isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf
 } from '../shared/Arguments'
 import { SubstituteException } from './SubstituteException'
-import { FAMILY_KEYS, forgetListings, hashSettings, isInFamily, noteListing } from './utilities/ArgumentHash'
 import { noteMatcherHolder } from './utilities/Stringify'
 import { libraryGuard } from './utilities/Guard'
-import { CLEAR_ARGUMENTS } from './utilities/Look'
+import { dataValue } from './utilities/Look'
 
 type ArgumentsClass = 'plain' | 'with-predicate' | 'wildcard'
 const argumentsClassDigitMapper: Record<ArgumentsClass | 'none', number> = {
@@ -90,346 +89,44 @@ const containerEntries = (container: object): Array<[PropertyKey, unknown]> => A
   ? Array.from({ length: container.length }, (_, index): [PropertyKey, unknown] => [index, container[index]])
   : ownEnumerableKeys(container).map((key): [PropertyKey, unknown] => [key, (container as any)[key]])
 
-// Annex B, in every supported runtime; captured when the library is loaded
-const lookupGetter: (this: object, key: PropertyKey) => Function | undefined = (Object.prototype as any).__lookupGetter__
-
-/**
- * The value of an own property of an object (keys come from listing its own keys); getters are not run (a matcher behind
- * a getter is not looked for), and neither are the get traps of a proxy (`proxy`: the object is one). E29: without
- * creating a property descriptor for every key of an ordinary object, which made the search allocate more than anything
- * else for arrays of records.
- */
-const dataValue = (object: object, key: PropertyKey, proxy: boolean): unknown => {
-  if (proxy) {
-    const descriptor = Object.getOwnPropertyDescriptor(object, key)
-    return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined
-  }
-  return lookupGetter.call(object, key) === undefined ? (object as any)[key] : undefined
-}
-
-/*
- * E3, E9: the search for nested matchers runs on the arguments of every call, so its cost is bounded like the
- * structural hash's (see ArgumentHash): each argument has a budget of SCAN_BUDGET containers, a container shares the
- * rest of its budget evenly among its items, and containers without a share, nested more than MAX_SCAN_DEPTH levels
- * deep (so cycles end), or with more than MAX_SCANNED_ITEMS items or keys are not searched. Each container is searched
- * once per argument however often it is referenced, and an argument looks at SCAN_ITEMS items and keys in all at most.
- * Matchers beyond these bounds are not recognised, and the value is compared literally. Items without a share are still
- * checked for being a matcher themselves.
- * The keys of an object can only be counted by listing them all, which is slow for a wide one (a millisecond for
- * 10,000 keys), so an object found too wide once is remembered (weakly) and never listed again: an object shared by
- * many calls, such as a lookup table, costs nothing after its first call. E13: so is a container with more than
- * REMEMBERED_ITEMS items or keys that was searched in full (no bound left out anything inside it) and holds no matcher.
- * Mutating an argument after it was passed is not supported (amended D15/D35): a matcher put into such a container
- * later is not seen.
- */
-const SCAN_BUDGET = 1024
+/** How many levels of plain containers the search for matchers goes into (it is recursive). */
 const MAX_SCAN_DEPTH = 32
-const MAX_SCANNED_ITEMS = FAMILY_KEYS - 1 // 1024
-const SCAN_ITEMS = 32768
-const REMEMBERED_ITEMS = 256
-
-/** Containers that are never searched again: too wide to be searched, or wide and searched in full without a matcher. */
-const notSearched = new WeakSet<object>()
-
-/** Whether a container is remembered as one that is never searched again (none are with the memos off, see hashSettings). */
-const isNotSearched = (container: object): boolean => hashSettings.memos && notSearched.has(container)
 
 /**
- * E109: those of them that hold no substitute either (see clearArgumentsOf): too wide to be searched, or searched in
- * full with nothing in them but primitive values, plain objects and arrays; with the items and keys listed in them.
+ * Whether a plain container holds a matcher (D27), at most MAX_SCAN_DEPTH levels deep. Each container is searched once
+ * per argument (cycles end). It runs no getters of the code under test's objects (a matcher behind a getter is not
+ * looked for). E93 (R14V-1): a container whose keys or items cannot be read (a proxy whose ownKeys or
+ * getOwnPropertyDescriptor trap throws) holds no matcher, and the search goes on with the items next to it: such a value
+ * is compared like the other values that cannot be read, by identity (E14/E83), also next to a matcher
+ * (`{ entity, id: Arg.any() }`).
  */
-const clearSearched = new WeakMap<object, number>()
-
-/** E109: notes, for a container that is not searched again, whether it holds no substitute (see Search). */
-const metNotSearched = (container: object, search: Search): void => {
-  const listed = clearSearched.get(container)
-  if (listed === undefined) search.opaque++
-  else search.remembered += listed
-}
-
-/**
- * One search: the argument, the containers searched so far (created once a nested one is reached; true for those
- * searched in full), the items left, and how often a bound left something out (`cuts`: then the containers around it
- * are not remembered as searched). E109: `opaque`, how many values it met that may be or hold a substitute without its
- * looking into them (see clearArgumentsOf), and `remembered`, the items and keys listed in the containers that it met
- * without searching them again and that hold no substitute.
- */
-type Search = { root: object, visited: Map<object, boolean> | undefined, items: number, cuts: number, opaque: number, remembered: number }
-
-/** E109: how many items and keys a search has listed so far, also in the containers that it did not search again. */
-const listedBy = (search: Search): number => SCAN_ITEMS - search.items + search.remembered
-
-/** `probe`: whether a container may be looked up in the families (see ArgumentHash.hashKeyed): not an array item. */
-const holdsMatcherItem = (item: unknown, budget: number, depth: number, search: Search, probe: boolean): boolean => {
-  const look = lookAt(item)
-  if (look !== 'plain') {
-    // E109: a function, or an object that is not plain (a class instance, a Map, a Date, ...), is not searched
-    if (look === undefined && (typeof item === 'function' || (typeof item === 'object' && item !== null))) search.opaque++
-    return look !== undefined
+const holdsMatcher = (container: object, depth: number, visited: Set<object>): boolean => {
+  if (visited.has(container)) return false
+  visited.add(container)
+  const holds = (item: unknown): boolean => {
+    const look = lookAt(item)
+    if (look !== 'plain') return look !== undefined
+    return depth < MAX_SCAN_DEPTH && holdsMatcher(item as object, depth + 1, visited)
   }
-  if (budget > 0 && depth < MAX_SCAN_DEPTH) return holdsMatcher(item as object, budget, depth + 1, search, probe)
-  // E20: only a plain container is ever searched, so only one is left out (a Date or a class instance is not)
-  search.cuts++
-  return false
-}
-
-/** Whether a plain container holds a matcher (see above). It runs no getters of the code under test's objects. */
-const holdsMatcher = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
-  if (isNotSearched(container)) {
-    metNotSearched(container, search)
-    return false
-  }
-  const cuts = search.cuts
-  if (depth > 0) {
-    const visited = search.visited ?? (search.visited = new Map([[search.root, false]]))
-    const searched = visited.get(container)
-    if (searched !== undefined) {
-      // searched already (without a matcher), or being searched further up: left out unless it was searched in full
-      if (!searched) search.cuts++
-      return false
-    }
-    visited.set(container, false)
-  }
-  const found = holdsMatcherInside(container, budget, depth, search, probe)
-  if (!found && depth > 0 && search.cuts === cuts) search.visited!.set(container, true)
-  return found
-}
-
-/**
- * E93 (R14V-1): a container whose keys or items cannot be read (a proxy whose ownKeys or getOwnPropertyDescriptor trap
- * throws) holds no matcher, and the search goes on with the items next to it: such a value is compared like the other
- * values that cannot be read, by identity (E14/E83), also next to a matcher (`{ entity, id: Arg.any() }`).
- */
-const holdsMatcherInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
   try {
-    return searchInside(container, budget, depth, search, probe)
-  } catch {
-    // (left out: the containers around it are not remembered as searched in full)
-    search.cuts++
-    return false
-  }
-}
-
-const searchInside = (container: object, budget: number, depth: number, search: Search, probe: boolean): boolean => {
-  const cuts = search.cuts
-  // E109: what this container's search finds out about substitutes (see rememberSearched)
-  const opaque = search.opaque
-  const listed = listedBy(search)
-  // E109: a proxy may answer otherwise later
-  const proxy = types.isProxy(container)
-  if (proxy) search.opaque++
-  if (Array.isArray(container)) {
-    // E109: an array with a prototype of its own (a subclass, or one that inherits from a substitute) is not plain to
-    // the look of a matcher (see Look)
-    if (Object.getPrototypeOf(container) !== Array.prototype) search.opaque++
-    const length = container.length
-    if (length > MAX_SCANNED_ITEMS) return false
-    if (length > search.items) {
-      search.cuts++
+    if (Array.isArray(container)) {
+      for (let index = 0; index < container.length; index++) if (holds(container[index])) return true
       return false
     }
-    search.items -= length
-    const share = Math.floor((budget - 1) / length)
-    for (let index = 0; index < length; index++) if (holdsMatcherItem(container[index], share, depth, search, false)) return true
-    if (length > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts, search.opaque === opaque, listedBy(search) - listed)
+    for (const key of Object.keys(container)) if (holds(dataValue(container, key))) return true
+    for (const symbol of Object.getOwnPropertySymbols(container))
+      if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holds(dataValue(container, symbol))) return true
     return false
-  }
-  // E13: an object of a family (see ArgumentHash) has more keys than are searched: no need to list them
-  if (probe && isInFamily(container)) {
-    if (hashSettings.memos) notSearched.add(container)
-    search.opaque++
+  } catch {
     return false
-  }
-  const keys = Object.keys(container)
-  const symbols = Object.getOwnPropertySymbols(container)
-  const count = keys.length + symbols.length
-  if (count > MAX_SCANNED_ITEMS) {
-    if (hashSettings.memos) {
-      notSearched.add(container)
-      // E109: the look of a matcher does not list it either
-      if (search.opaque === opaque) clearSearched.set(container, 0)
-    }
-    // E13: the hash, which comes next, takes the keys from here
-    noteListing(container, symbols.length === 0 ? keys : [...keys, ...symbols.filter(symbol => Object.prototype.propertyIsEnumerable.call(container, symbol))])
-    return false
-  }
-  if (count > search.items) {
-    search.cuts++
-    return false
-  }
-  search.items -= count
-  const share = Math.floor((budget - 1) / count)
-  for (let index = 0; index < keys.length; index++) if (holdsMatcherItem(dataValue(container, keys[index], proxy), share, depth, search, true)) return true
-  for (let index = 0; index < symbols.length; index++) {
-    const symbol = symbols[index]
-    if (Object.prototype.propertyIsEnumerable.call(container, symbol) && holdsMatcherItem(dataValue(container, symbol, proxy), share, depth, search, true)) return true
-  }
-  if (count > REMEMBERED_ITEMS) rememberSearched(container, search.cuts === cuts, search.opaque === opaque, listedBy(search) - listed)
-  return false
-}
-
-/**
- * Wide containers whose search left something out: false once one was seen (searched within its bounds), true once
- * it cannot be shown to hold no matcher anywhere (see below).
- */
-const partlySearched = new WeakMap<object, boolean>()
-
-/**
- * Remembers a wide container that holds no matcher within the bounds of its search. When the bounds left something
- * out (a record's nested object without a share of the budget) and the container is seen a second time, it is
- * searched once more, without budgets (see holdsNoMatcherAtAll), so that a shared table of records is searched in full
- * once instead of in part on every call. E20: a container that is only passed once (a fresh batch of records for
- * every call) is not searched again. E109: `clear` when the search found only primitive values, plain objects and
- * arrays in it, and `listed`, how many items and keys it listed in it (see clearSearched).
- */
-const rememberSearched = (container: object, inFull: boolean, clear: boolean, listed: number): void => {
-  if (!hashSettings.memos) return
-  if (inFull) {
-    notSearched.add(container)
-    if (clear) clearSearched.set(container, listed)
-    return
-  }
-  const unproven = partlySearched.get(container)
-  if (unproven === undefined) partlySearched.set(container, false)
-  else if (!unproven) {
-    const proof = holdsNoMatcherAtAll(container)
-    if (proof === NOT_PROVEN) partlySearched.set(container, true)
-    else {
-      notSearched.add(container)
-      if (proof !== NOT_CLEAR) clearSearched.set(container, proof)
-    }
   }
 }
 
-/** E109: what holdsNoMatcherAtAll finds out besides the number of items and keys listed in a container that holds no substitute. */
-const NOT_PROVEN = -1
-const NOT_CLEAR = -2
-
-/**
- * Whether no matcher can be found in a container in any search: one that looks at everything inside it that a search
- * could reach from it (each container once, with no budgets, MAX_SCAN_DEPTH levels below it, containers that are never
- * searched left out) and finds no matcher, within SCAN_ITEMS items (beyond them, nothing is known). NOT_PROVEN if one
- * may be there; otherwise (E109) the number of items and keys listed in it when it holds only primitive values, plain
- * objects and arrays (no substitute, see clearSearched), and NOT_CLEAR when it holds other values.
- */
-const holdsNoMatcherAtAll = (root: object): number => {
-  const seen = new Set<object>([root])
-  const pending: Array<[object, number]> = [[root, 0]]
-  let items = SCAN_ITEMS
-  let clear = true
-  let remembered = 0
-  const look = (value: unknown, depth: number): boolean => {
-    const kind = lookAt(value)
-    if (kind !== 'plain') {
-      if (kind === undefined && (typeof value === 'function' || (typeof value === 'object' && value !== null))) clear = false
-      return kind === undefined
-    }
-    if (depth < MAX_SCAN_DEPTH && !seen.has(value as object)) {
-      seen.add(value as object)
-      if (!notSearched.has(value as object)) pending.push([value as object, depth])
-      else {
-        const listed = clearSearched.get(value as object)
-        if (listed === undefined) clear = false
-        else remembered += listed
-      }
-    }
-    return true
-  }
-  /** Looks at the items of one container (false: a matcher may be among them). */
-  const lookInside = (container: object, depth: number): boolean => {
-    if (types.isProxy(container) || (Array.isArray(container) && Object.getPrototypeOf(container) !== Array.prototype)) clear = false
-    if (Array.isArray(container)) {
-      if (container.length > MAX_SCANNED_ITEMS) return true
-      if ((items -= container.length) < 0) return false
-      for (let index = 0; index < container.length; index++) if (!look(container[index], depth + 1)) return false
-      return true
-    }
-    if (isInFamily(container)) {
-      clear = false
-      return true
-    }
-    const keys = Object.keys(container)
-    const symbols = Object.getOwnPropertySymbols(container)
-    if (keys.length + symbols.length > MAX_SCANNED_ITEMS) return true
-    if ((items -= keys.length + symbols.length) < 0) return false
-    const proxy = types.isProxy(container)
-    for (let index = 0; index < keys.length; index++) if (!look(dataValue(container, keys[index], proxy), depth + 1)) return false
-    for (let index = 0; index < symbols.length; index++) {
-      const symbol = symbols[index]
-      if (Object.prototype.propertyIsEnumerable.call(container, symbol) && !look(dataValue(container, symbol, proxy), depth + 1)) return false
-    }
-    return true
-  }
-  while (pending.length > 0) {
-    const [container, depth] = pending.pop()!
-    try {
-      if (!lookInside(container, depth)) return NOT_PROVEN
-    } catch {
-      return NOT_PROVEN // E93: its keys or items cannot be read, so nothing is known
-    }
-  }
-  return clear ? SCAN_ITEMS - items + remembered : NOT_CLEAR
-}
-
-/**
- * Whether a value has a matcher nested in a plain object or array (D27), within the bounds above. A container that
- * cannot be read (a throwing getter) holds no matcher.
- */
+/** Whether a value has a matcher nested in a plain object or array (D27, see holdsMatcher). */
 const containsNestedMatcher = (value: unknown): boolean => isPlainContainer(value) && holdsNestedMatcher(value)
 
 /** containsNestedMatcher for a value known to be a plain container (see lookAt). */
-const holdsNestedMatcher = (container: object): boolean => {
-  try {
-    return holdsMatcher(container, SCAN_BUDGET, 0, { root: container, visited: undefined, items: SCAN_ITEMS, cuts: 0, opaque: 0, remembered: 0 }, true)
-  } catch {
-    return false
-  }
-}
-
-/**
- * E109: the arguments of the last search for matchers of a call (containsMatchers), which of them hold no substitute (a
- * bit for each), and how many items and keys it listed in those (see clearArgumentsOf). E127 (R17-ADV-3): the arguments
- * are kept only until the call reads what the search found (see clearArgumentsOf), and at most until the end of the
- * synchronous run they were searched in (see forgetScanLater), so that nothing keeps them alive once the substitute
- * that was called, and they, are dropped: most calls never read it (no setup with matchers on the member).
- */
-let scannedArguments: readonly unknown[] | undefined
-let clearArguments = 0
-const scannedItems: number[] = []
-
-/** E127: whether the arguments of the last search are to be forgotten (see forgetScanLater). */
-let forgetScheduled = false
-
-const forgetScan = (): void => {
-  forgetScheduled = false
-  scannedArguments = undefined
-  // and the keys of wide objects that the search listed for the hash, which a call that hashes nothing never takes
-  // (a member with setups with matchers only), see ArgumentHash's listings
-  forgetListings()
-}
-
-/**
- * E127: a microtask, from the queueMicrotask found when the library was loaded (fake timers installed later do not delay
- * it), or process.nextTick on Node.js 10, which has no queueMicrotask.
- */
-const scheduleForget: ((callback: () => void) => void) | undefined = (() => {
-  if (typeof queueMicrotask === 'function') {
-    const microtask = queueMicrotask
-    return (callback: () => void) => { microtask(callback) }
-  }
-  if (typeof process !== 'undefined' && process !== null && typeof process.nextTick === 'function') {
-    const nextTick = process.nextTick
-    return (callback: () => void) => { nextTick.call(process, callback) }
-  }
-  return undefined
-})()
-
-/** E127: forgets the arguments of the last search at the end of the current synchronous run (one microtask for all of its calls). */
-const forgetScanLater = (): void => {
-  if (forgetScheduled || scheduleForget === undefined) return
-  forgetScheduled = true
-  scheduleForget(forgetScan)
-}
+const holdsNestedMatcher = (container: object): boolean => holdsMatcher(container, 0, new Set())
 
 /** The plain containers in `value` that hold a matcher somewhere inside, for a specification. */
 const collectMatcherContainers = (value: unknown, found: Set<object>, visited: Set<object>): boolean => {
@@ -480,7 +177,7 @@ const matchNested = (expected: unknown, actual: unknown, matcherContainers: Read
   if (kind !== undefined) {
     // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3)
     if (isArgMatcher(actual)) return DIFFERS
-    const evaluation = guarded ? evaluateMatcherInLook(expected, kind, actual) : evaluateMatcher(expected, kind, actual)
+    const evaluation = evaluateMatcher(expected, kind, actual, !guarded)
     return evaluation.matches ? MATCHES : { matches: false, predicateThrew: evaluation.threw, predicateError: evaluation.error }
   }
   if (!holder) return literalEquals(expected, actual) ? MATCHES : DIFFERS
@@ -552,14 +249,6 @@ const equivalentNested = (a: unknown, b: unknown, depth = 0): boolean => {
   } catch {
     return false
   }
-}
-
-/** Whether two expected arguments without nested matchers are the same, matchers compared as matchers. */
-const equivalentArgument = (a: unknown, b: unknown): boolean => {
-  const aIsMatcher = isArgumentMatcher(a)
-  const bIsMatcher = isArgumentMatcher(b)
-  if (aIsMatcher || bIsMatcher) return aIsMatcher && bIsMatcher && equivalentMatchers(a, b)
-  return literalEquals(a, b)
 }
 
 /**
@@ -657,58 +346,13 @@ export class RecordedArguments {
     return true
   }
 
-  /**
-   * Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). The first
-   * look at the arguments of an invocation: it starts the operation's notes of listed keys afresh (see noteListing).
-   */
+  /** Whether the arguments hold an Arg matcher, as an argument or nested in plain objects and arrays (D3, D27). */
   static containsMatchers(rawArguments: readonly unknown[]): boolean {
-    forgetListings()
-    // E109: and which of them hold no substitute (see clearArgumentsOf)
-    let clear = 0
-    for (let index = 0; index < rawArguments.length; index++) {
-      const argument = rawArguments[index]
+    for (const argument of rawArguments) {
       const look = lookAt(argument)
-      if (look === 'plain') {
-        const search: Search = { root: argument as object, visited: undefined, items: SCAN_ITEMS, cuts: 0, opaque: 0, remembered: 0 }
-        let holds: boolean
-        try {
-          holds = holdsMatcher(argument as object, SCAN_BUDGET, 0, search, true)
-        } catch {
-          holds = false
-          search.cuts++
-        }
-        if (holds) return true
-        if (search.cuts === 0 && search.opaque === 0 && index < CLEAR_ARGUMENTS) {
-          clear |= 1 << index
-          scannedItems[index] = listedBy(search)
-        }
-      } else if (look !== undefined) return true
-      else if (index < CLEAR_ARGUMENTS && typeof argument !== 'function' && (typeof argument !== 'object' || argument === null)) clear |= 1 << index
+      if (look === 'plain' ? holdsNestedMatcher(argument as object) : look !== undefined) return true
     }
-    scannedArguments = rawArguments
-    clearArguments = clear
-    forgetScanLater()
     return false
-  }
-
-  /**
-   * E109 (R16-ADV-2): which of these arguments (a bit for each of the first CLEAR_ARGUMENTS) the search for matchers that
-   * the call made (containsMatchers, the call's last one) found to hold no substitute: primitive values, and plain
-   * objects and arrays that it looked through in full (no bound left anything out, no container that it does not search
-   * again) and found only primitive values, plain objects and arrays (with their own prototypes) in. Such an argument
-   * holds no substitute of any copy of the library, so the look of a matcher (see Look) need not walk it. `items`: how
-   * many items and keys the search listed in each (for the look's budget), by position. 0 for other arguments.
-   */
-  static clearArgumentsOf(rawArguments: readonly unknown[]): number {
-    if (rawArguments !== scannedArguments) return 0
-    // E127: read once, by the call's own matching pass
-    scannedArguments = undefined
-    return clearArguments
-  }
-
-  /** E109: the items and keys that the search listed in each of the arguments that clearArgumentsOf tells about. */
-  static get scannedItems(): readonly number[] {
-    return scannedItems
   }
 
   static sort<T extends { recordedArguments: RecordedArguments }>(objectWithArguments: T[]): T[] {
@@ -771,7 +415,7 @@ export class RecordedArguments {
         // (an Arg matcher among the actual arguments is never a value that a matcher matches, D3; E75: a test runner's
         // matcher there is a value like any other)
         if (isArgMatcher(actualArgument)) return NO_MATCH
-        const evaluation = guarded ? evaluateMatcherInLook(expectedArgument, kind, actualArgument) : evaluateMatcher(expectedArgument, kind, actualArgument)
+        const evaluation = evaluateMatcher(expectedArgument, kind, actualArgument, !guarded)
         if (!evaluation.matches)
           return evaluation.threw ? { matches: false, predicateThrew: true, predicateError: evaluation.error } : NO_MATCH
         continue
@@ -797,14 +441,13 @@ export class RecordedArguments {
     const a = this._value
     const b = other._value
     if (a === undefined || b === undefined) return a === b
-    const plain = this._matcherContainers === undefined && other._matcherContainers === undefined
     const length = Math.max(a.length, b.length)
     for (let index = 0; index < length; index++) {
       if (index >= a.length || index >= b.length) {
         if ((index < a.length ? a[index] : b[index]) !== undefined) return false
         continue
       }
-      if (!(plain ? equivalentArgument(a[index], b[index]) : equivalentNested(a[index], b[index]))) return false
+      if (!equivalentNested(a[index], b[index])) return false
     }
     return true
   }

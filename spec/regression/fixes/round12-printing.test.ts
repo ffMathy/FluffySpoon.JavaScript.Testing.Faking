@@ -301,6 +301,21 @@ test('R11-ADV-4 (E72) keys in another order do not keep a DTO that differs furth
   t.is(leastDifference([{ a: 1, b: 2 }], [{ b: 2, a: 1 }], 0, MAX_MESSAGE_DEPTH), Infinity)
 })
 
+// ---- E73 (R11-ADV-6): wide arguments --------------------------------------------------------------------------------
+
+test('R11-ADV-6 (E73) a failure message with wide arguments prints the lines that differ three levels down', t => {
+  const wide = (value: number) => {
+    const object: Record<string, unknown> = { a: { b: { c: { d: value } } } }
+    for (let key = 0; key < 5000; key++) object[`k${key}`] = key
+    return object
+  }
+  const s = Substitute.for<any>()
+  for (let index = 0; index < 50; index++) s.f('x', wide(1))
+  const message = messageOf(() => s.received(1).f('x', wide(2)))
+  // the lines differ three levels down: printed two and three levels deep, and compared
+  t.true(message.includes('› ✘ @Substitute.f(\'x\', {\n  a: { b: { c: { d: 1 } } },'), message.slice(0, 600))
+})
+
 // ---- E67-E69: the comparison agrees with the printed texts --------------------------------------------------------
 
 class Point { constructor(readonly x: unknown, readonly y: unknown) { } }
