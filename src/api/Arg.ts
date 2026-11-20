@@ -140,13 +140,6 @@ type Any = {
   /**
    * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
    * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
-   * substitutes), 'array' or 'any'.
-   */
-  // (A signature of its own, without type parameters, so that the most common matcher costs no inference.)
-  (): ReturnArg<any>
-  /**
-   * Matches any argument (`Arg.any()`), or any argument of the given type: 'string', 'number', 'boolean', 'symbol',
-   * 'bigint', 'undefined', 'object' (non-null objects, arrays and substitutes), 'function' (functions, classes and
    * substitutes), 'array' or 'any'. The matcher of a primitive type has that type: for a parameter of a union of string
    * literals, an enum or a branded string, use `Arg.is((c: Currency) => true)` or `Arg.any('string') as Currency`.
    */
