@@ -335,6 +335,39 @@ test('R16-ADV-7 (E111) E39 stays for a setup without matchers that returns the s
   t.notThrows(() => shared.received(1).set('b', 2))
 })
 
+test('R16-ADV-7 (E111) a call that answered the substitute itself continues its expression on its own line only, so the next statement starts afresh', t => {
+  // the docs' fluent map: the test's own call, then a check in the same function on the next line (nothing is left out)
+  const map = Substitute.for<any>()
+  map.set(Arg.all()).returns(map)
+  const answered = map.set('b', 2)
+  map.received(1).set('b', 2)
+  t.is(answered, map)
+
+  // the docs' http.Server: the code under test chains on() on one line, and the checks follow in the same function
+  const server = Substitute.for<any>()
+  const listeners: { [event: string]: (...args: any[]) => void } = {}
+  server.on(Arg.all()).mimicks((event: string, listener: (...args: any[]) => void) => {
+    listeners[event] = listener
+    return server
+  })
+  const failures: string[] = []
+  server.on('error', (error: Error) => failures.push(error.message)).on('close', () => { })
+  listeners.error(new Error('EADDRINUSE'))
+  server.received(1).on('error', Arg.any())
+  server.received(2).on(Arg.any('string'), Arg.any())
+  server.received(1).on('close', Arg.any())
+  t.deepEqual(failures, ['EADDRINUSE'])
+
+  // on the call's own line, the check continues it: io.to('room-b') answered io, and emit() came through to('room-a')
+  const io = Substitute.for<any>()
+  io.to(Arg.any()).returns(io)
+  io.to('room-a').emit('m') // the code under test
+  const roomB = passes(() => io.to('room-b').received(1).emit('m'))
+  io.received(1).to('room-a') // the check's leading call is not recorded
+  io.didNotReceive().to('room-b')
+  t.false(roomB)
+})
+
 // ---- E113 (R16V-3 = R16-ADV-3): a function bound from a substitute of another copy -----------------------------------------
 
 test('R16V-3 (E113) the finding: a function bound from another copy\'s substitute, as the answer of a call with matchers, is a usage error in every form', t => {

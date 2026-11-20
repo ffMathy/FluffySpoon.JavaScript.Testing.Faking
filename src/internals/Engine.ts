@@ -375,13 +375,27 @@ const frameAt = (stackStart: Function) => (): Frame | null => currentFrame(stack
 /** The candidate (an adjacent hand-out) if the current operation continues its expression. */
 const continuedChain = (candidate: CallRecord | undefined, current: () => Frame | null): CallRecord | undefined => {
   if (candidate === undefined) return undefined
-  return sameExpression(candidate.frame, current()) ? candidate : undefined
+  return continuesExpression(candidate, current()) ? candidate : undefined
 }
 
 /** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
-  if (candidate !== undefined && sameExpression(candidate.frame, record.frame)) record.chainPrevious = candidate
+  if (candidate !== undefined && continuesExpression(candidate, record.frame)) record.chainPrevious = candidate
   return record
+}
+
+/**
+ * D25: whether the operation at `frame` continues the expression of `candidate`, an adjacent hand-out. E111: a hand-out of
+ * the substitute that was called itself (see handOutConfigured) only when the operation is on the same line, after the
+ * call: such a substitute is where the next statement starts, too (`server.on('close', listener)`, then
+ * `server.received(1).on('error', Arg.any())`), and a statement before it is no part of its expression (E39).
+ */
+const continuesExpression = (candidate: CallRecord, frame: Frame | null): boolean => {
+  const from = candidate.frame
+  if (!sameExpression(from, frame)) return false
+  if (candidate.handedOutItself !== true) return true
+  return from !== null && frame !== null && typeof from.line === 'number' && from.line === frame.line &&
+    typeof from.column === 'number' && typeof frame.column === 'number' && from.column < frame.column
 }
 
 const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHandOut()
@@ -552,6 +566,8 @@ const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, s
   face.handOut(record)
   if (shared) sharedHandOutCount++
   face.noteConfiguredHandOut(record, owner, shared)
+  // E111: the substitute itself (see continuesExpression)
+  if ((face instanceof AutoEntry ? face.materializedState : face) === owner) record.handedOutItself = true
 }
 
 /*
