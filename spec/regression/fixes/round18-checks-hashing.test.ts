@@ -82,25 +82,30 @@ test('R17V-2 (E121) one check through a call with matchers of 20,000 calls, each
   }
 })
 
-test('R17V-2 (E121) checks and setups through a call with matchers leave nothing behind, so the 10,000th costs what the first does', t => {
+test('R17V-2 (E121) checks and setups through a call with matchers leave nothing behind, so the 20,000th costs what the first does', t => {
   // each check read the member (repo.find) before calling it with matchers, and the read, retracted, stayed among the
-  // member's records: 5c41ddc, 8be3a70 and cd1bf29 looked at all of them in every later check (a check of a member with
-  // 10 calls after 11,000 checks and setups took about 10 times as long as the first)
+  // member's records: 5c41ddc, 8be3a70 and cd1bf29 looked at all of them in every later check, so each check took longer
+  // than the one before it (with 5c41ddc, a thousand checks of a member with 10 calls after 11,000 checks and setups
+  // took 2.5 to 3 times as long as the first thousand, and 4.4 to 7 times after 21,000)
   const batch = (repo: any, checks: number) => millisecondsOf(() => {
     for (let index = 0; index < checks; index++) repo.find(Arg.any()).received(10).close()
   })
   assertRatiosWithin(t, () => {
     const firsts: number[] = []
     const lasts: number[] = []
-    for (let run = 0; run < 3; run++) {
+    // five substitutes, so that a pause of the garbage collector or the compiler in one of them does not decide
+    for (let run = 0; run < 5; run++) {
       const repo = Substitute.for<any>()
       for (let index = 0; index < 10; index++) repo.find(index).close()
       batch(repo, 200) // (warm-up)
       firsts.push(batch(repo, 1000))
-      batch(repo, 10000)
-      for (let index = 0; index < 1000; index++) repo.find(Arg.any()).returns(undefined) // setups, too
+      batch(repo, 20000)
+      // setups, too: one matcher object, so each replaces the one before (a thousand different setups would make every
+      // later call and check look at a thousand configured answers, which is a cost of its own)
+      const anyId = Arg.any()
+      for (let index = 0; index < 1000; index++) repo.find(anyId).returns(undefined)
       lasts.push(batch(repo, 1000))
     }
     return { later: median(lasts) / median(firsts) }
-  }, 2, 'a thousand checks after 11,000 checks and setups against the first thousand')
+  }, 2, 'a thousand checks after 21,000 checks and setups against the first thousand')
 })
