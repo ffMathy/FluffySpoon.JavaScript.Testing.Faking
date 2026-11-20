@@ -147,7 +147,7 @@ export const argumentKindOf = (value: unknown): ArgumentBrand | undefined => bra
  *   Object.prototype. It matches a value for which `test(value)` is truthy.
  * They are recognised only on the expected side: a received (actual) argument that is such an object is a value like
  * any other. Only own properties are looked at first (an object that inherits from a substitute reaches nothing of
- * it), and the sinon shape only on an object that is not a plain one, so that a plain object argument costs one look.
+ * it), and the sinon shape only on an object that is not a plain one.
  */
 export type ForeignMatcherKind = 'asymmetric' | 'sinon'
 

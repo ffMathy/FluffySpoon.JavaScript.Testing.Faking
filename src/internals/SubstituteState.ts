@@ -71,22 +71,13 @@ export class AutoEntry {
     public readonly kind: 'get' | 'call',
     public readonly parent: SubstituteState,
     public readonly key: PropertyKey,
-    /** The arguments of a call entry: a specification, or (D30: wrapped only when needed) the actual arguments. */
-    private _args?: RecordedArguments | readonly unknown[]
+    /** The arguments of a call entry: a specification, or the actual arguments of the call that created it. */
+    public readonly args?: RecordedArguments
   ) { }
-
-  public get args(): RecordedArguments | undefined {
-    const args = this._args
-    if (!Array.isArray(args)) return args as RecordedArguments | undefined
-    const wrapped = RecordedArguments.from(args)
-    this._args = wrapped
-    return wrapped
-  }
 
   /** The argument list of this call entry (the actual arguments, or the specification's). */
   public get argumentList(): readonly unknown[] | undefined {
-    const args = this._args
-    return Array.isArray(args) ? args : (args as RecordedArguments | undefined)?.value
+    return this.args?.value
   }
 
   /**
@@ -94,17 +85,13 @@ export class AutoEntry {
    * which stands for every call matching it, rather than of one call or member.
    */
   public get specifiesMatchers(): boolean {
-    const args = this._args
-    if (args === undefined || Array.isArray(args)) return false
-    const argumentsClass = (args as RecordedArguments).argumentsClass
+    const argumentsClass = this.args?.argumentsClass
     return argumentsClass === 'with-predicate' || argumentsClass === 'wildcard'
   }
 
   /** Whether the arguments of this call entry match a call with these actual arguments. */
   public matchesCall(actualArguments: readonly unknown[]): boolean {
-    const args = this._args
-    if (args === undefined) return false
-    return Array.isArray(args) ? RecordedArguments.literalsEqual(args, actualArguments) : (args as RecordedArguments).matches(actualArguments)
+    return this.args !== undefined && this.args.matches(actualArguments)
   }
 
   public get state(): SubstituteState {
@@ -776,7 +763,7 @@ export class SubstituteState {
     }
     let entry = list.find(candidate => candidate.matchesCall(actual.args))
     if (entry === undefined) {
-      entry = new AutoEntry('call', this, key, actual.args)
+      entry = new AutoEntry('call', this, key, RecordedArguments.from(actual.args as any[]))
       list.push(entry)
     }
     return entry
