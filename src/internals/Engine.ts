@@ -633,6 +633,11 @@ const faceHandler: ProxyHandler<FaceTarget> = {
   // E26: `key in sub` (see faceHas)
   has: (target: FaceTarget, property: PropertyKey) => isDefined(target, property) || faceHas(target(), property),
   defineProperty: (target: FaceTarget, property: PropertyKey, descriptor: PropertyDescriptor) => {
+    // E115: on a substitute that mimicks an object, the member is defined on the instance (see defineOnInstance)
+    if (!isOwned(target)) {
+      const defined = defineOnInstance(target(), property, descriptor)
+      if (defined !== undefined) return defined
+    }
     takeOver(target)
     return Reflect.defineProperty(target, property, descriptor)
   },
@@ -650,7 +655,14 @@ const faceHandler: ProxyHandler<FaceTarget> = {
     }
     return true
   },
-  deleteProperty: (target: FaceTarget, property: PropertyKey) => !isOwned(target) || Reflect.deleteProperty(target, property),
+  // E115: on a substitute that mimicks an object, the instance's member is deleted (a spy's restore, see defineOnInstance)
+  deleteProperty: (target: FaceTarget, property: PropertyKey) => {
+    if (isOwned(target)) return Reflect.deleteProperty(target, property)
+    const instance = mimickedInstanceOf(target())
+    // (true as before when the instance keeps it: a frozen instance)
+    if (instance !== undefined) Reflect.deleteProperty(instance, property)
+    return true
+  },
   // E51: a substitute that mimicks an instance has the instance's enumerable own keys (see mimickedKeys);
   // E65: and every substitute has the `length` and `name` of a function, while it is extensible (see FUNCTION_KEYS)
   ownKeys: (target: FaceTarget) => {
@@ -811,7 +823,9 @@ const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | 
   const instance = mimickedInstanceOf(face)
   if (instance === undefined || !isEnumerableOwn(instance, key)) return undefined
   const descriptor = Reflect.getOwnPropertyDescriptor(instance, key)
-  return descriptor === undefined ? undefined : { ...descriptor, configurable: true }
+  if (descriptor === undefined) return undefined
+  // E115: a method's value is its member handle (see methodDescriptor)
+  return { ...methodDescriptor(face instanceof AutoEntry ? face.materializedState! : face, key, descriptor), configurable: true }
 }
 
 /**
@@ -1095,6 +1109,9 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
       return peekHelper(face, helper, rawArgs, thisArg, directArgs)
     }
     const direct = directReadingOf(face)
+    // E114: through a member handle of a mimicked substitute, as a direct call of it (see invoke)
+    const handle = directArgs !== undefined && direct.state.mimicked !== undefined && direct.key !== SELF ? invokedHandleRead(direct.state, direct.key, face) : undefined
+    if (handle !== undefined && isPartOfDelegation(direct.state, direct.key, handle)) return partOfDelegation(direct.state, direct.key, handle, directArgs!, { thisArg, explicit: true })
     const read = direct.readSource === TAKE_PENDING_READ ? direct.state.takePendingRead(direct.key) : undefined
     const memberState = faceState(face)
 
@@ -1131,7 +1148,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
       answer = memberReadingAnswer(memberState, helper, rawArgs, hashes, memberRecord, thisArg)
       if (answer === NOT_CONFIGURED && directRecord !== undefined) {
         directHashes = new ArgumentHashes(directArgs!)
-        answer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true })
+        answer = configuredAnswer(direct.state, direct.key, directArgs!, directHashes, directRecord, { thisArg, explicit: true, read: handle })
       }
       answered = true
     } finally {
@@ -1303,6 +1320,185 @@ const hasMember = (instance: any, key: PropertyKey): boolean =>
 /** The proxy of a substitute or of an auto-substitute, from its state. */
 const proxyOfState = (state: SubstituteState): any => state.owner !== undefined ? entryProxy(state.owner) : rootProxies.get(state)
 
+// ---- E114, E115: the member handles of a mimicked substitute ------------------------------------------------
+
+/**
+ * E114 (R16FE-3): a method of a mimicked instance reads as a member handle (see realGet), and the handle calls the
+ * instance's function AS IT WAS WHEN THE HANDLE WAS READ, as `const original = obj.m` does on an ordinary object. So code
+ * that wraps the member, `const original = sub.m; sub.m = function (...args) { return original.apply(this, args) }`
+ * (instrumentation, jest.spyOn), installs a wrapper that runs the original, instead of one that calls itself through the
+ * handle until the stack overflows. A read gives the handle for the function the instance has at that time: the same
+ * handle as long as that function stays (D2), another one once it changes.
+ *
+ * What a handle was read with is kept per handle, for the mimicked instance it was read from (`mimicked`: the record of
+ * [mimick](), which a new [mimick]() replaces): a handle read from an earlier instance, or before the substitute mimicked
+ * anything, calls what the instance has when it is called, as before. `fn` is undefined when the instance had no
+ * function for the member then (only setups answer that handle's calls). `others`, on the member's first handle: the
+ * handles read since with other functions, so that a read finds them again (a few: a getter can give a new function at
+ * every read, as on an ordinary object).
+ */
+type HandleRead = { readonly mimicked: object, readonly fn: Function | undefined, others?: Map<Function | undefined, AutoEntry> }
+const handleReads = new WeakMap<AutoEntry, HandleRead>()
+const OTHER_HANDLES = 8
+
+/** E114: the member handle that a read of `key` gives while the mimicked instance has `fn` for it (see above). */
+const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function | undefined): AutoEntry => {
+  const mimicked = state.mimicked!
+  const entry = state.propertyEntry(key)
+  const read = handleReads.get(entry)
+  if (read === undefined || read.mimicked !== mimicked) {
+    handleReads.set(entry, { mimicked, fn })
+    return entry
+  }
+  if (read.fn === fn) return entry
+  const others = read.others ?? (read.others = new Map())
+  let other = others.get(fn)
+  if (other === undefined) {
+    other = new AutoEntry('get', state, key)
+    handleReads.set(other, { mimicked, fn })
+    if (others.size >= OTHER_HANDLES) others.delete(others.keys().next().value)
+    others.set(fn, other)
+  }
+  return other
+}
+
+/**
+ * E114: the member handle of this substitute that a value is: the proxy of a handle read from it (of any of its members),
+ * not a function that wraps one (node:test's mock.method makes a proxy of the original).
+ */
+const ownHandleOf = (state: SubstituteState, value: unknown): AutoEntry | undefined => {
+  if (!isFaceProxy(value)) return undefined
+  const face = (value as any)[INTERNAL] as Face | undefined
+  return face instanceof AutoEntry && face.kind === 'get' && face.parent === state && face.proxy === value ? face : undefined
+}
+
+/** E114: the function a member handle was read with, when it was read from the instance mimicked now (see above). */
+const handleRead = (handle: AutoEntry, state: SubstituteState): HandleRead | undefined => {
+  const read = handleReads.get(handle)
+  return read !== undefined && read.mimicked === state.mimicked ? read : undefined
+}
+
+/**
+ * E114: the function a value of the mimicked instance stands for, if it is a method (a function that is not a substitute):
+ * one of the substitute's own member handles (put there by `sub.m = original`, jest's mockRestore() or a restore of
+ * another tool) stands for the function it was read with, so that a call never goes round through the handle. NO_METHOD
+ * for any other value, which reads as itself (D12).
+ */
+const NO_METHOD: unique symbol = Symbol('no method')
+const methodOf = (state: SubstituteState, value: unknown): Function | undefined | typeof NO_METHOD => {
+  if (typeof value !== 'function') return NO_METHOD
+  const handle = ownHandleOf(state, value)
+  if (handle !== undefined) return handleRead(handle, state)?.fn
+  return isSubstituteProxy(value) ? NO_METHOD : value
+}
+
+/**
+ * E114: what a call of a member is delegated to, for the instance's value of it: the function that one of the
+ * substitute's own member handles stands for (none when it is not known, see handleRead), any other value as it is.
+ */
+const delegateOf = (state: SubstituteState, value: unknown): unknown => {
+  const handle = typeof value === 'function' ? ownHandleOf(state, value) : undefined
+  return handle === undefined ? value : handleRead(handle, state)?.fn
+}
+
+/** E114: the function the mimicked instance has for a member now (see methodOf); undefined when it has none. */
+const currentMethod = (state: SubstituteState, key: PropertyKey): Function | undefined => {
+  const method = methodOf(state, state.mimicked!.instance[key])
+  return method === NO_METHOD ? undefined : method
+}
+
+/**
+ * E114: the calls of members that are being delegated to the mimicked instance (see delegated), innermost last, as pairs
+ * of a substitute and a key.
+ */
+const delegations: unknown[] = []
+
+/** E114: runs the function of the instance that a call of a member is delegated to (see configuredAnswer). */
+const delegated = (state: SubstituteState, key: PropertyKey, fn: Function, thisArg: unknown, args: any[], self: Self): any => {
+  delegations.push(state, key)
+  // (not caught: E101)
+  try {
+    return callOrConstruct(fn, thisArg, args, self)
+  } finally {
+    delegations.length -= 2
+  }
+}
+
+/**
+ * E114: whether a call through a member handle is part of a call of the same member of the same substitute that is being
+ * delegated to the instance: the handle is stale (its function is no longer the instance's, see mimickedHandle), as the
+ * original that a wrapper forwards to is. Outside such a delegation, a stale handle's call is a call like any other.
+ */
+const isPartOfDelegation = (state: SubstituteState, key: PropertyKey, read: HandleRead): boolean => {
+  if (delegations.length === 0) return false
+  let delegating = false
+  for (let index = delegations.length - 2; index >= 0 && !delegating; index -= 2)
+    delegating = delegations[index] === state && delegations[index + 1] === key
+  return delegating && read.fn !== currentMethod(state, key)
+}
+
+/**
+ * E114: a call that is part of the call being delegated (see isPartOfDelegation): that call was recorded and matched
+ * against the setups already, so this one is neither. It runs the handle's function, as the wrapper meant (for a handle
+ * read when the instance had no function for the member: the auto-substitute that call answers otherwise).
+ */
+const partOfDelegation = (state: SubstituteState, key: PropertyKey, read: HandleRead, args: any[], self: Self): any => {
+  if (read.fn === undefined) return entryProxy(state.callEntry(key, new ArgumentHashes(args)))
+  return callOrConstruct(read.fn, self.explicit ? self.thisArg : state.mimicked!.instance, args, self)
+}
+
+/**
+ * E114: what a call of the member `key` of a mimicked substitute goes through: the member handle (`subject`: the handle
+ * invoked, or a function bound from one, see createBoundProxy) and what it was read with, if known.
+ */
+const invokedHandleRead = (state: SubstituteState, key: PropertyKey, subject: Face | object): HandleRead | undefined => {
+  const face = subject instanceof AutoEntry ? subject : boundProxies.get(subject)
+  return face instanceof AutoEntry && face.kind === 'get' && face.key === key && face.parent === state ? handleRead(face, state) : undefined
+}
+
+/**
+ * E115 (R16FE-4): the own property descriptor that a mimicked substitute reports for a method of the instance has the
+ * member handle as its value, the value a read gives (see realGet). A tool that wraps the method by its descriptor
+ * (node:test's mock.method, vitest's vi.spyOn, sinon) then wraps the handle, so that calls still go through the setups and
+ * are recorded once (E114), instead of going to the instance's function directly. Other members' descriptors are the
+ * instance's (E51).
+ */
+const methodDescriptor = (state: SubstituteState, key: PropertyKey, descriptor: PropertyDescriptor): PropertyDescriptor => {
+  if (!('value' in descriptor)) return descriptor
+  const method = methodOf(state, descriptor.value)
+  return method === NO_METHOD ? descriptor : { ...descriptor, value: entryProxy(mimickedHandle(state, key, method)) }
+}
+
+/**
+ * E115: Object.defineProperty on a mimicked substitute defines the member on the instance, as an assignment writes to it
+ * (D12): a tool that replaces a method by its descriptor (vi.spyOn, node:test's mock.method, sinon) puts its wrapper on
+ * the instance, behind the substitute, and its restore puts the original back. One of the substitute's own member handles
+ * as the value (a restore) defines the function it stands for (see instanceValueOf). A non-configurable property is defined on
+ * the substitute itself, as before (E25): the substitute reports the instance's members as configurable (E51), which a
+ * Proxy may only do for one that is configurable. Undefined: not defined on the instance (the substitute mimicks no
+ * object, or the instance refused the definition).
+ */
+const defineOnInstance = (face: Face, key: PropertyKey, descriptor: PropertyDescriptor): boolean | undefined => {
+  const instance = mimickedInstanceOf(face)
+  if (instance === undefined || descriptor.configurable === false) return undefined
+  const state = face instanceof AutoEntry ? face.materializedState! : face
+  let defined = descriptor
+  if ('value' in descriptor) {
+    const value = instanceValueOf(state, descriptor.value)
+    if (value !== descriptor.value) defined = { ...descriptor, value }
+  }
+  // (and the instance's own member may not be configurable, on a sealed instance: its configurability stays)
+  if (defined.configurable === true) {
+    const own = Reflect.getOwnPropertyDescriptor(instance, key)
+    if (own !== undefined && own.configurable === false) {
+      defined = { ...defined }
+      delete defined.configurable
+    }
+  }
+  // (an instance that refuses it, a frozen one, leaves it to the substitute itself, as before)
+  return Reflect.defineProperty(instance, key, defined) ? true : undefined
+}
+
 /**
  * E76 (R12FE-3): what the substitute answers with for a value of the instance it mimicks (D12). The instance itself (a
  * method that returns `this`, as EventEmitter.on/once, stream.setEncoding/pipe and builders do, or a getter that
@@ -1397,10 +1593,17 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     const delegate = hasMember(mimicked.instance, key) ||
       !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
     const value = delegate ? mimicked.instance[key] : undefined
+    const method = delegate ? methodOf(state, value) : undefined
     // a substitute value records and resolves its own calls (D31: nested setups through the member go to it)
-    if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) {
+    if (method === NO_METHOD) {
       return handOutConfigured(fromMimicked(value, mimicked.instance, state), linkChain(state.addRecord('get', key, undefined, site), chainCandidate), state)
     }
+    // E114: a method reads as the handle for the function the instance has now (see mimickedHandle)
+    const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
+    state.addPendingRead(record)
+    const entry = mimickedHandle(state, key, method)
+    entry.handOut(record)
+    return entryProxy(entry)
   }
 
   const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
@@ -1427,7 +1630,9 @@ const peekGet = (state: SubstituteState, key: PropertyKey): any => {
     const delegate = hasMember(mimicked.instance, key) ||
       !(isStringAssertionKey(key) || state.hasCallSubstitutions(key) || state.hasConfiguredPropertyEntry(key))
     const value = delegate ? mimicked.instance[key] : undefined
-    if (delegate && (typeof value !== 'function' || isSubstituteProxy(value))) return fromMimicked(value, mimicked.instance, state)
+    const method = delegate ? methodOf(state, value) : undefined
+    if (method === NO_METHOD) return fromMimicked(value, mimicked.instance, state)
+    return entryProxy(mimickedHandle(state, key, method)) // E114
   }
   return entryProxy(state.propertyEntry(key))
 }
@@ -1470,7 +1675,18 @@ const peekCall = (state: SubstituteState, key: PropertyKey, args: any[], self: S
 /** A real property assignment by the code under test (`site`: its call site). */
 const realSet = (state: SubstituteState, key: PropertyKey, value: unknown, chainCandidate: CallRecord | undefined, site: StackHolder): void => {
   linkChain(state.addRecord('set', key, [value], site), chainCandidate)
-  if (state.mimicked !== undefined) state.mimicked.instance[key] = value
+  if (state.mimicked !== undefined) state.mimicked.instance[key] = instanceValueOf(state, value)
+}
+
+/**
+ * E114: what an assignment through a mimicked substitute writes to the instance: for one of the substitute's own member
+ * handles (`sub.m = original`, jest's mockRestore()), the function it stands for (see methodOf), so that the instance gets
+ * its own function back, as on an ordinary object. Any other value as it is.
+ */
+const instanceValueOf = (state: SubstituteState, value: unknown): unknown => {
+  if (ownHandleOf(state, value) === undefined) return value
+  const method = methodOf(state, value)
+  return typeof method === 'function' ? method : value
 }
 
 /**
@@ -1482,6 +1698,14 @@ const invoke = (
   state: SubstituteState, key: PropertyKey, args: any[], stackStart: Function, readSource: ReadSource,
   chainCandidate?: CallRecord, self: Self = NO_SELF, site?: StackHolder, subject: Face | object = state
 ): any => {
+  // E114: a call through a member handle of a mimicked substitute (see mimickedHandle and isPartOfDelegation)
+  if (state.mimicked !== undefined && key !== SELF) {
+    const read = invokedHandleRead(state, key, subject)
+    if (read !== undefined) {
+      if (isPartOfDelegation(state, key, read)) return partOfDelegation(state, key, read, args, self)
+      self = { ...self, read }
+    }
+  }
   if (libraryGuard.matching > 0) return peekCall(state, key, args, self) // E95
   // E100: a look at the arguments of a real call (`subject`: the substitute invoked, see looksAt)
   if (libraryGuard.looking !== undefined && looksAt(subject)) return lookedCall(state, key, args, self)
@@ -1523,9 +1747,10 @@ const callWithMatchers = (state: SubstituteState, key: PropertyKey, specificatio
 /**
  * The `this` of an invocation. `explicit` when it was given through call/apply/bind: then a mimicked instance's
  * method runs with it as well, instead of with the instance. `construct` for `new` (E23), with the `new.target` of a
- * subclass or of Reflect.construct (E36; undefined when it is the substitute itself).
+ * subclass or of Reflect.construct (E36; undefined when it is the substitute itself). `read`: for a call through a member
+ * handle of a mimicked substitute, what the handle was read with (E114, see mimickedHandle).
  */
-type Self = { thisArg: unknown, explicit: boolean, construct?: boolean, newTarget?: Function }
+type Self = { thisArg: unknown, explicit: boolean, construct?: boolean, newTarget?: Function, read?: HandleRead }
 const NO_SELF: Self = { thisArg: undefined, explicit: false }
 
 /*
@@ -1625,8 +1850,9 @@ const configuredAnswer = (state: SubstituteState, key: PropertyKey, args: any[],
     if (key === SELF) {
       if (typeof instance === 'function') return fromMimicked(callOrConstruct(instance, self.thisArg, args, self), instance, state)
     } else {
-      const member = instance[key]
-      if (typeof member === 'function') return fromMimicked(callOrConstruct(member, self.explicit ? self.thisArg : instance, args, self), instance, state)
+      // E114: a call through a member handle runs the function the handle was read with (see mimickedHandle)
+      const member = self.read !== undefined ? self.read.fn : delegateOf(state, instance[key])
+      if (typeof member === 'function') return fromMimicked(delegated(state, key, member, self.explicit ? self.thisArg : instance, args, self), instance, state)
     }
   }
   return NOT_CONFIGURED
@@ -2720,7 +2946,9 @@ const configureMember = (state: SubstituteState, key: PropertyKey, configuring =
         return route === undefined ? forward(get)[property] : routedView(forward, extendRoute(route, memberStep(key)), configuring)[property]
       }
       // D26: call/apply/bind are members here like any other: setups through them configure the member reading
-      return configureMember(state.propertyEntry(key).state, property, configuring)
+      // (E114: for a method of a mimicked instance, the handle that reads give now, see mimickedHandle)
+      const entry = typeof mimickedValue === 'function' ? mimickedHandle(state, key, mimickedValue) : state.propertyEntry(key)
+      return configureMember(entry.state, property, configuring)
     },
     set: function set() {
       throw configureSetError(set)
