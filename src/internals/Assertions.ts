@@ -5,7 +5,7 @@ import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind, RecordLabels } from './SubstituteException'
 import { RecordLabelContext, SameArguments, codeMember, codePath, recordLabelContext, recordPath, sharedNotes } from './Paths'
 import { CallRecord } from './CallRecord'
-import { NO_FRAMES, StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
+import { StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
 import { isSubstituteProxy } from '../shared'
 import { plural, truncateText } from './utilities'
@@ -495,51 +495,23 @@ export const cancelDeferredReportOf = (matcherStart: Function): void => {
 type PendingReport = DeferredAssertion & { applies?: () => boolean }
 
 /**
- * E58 (R9-ADV-5): the reports scheduled since the last microtask (D9, D33, E48) are checked together by one microtask,
- * scheduled with the scheduler in place when the batch was started, instead of one microtask per report: nearly every
- * report is settled right away (the check goes on), and a microtask per check made every check about a third slower.
- * A batch still throws one report per microtask: after throwing one, it checks the rest of the batch in a microtask of
- * its own, so the reports come in the order they were scheduled, as before.
+ * Schedules a report (D9, D33, E48): its microtask throws it, unless it is settled by then. It is the report scheduled
+ * last (see cancelDeferredReportOf).
  */
-type ReportBatch = { schedule: Schedule, reports: PendingReport[] }
-let reportBatch: ReportBatch | undefined
-
-const flushReports = (batch: ReportBatch): void => {
-  if (reportBatch === batch) reportBatch = undefined
-  viewSitesLeft = VIEW_SITES_PER_RUN
-  const reports = batch.reports
-  for (let index = 0; index < reports.length; index++) {
-    const report = reports[index]
-    if (latestDeferred === report) latestDeferred = undefined
-    if (report.settled) continue
-    report.settled = true
-    if (report.applies !== undefined && !report.applies()) continue
-    if (index + 1 < reports.length) {
-      const rest: ReportBatch = { schedule: batch.schedule, reports: reports.slice(index + 1) }
-      batch.schedule(() => flushReports(rest))
-    }
-    throw report.error()
-  }
-}
-
-/** Schedules a report (see flushReports). It is the report scheduled last (see cancelDeferredReportOf). */
 const scheduleReport = (report: PendingReport): void => {
-  const schedule = deferredReports.schedule
-  let batch = reportBatch
-  if (batch === undefined || batch.schedule !== schedule) {
-    const started: ReportBatch = batch = reportBatch = { schedule, reports: [] }
-    schedule(() => flushReports(started))
-  }
-  batch.reports.push(report)
+  deferredReports.schedule(() => {
+    if (latestDeferred === report) latestDeferred = undefined
+    if (report.settled) return
+    report.settled = true
+    if (report.applies === undefined || report.applies()) throw report.error()
+  })
   latestDeferred = report
 }
 
 /**
  * Schedules a failure that is only reported if the assertion is not invoked (see assertPropertyRead).
  * The message is only built if the failure is really reported (usually the member is invoked right away).
- * E58: its stack is the call site only (the line of the check, as for a check view that nothing follows), captured as
- * cheaply as the call sites of records: a check of a member that was called defers its property-style half every time
- * (`sub[received](1).f(1)`), and capturing the whole stack made such a check about a fifth slower.
+ * E58: its stack is the call site only (the line of the check, as for a check view that nothing follows).
  */
 const defer = (stackStart: Function | undefined, createError: () => SubstituteException): DeferredAssertion => {
   const site: StackHolder = stackStart === undefined ? {} : captureStack(stackStart)
@@ -550,7 +522,7 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
       const error = createError()
       // (as text: its call sites may have been read, see cancelDeferredReportOf)
       const stack = stackText(site)
-      const frames = typeof stack === 'string' ? stack.split('\n').slice(1).join('\n') : ''
+      const frames = typeof stack === 'string' ? stack.split('\n').slice(1, 2).join('\n') : ''
       if (frames !== '') error.stack = `${error.name}: ${error.message}\n${frames}`
       return error
     }
@@ -583,24 +555,10 @@ const danglingCheckError = (state: { readonly path: string }, form: CheckForm, c
 }
 
 /**
- * E61 (R10V-2): how many check views of the symbol forms (`sub[received](n)`, `sub[didNotReceive]()`) record where they
- * were created, per synchronous run (until the reports scheduled in it are checked, see flushReports). Recording it is
- * what such a view costs most (a stack capture, about 1.5 us), and it is only used when nothing follows the view: for
- * the stack of its "checked nothing" report (E48), and to tell whether a matcher usage error in its arguments belongs
- * to it (E56). A test makes far fewer checks than this in one synchronous run; a loop of thousands of checks pays for
- * the first ones only. A view after them that nothing follows is still reported, without the line of the check (as
- * with Error.stackTraceLimit = 0), and its report stays when a matcher in its arguments throws a usage error.
- * The string forms record nothing for this: their call is recorded, with its call site, anyway.
+ * Where a check view is created (`stackStart`: the function that creates it), for the stack of its "checked nothing"
+ * report (E48) and to tell whether a matcher usage error in its arguments belongs to it (E56).
  */
-export const VIEW_SITES_PER_RUN = 1000
-let viewSitesLeft = VIEW_SITES_PER_RUN
-
-/** Where a check view of a symbol form is created (`stackStart`: the function that creates it), see VIEW_SITES_PER_RUN. */
-export const checkViewSite = (stackStart: Function): StackHolder => {
-  if (viewSitesLeft <= 0) return NO_FRAMES
-  viewSitesLeft--
-  return captureStack(stackStart)
-}
+export const checkViewSite = (stackStart: Function): StackHolder => captureStack(stackStart)
 
 /**
  * E48: schedules the usage error of a check view that is created now (`site`: where), thrown from a microtask (as D9)
@@ -617,7 +575,7 @@ export const deferDanglingCheck = (state: { readonly path: string }, form: Check
     error: () => {
       const error = danglingCheckError(state, form, count)
       const stack = stackText(site)
-      const frames = typeof stack === 'string' ? stack.split('\n').slice(1).join('\n') : ''
+      const frames = typeof stack === 'string' ? stack.split('\n').slice(1, 2).join('\n') : ''
       error.stack = frames !== '' ? `${error.name}: ${error.message}\n${frames}` : `${error.name}: ${error.message}`
       return error
     }

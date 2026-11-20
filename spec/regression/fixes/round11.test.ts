@@ -8,7 +8,6 @@ import { SubstituteException } from '../../../src/internals/SubstituteException'
 import {
   MAX_MESSAGE_DEPTH, MESSAGE_BOUNDS, deepestMatcher, formatArguments, formatValue, leastDifference, messageBounds, noteMatcherHolder
 } from '../../../src/internals/utilities/Stringify'
-import { VIEW_SITES_PER_RUN } from '../../../src/internals/Assertions'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 11: the open findings of round 10 (R10-ADV-*, R10V-*), decided in the fix spec as E59-E63.
@@ -121,68 +120,21 @@ test('R10-ADV-2 (E63) a substitute of another copy among the arguments prints as
 
 // ---- E61 (R10V-2): symbol-form checks of a member that was never called -------------------------------------------
 
-/** How many stack traces `run` captures. */
-const capturesOf = (run: () => void): number => {
-  const original = Error.captureStackTrace
-  let count = 0
-  Error.captureStackTrace = function captureStackTrace(target: object, start?: Function) {
-    count++
-    return original.call(Error, target, start)
-  } as typeof Error.captureStackTrace
-  try {
-    run()
-  } finally {
-    Error.captureStackTrace = original
-  }
-  return count
-}
-
-const nextRun = () => new Promise(resolve => setImmediate(resolve))
-
-test('R10V-2 (E61) symbol-form check views record where they were made for the first views of a synchronous run only', async t => {
-  const s = Substitute.for<any>()
-  s.f(1)
-  const checks = (count: number) => () => {
-    for (let index = 0; index < count; index++) {
-      s[didNotReceive]().g(1)
-      s[received](0).h()
-    }
-  }
-  await nextRun()
-  // c503043: a stack capture per view, 6,000 here (the most of what such a check cost)
-  const captures = capturesOf(checks(3000))
-  t.is(captures, VIEW_SITES_PER_RUN)
-  // every synchronous run starts again
-  await nextRun()
-  t.is(capturesOf(checks(10)), 20)
-})
-
-test('R10V-2 (E61) a dangling check view after them is still reported, without the line of the check; the next run has the line again', t => {
+test('R10V-2 (E61) a dangling check view after a thousand others in a synchronous run is reported with the line of the check', t => {
   const clock = interceptDeferredReports()
   try {
     clock.run()
     const s = Substitute.for<any>()
-    for (let index = 0; index < VIEW_SITES_PER_RUN; index++) s[didNotReceive]().g(1)
-    s[received](2)
-    let errors = clock.run()
+    const at = (frame: string) => frame.replace(/^.*\((.*):\d+\)$/, '$1').replace(/^\s*at /, '')
+    for (let index = 0; index < 1000; index++) s[didNotReceive]().g(1)
+    s[received](2); const danglingLine = new Error().stack!.split('\n')[1]
+    const errors = clock.run()
     t.is(errors.length, 1)
     t.true(errors[0] instanceof SubstituteException)
     t.true((errors[0] as Error).message.startsWith('@Substitute[received](2) checked nothing'), (errors[0] as Error).message)
-    t.false(/^\s+at /m.test((errors[0] as Error).stack!), (errors[0] as Error).stack)
-    // a matcher usage error in the arguments of such a view leaves its report (as with Error.stackTraceLimit = 0)
-    for (let index = 0; index < VIEW_SITES_PER_RUN; index++) s[didNotReceive]().g(1)
-    t.throws(() => s[received](1)(Arg.any('String' as any)), { instanceOf: TypeError })
-    errors = clock.run()
-    t.is(errors.length, 1)
-    t.true((errors[0] as Error).message.startsWith('@Substitute[received](1) checked nothing'), (errors[0] as Error).message)
-
-    // in the next run, the report points at the line of the dangling view again
-    s[received](2); const danglingLine = new Error().stack!.split('\n')[1]
-    errors = clock.run()
-    t.is(errors.length, 1)
-    const at = (frame: string) => frame.replace(/^.*\((.*):\d+\)$/, '$1').replace(/^\s*at /, '')
     t.is(at((errors[0] as Error).stack!.split('\n').find(line => line.includes('round11.test'))!), at(danglingLine))
-    // and a matcher usage error in its arguments cancels its report, as before
+    // and a matcher usage error in the arguments of such a view cancels its report (E56)
+    for (let index = 0; index < 1000; index++) s[didNotReceive]().g(1)
     t.throws(() => s[received](1)(Arg.any('String' as any)), { instanceOf: TypeError })
     t.deepEqual(clock.run(), [])
   } finally {
