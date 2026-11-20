@@ -335,6 +335,7 @@ const continuedChain = (candidate: CallRecord | undefined, current: () => Frame 
 /** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
   if (candidate === undefined) return record
+  if (candidate.handedOutItself === true) record.afterSelfHandOut = candidate
   if (continuesExpression(candidate, candidate.frame, record.frame)) record.chainPrevious = candidate
   return record
 }

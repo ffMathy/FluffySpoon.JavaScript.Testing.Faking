@@ -40,6 +40,8 @@ export class CallRecord {
    * continuesSelfHandOut and the engine's continuesExpression).
    */
   public handedOutItself?: boolean
+  /** E111: the hand-out of the substitute itself that this operation came right after, decided again in convertToCall. */
+  public afterSelfHandOut?: CallRecord
 
   constructor(
     public kind: RecordKind,
@@ -73,16 +75,17 @@ export class CallRecord {
    * is invoked later, elsewhere, even when the code under test invokes it on the substitute again, as
    * `Reflect.apply(fetch, api, [id])` does). So it always takes the call site of the invocation: when the read and the
    * invocation are the same expression (`sub.method(...)`), both are in the same function anyway.
-   * E111, E126: so a read that continues a hand-out of the substitute itself continues it only when it is invoked on the
-   * same line, too (`const get = map.set('k', 1).get` invoked on the next line does not).
+   * E111, E126: so a read right after a hand-out of the substitute itself continues it only when it is invoked on the
+   * same line, after it (`const get = map.set('k', 1).get` invoked on the next line does not, a read in a helper that
+   * is invoked on that line does).
    */
   public convertToCall(args: any[], site: StackHolder): void {
     this.kind = 'call'
     this.args = args
     this._stack = site
     this.seq = nextSequence()
-    const previous = this.chainPrevious
-    if (previous?.handedOutItself === true && !continuesSelfHandOut(previous.frame, this.frame)) this.chainPrevious = undefined
+    const handOut = this.afterSelfHandOut
+    if (handOut !== undefined) this.chainPrevious = continuesSelfHandOut(handOut.frame, this.frame) ? handOut : undefined
   }
 }
 
