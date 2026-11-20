@@ -369,18 +369,8 @@ type TrailingAllArgumentsSignaturesOf<TOverload, TView extends SubstituteView, T
   TOverload extends Overload<any[], any> ?
   TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
   unknown
-// (Written out without a type alias for the signatures: a substitute of all lib.dom element types needs fewer type
-// instantiations then, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
-// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away.)
-// A generic method has a single signature (see `IsGenericSignature`): its `Arg.all()` signatures are only those of that
-// signature, without the other overloads, whose types TypeScript would then instantiate anew for each use of the
-// method (they made a substitute of Node's `EventEmitter<Events>` 12% costlier to check).
-type SingleOverloadAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction> =
-  TOverload extends Overload<any[], any> ?
-  ((allArguments: AllArguments<TOverload['arguments']>) =>
-    CallResult<TView, TOverload['arguments'], TOverload['returnType'], TFunction>) &
-  TrailingAllArgumentsSignatures<TOverload['arguments'], TOverload['returnType'], TView, TFunction> :
-  unknown
+// (A member with one overload, which has nothing in slot 6 of `Overloads`, gets that overload's result right away; so
+// does a generic method, see `IsGenericSignature`.)
 type LastAllArgumentsSignatures<TOverload, TView extends SubstituteView, TFunction, TOverloads extends any[]> =
   TOverload extends Overload<any[], any> ?
   ((allArguments: AllArguments<TOverload['arguments']>) => TOverloads[6] extends NoOverload ?
@@ -420,10 +410,8 @@ type OverloadSignatures<TOverloads extends any[], TView extends SubstituteView, 
 // called with the arguments of every overload and returns what any overload returns. Before, it was
 // the result of that first overload only: `pool.query(Arg.all())` of @types/pg took the `Submittable` stream overload,
 // so `.resolves(result)` did not compile. When all overloads return the same type (a member with one signature
-// included), it is still the first overload's result (`.mimicks()` takes its parameters). Being part of the result
-// type, it is only computed for a call that resolves to the signature: comparing the return types of every overload
-// of every member whenever a substitute's members are compared made large types slower to check. (A union of members
-// goes through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
+// included), it is still the first overload's result (`.mimicks()` takes its parameters). (A union of members goes
+// through `CombinedSignatures`, whose single `Arg.all()` already takes every variant's value.)
 type AllArgumentsResult<V extends SubstituteView, TOverloads extends any[]> =
   false extends EachOverloadReturnsAll<TOverloads[number], OverloadReturnTypes<TOverloads[number]>> ?
   AllOverloadsCallResult<V, TOverloads, OverloadReturnTypes<TOverloads[number]>> :
@@ -509,7 +497,7 @@ type SignaturesOf<TVariant, TView extends SubstituteView, TFunction> =
   SignaturesOfKind<Overloads<TVariant>, TView, TFunction, TVariant, GenericSignatureKind<TVariant, Overloads<TVariant>>>
 type SignaturesOfKind<TOverloads extends any[], TView extends SubstituteView, TFunction, F, TGeneric> =
   TGeneric extends true ?
-  GenericPositionalSignature<F, TOverloads[7], TView> & SingleOverloadAllArgumentsSignatures<TOverloads[7], TView, TFunction> &
+  GenericPositionalSignature<F, TOverloads[7], TView> & LastAllArgumentsSignatures<TOverloads[7], TView, TFunction, TOverloads> &
   GenericCallSignatureFor<F, TOverloads[7], TView> & GenericTrailingAllArgumentsSignatures<F, TOverloads[7], TView> :
   OverloadSignatures<TOverloads, TView, TFunction>
 
