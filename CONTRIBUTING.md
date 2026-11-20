@@ -257,7 +257,12 @@ not against `src/`, and checks two things:
     `spyon-mimicked.spec.ts` checks `jest.spyOn()`, node:test's `mock.method()` and an instrumentation wrapper
     (`const original = obj.m; obj.m = wrap(original)`) on a substitute that mimicks an instance: setups still
     answer, each call is recorded once, and the restore gives the instance its function back (README "Partial
-    mocks" and "Test runners").
+    mocks" and "Test runners"). `spies-mimicked-round18.spec.ts` checks node:test's `mock.method()` with an
+    implementation (setups first, then the mock) and that the instance's own calls through `this` of a member that
+    `jest.spyOn()`, node:test or a wrapper replaced are not recorded, and `sinon-mimicked-round18.spec.ts` pins what
+    sinon (22, a dev dependency of the checks) does on a mimicked substitute: `sinon.replace()` for an own method,
+    the `TypeError`s of `spy()`, `stub()` and, for a method on a class prototype, `replace()`, and sinon on the
+    instance itself (README "Test runners").
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
     vitest's matchers, snapshots and diffs (including the checks and setups with vitest's asymmetric matchers that the
     README's vitest example makes, and `vi.fn(substitute)`), and how vitest and `util.inspect` see printed, frozen and
@@ -275,7 +280,13 @@ not against `src/`, and checks two things:
     `--experimental-test-module-mocks`) and jest's `unstable_mockModule()` for native ES modules
     (`test-runners/jest-esm-modules/`, `npm run validate:jest-modules-esm`, with `--experimental-vm-modules` and
     `jest.modules.esm.config.js`). That run also checks vitest's `vi.spyOn()` (the `spyOn()` of `@vitest/spy`) on
-    substitutes that mimick an instance and on those that do not (`spies-mimicked.test.mjs`).
+    substitutes that mimick an instance and on those that do not (`spies-mimicked.test.mjs`), and that the
+    instance's own calls through `this` of a member that `vi.spyOn()` replaced stay its own
+    (`spies-mimicked-round18.test.mjs`).
+  - `test-runners/tsx-lines/`: the same checks of the line rules (README "Which calls lead to a setup or a check",
+    "Lines in transpiled test files") run with `node --import tsx` (`checks.ts` and `checks.mts`) and with
+    `node --require tsx/cjs`, which put each file on one line, and must give what they give with a statement per
+    line of the code that runs.
 - `test/bundlers.ts`: `bundlers/entry.mjs` is bundled with Rollup and `@rollup/plugin-commonjs`, webpack, esbuild
   (CommonJS and ES module output) and a Vite SSR build with `ssr.noExternal`, and each bundle is run with Node.js.
   The default, named and namespace imports must be the real exports. vitest with `server.deps.inline` runs
