@@ -154,9 +154,6 @@ type AssertionMembers<T> = { [P in Extract<keyof T, PropertyKey>]: AssertionMemb
 // `?` alone would make an optional method's check (`sub.received().onDone()`) "possibly undefined". A type without
 // symbol keys gets `unknown` here, so its check view is the same type as before, and in generic code this is left to
 // TypeScript, which decides it when the members are used.
-// (The symbol keys are `keyof T & symbol`, not an `Extract`, which TypeScript would instantiate for every key; and the
-// intersection with `AssertionMembers` is written out in `TerminatingObject`: both cost fewer type instantiations for a
-// substitute of all lib.dom element types, see spec-types/R6V-5.R6TD-2.T44.check-cost.js.)
 type SymbolAssertionMembers<T, K extends keyof T> =
   [K] extends [never] ? unknown : { -readonly [P in K]: AssertionMemberOf<T, P> }
 

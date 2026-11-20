@@ -22,8 +22,7 @@ type SetupResult<TView extends SubstituteView, TArguments extends any[], TReturn
 // overloads the call can reach (T39, R4TD-1; T42, R5TD-1): for `Cat | Dog` with `speak(): 'meow'` and `speak():
 // 'woof'`, `.returns()` takes `'meow' | 'woof'`, and for `ReaderA | ReaderB` with `read(path: string): string` and
 // `read(path: string, encoding?: string): Uint8Array`, `read('p').returns()` takes `string | Uint8Array`.
-// `.resolves()`, `.mimicks()` and the configure view likewise. Being part of the signature's return type, this is only
-// computed for the calls that are made (and when signatures are compared).
+// `.resolves()`, `.mimicks()` and the configure view likewise.
 type CallResult<TView extends SubstituteView, TArguments extends any[], TReturnType, TFunction> =
   TView extends 'assertion' ? void : SetupResult<TView, TArguments, CallReturnType<TFunction, TArguments, TReturnType>>
 type CallReturnType<TFunction, TArguments, TReturnType> =
@@ -644,9 +643,10 @@ type EachSignatures<TVariant, TView extends SubstituteView, TFunction> =
 // with `move(x: string, y: number)` in one variant and `move(x: number, y: string)` in the other, `move('a', 'b')`
 // does not compile. A callback argument without parameter types is typed from the list the call resolves to. The
 // results of these signatures depend only on the list and the whole member type, so the variants that declare the
-// same list (the same method declared in several interfaces) share its signatures: the number of signatures, and with
-// it the cost of type-checking a call, grows with the number of distinct lists, not with the number of variants. (The
-// methods of all lib.dom elements have a few distinct lists; 60 variants that declare 2 different lists have 2.)
+// same list (the same method declared in several interfaces) share its signatures: the number of signatures grows with
+// the number of distinct lists, not with the number of variants (the methods of all lib.dom elements have a few
+// distinct lists; 60 variants that declare 2 different lists have 2), which keeps the compiler from running out of
+// memory on a union of all lib.dom elements.
 // The positional signatures take an exact number of arguments (see `ListBox`) and are ordered by it, most first
 // (`fetch(url, options)` before `fetch(url)`); then the signatures for more than 6 arguments, the signatures of the
 // lists with optional parameters, the `Arg.all()` signatures, and last the signatures without parameters. When
@@ -728,23 +728,18 @@ type CallbackWithThis<TThis, A extends any[], R> = (this: TThis, ...args: A) => 
 // Lnk, n: number)`, while with `on(cb: (this: E1, x: string) => void)` and `on(cb: (this: E2, x: number) => void)`,
 // `on(function (this: E2, x: string) {})` does not compile. A call is checked against each list as a whole, as
 // TypeScript checks a call of the union itself: with `both(a: (this: C1) => void, b: (this: C1) => void)` and the same
-// with `C2`, `both(function (this: C1) {}, function (this: C2) {})` does not compile (R9TD-2, T62). Its parameter list
-// is the constraint of its type parameter, which TypeScript only computes when a call gets to this signature, and being
-// generic, it is left out when TypeScript compares the signatures of the variants of a union, which made such unions of
-// callbacks very slow to check on TypeScript 3.6 for lib.dom's elements.
+// with `C2`, `both(function (this: C1) {}, function (this: C2) {})` does not compile (R9TD-2, T62).
 // (The lists are passed in: computing them in the constraint made TypeScript 3.6 and 4.1 report "Type instantiation is
 // excessively deep" for the call. The checks for `never` test `TThis & {}`, not `[TThis]`: TypeScript 4.1 and older
 // decided `[TThis] extends [never]` too early, while `TThis` was still a type parameter.)
 type OwnThisSignature<TThis, V extends SubstituteView, F> = (TThis & {}) extends never ? unknown :
   <P extends ArgumentValue[]>(...args: P & OwnThisArguments<P, AllParameterLists<F>>) =>
     OwnThisCallResult<V, P, F>
-// The arguments `P` fit one of the lists of the variants. Only checked for calls that pass a callback with a `this` type
-// of its own: calls with `Arg.any()` arguments, which TypeScript tries with this signature first, do not compute these
-// lists.
-// (The lists are wrapped in a tuple, so that TypeScript computes them only when it checks the arguments, not when it
-// infers `P` for a call with `Arg.any()` arguments. TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when
-// they check this declaration (with `skipLibCheck` off), with `any` for the type parameters: `OwnThisLists` stops at
-// `any`, which otherwise made them report "Type instantiation is excessively deep".)
+// The arguments `P` fit one of the lists of the variants, and pass a callback with a `this` type of its own: a call
+// with `Arg.any()` arguments, which TypeScript tries with this signature first, resolves to the signatures above.
+// (TypeScript 3.9 and 4.0 decide `[P] extends [...]` already when they check this declaration (with `skipLibCheck`
+// off), with `any` for the type parameters: `OwnThisLists` stops at `any`, which otherwise made them report "Type
+// instantiation is excessively deep".)
 // A call whose last argument is `Arg.all()` (`onClick(function (this: Btn, n: number) {}, Arg.all())`) fits when its
 // leading arguments fit the first parameters of one of the lists, and that list has a parameter where `Arg.all()` is
 // passed, as for the other `Arg.all()` signatures (R11TD-4, T70): `AllArgumentsLists` are those leading parameters
