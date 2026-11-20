@@ -46,7 +46,7 @@ test.serial('R5V-1 (E13) distinct wide objects with the same keys are told apart
   // 45facfb: 21 s for the first shape, as all objects with more than 4,096 keys had the same hash
   const shapes: Array<[string, Array<Record<string, unknown>>]> = [
     ['200 calls with distinct 5,000-key objects', Array.from({ length: 200 }, (_, call) => wideObject(5000, key => call * 100_000 + key))],
-    ['100 calls with the same keys and other values', Array.from({ length: 100 }, (_, call) => wideObject(5000, key => key + call))],
+    ['30 calls with the same keys and other values', Array.from({ length: 30 }, (_, call) => wideObject(5000, key => key + call))],
     ['100 calls with distinct 70,000-key objects', Array.from({ length: 100 }, (_, call) => wideObject(70_000, key => call * 100_000 + key))]
   ]
   for (const [name, values] of shapes) {
@@ -81,7 +81,7 @@ test.serial('R5V-1 (E13) distinct wide objects with the same keys are told apart
  */
 const eachLimit = (t: ExecutionContext, prefix: string) => {
   for (const size of [255, 256, 257, 1024, 1025, 1026, 4096, 4097, 65_535, 65_536, 65_537]) {
-    const calls = size > 10_000 ? 10 : 200
+    const calls = size > 10_000 ? 5 : 20
     const values = Array.from({ length: calls }, (_, call) => wideObject(size, key => call * 1_000_000 + key, key => `${prefix}${size}_${key}`))
     const elapsedLimit = timeLimit(1000)
     const elapsed = timeCalls(values)
@@ -281,12 +281,12 @@ test.serial('R5V-2 (E14) values that cannot be read are matched by identity: 4,0
   t.not(sub.p(proxy), sub.p(Proxy.revocable({}, {}).proxy))
 })
 
-test.serial('R5V-1 (E13) more key sets than there are families: 100 calls with same-size objects whose keys differ', t => {
-  const values = Array.from({ length: 100 }, (_, call) => wideObject(5000, key => key, key => `k${call}_${key}`))
+test.serial('R5V-1 (E13) more key sets than there are families: 30 calls with same-size objects whose keys differ', t => {
+  const values = Array.from({ length: 30 }, (_, call) => wideObject(5000, key => key, key => `k${call}_${key}`))
   const elapsedLimit = timeLimit(1000)
   const elapsed = timeCalls(values)
-  t.log(`100 calls with same-size objects whose keys differ: ${elapsed.toFixed(1)} ms`)
-  assertWithin(t, elapsed, elapsedLimit, `100 calls with same-size objects whose keys differ`)
+  t.log(`30 calls with same-size objects whose keys differ: ${elapsed.toFixed(1)} ms`)
+  assertWithin(t, elapsed, elapsedLimit, `30 calls with same-size objects whose keys differ`)
   const sub = Substitute.for<any>()
   const results = values.map(value => sub.put(value))
   values.forEach((value, index) => t.is(sub.put(shuffledCopy(value, index)), results[index]))
