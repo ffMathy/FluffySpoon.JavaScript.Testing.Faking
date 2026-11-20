@@ -358,6 +358,27 @@ const sourceMapFinder = (): FindSourceMap | null => {
 }
 
 /**
+ * E125: the file: URL of a file name as V8 gives it (an ES module's is one already), under which Node.js keeps its source
+ * map: findSourceMap turns a path into one each time, which costs more than the lookup itself. Kept per file.
+ */
+const urls = new Map<string, string>()
+const MAX_URLS = 1000
+
+const urlOf = (file: string): string => {
+  let url = urls.get(file)
+  if (url !== undefined) return url
+  url = file
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(file) || /^[a-z]:[\\/]/i.test(file)) {
+    try {
+      url = require('url').pathToFileURL(file).href as string
+    } catch { /* passed on as it is */ }
+  }
+  if (urls.size >= MAX_URLS) urls.clear()
+  urls.set(file, url)
+  return url
+}
+
+/**
  * E125: the source map Node.js has for a file, or undefined: Node.js keeps one for a module it loaded while source maps
  * were enabled (node --enable-source-maps, process.setSourceMapsEnabled, module.setSourceMapsSupport; tsx enables them)
  * and the module's code names one. Asked anew each time (a test runner in watch mode can load a changed file again),
@@ -368,7 +389,7 @@ const sourceMapOf = (file: unknown): SourceMapLike | undefined => {
   const find = sourceMapFinder()
   if (find === null) return undefined
   try {
-    const map = find(file)
+    const map = find(urlOf(file))
     return typeof map === 'object' && map !== null && typeof map.findEntry === 'function' ? map : undefined
   } catch {
     return undefined
