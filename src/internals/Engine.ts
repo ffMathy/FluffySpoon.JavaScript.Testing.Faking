@@ -387,7 +387,7 @@ const continuedChain = (candidate: CallRecord | undefined, current: () => Frame 
  */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
   if (candidate === undefined) return record
-  if (selfHandOutCount !== 0 && candidate.handedOutItself === true) {
+  if (handedOutItself(candidate)) {
     record.linkToSelfHandOut(candidate)
     return record
   }
@@ -403,7 +403,7 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
  * after the call (see CallRecord.continuesSelfHandOut).
  */
 const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
-  if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return sameExpression(from, frame)
+  if (!handedOutItself(candidate)) return sameExpression(from, frame)
   return continuesSelfHandOut(from, frame)
 }
 
@@ -577,13 +577,22 @@ const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, s
   face.noteConfiguredHandOut(record, owner, shared)
   // E111: the substitute itself (see continuesExpression)
   if ((face instanceof AutoEntry ? face.materializedState : face) === owner) {
-    record.handedOutItself = true
+    latestSelfHandOut = record.seq
     selfHandOutCount++
   }
 }
 
 /** E111: how many hand-outs of the substitute that was called itself were made (see continuesExpression), none as a rule. */
 let selfHandOutCount = 0
+/**
+ * E111, E126: the sequence number of the record of the latest such hand-out. A chain candidate is always the latest
+ * operation of all (an adjacent hand-out), so this tells whether it handed out the substitute itself, with no field on
+ * the records (the record of a fluent call is no larger than before E111) and no reference that keeps one alive (E127).
+ */
+let latestSelfHandOut = 0
+
+/** E111: whether `candidate`, an adjacent hand-out, handed out the substitute it was made on itself (see handOutShared). */
+const handedOutItself = (candidate: CallRecord): boolean => selfHandOutCount !== 0 && candidate.seq === latestSelfHandOut
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,

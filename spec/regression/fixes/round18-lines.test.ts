@@ -7,10 +7,11 @@ import * as path from 'path'
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import * as CallSite from '../../../src/internals/CallSite'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
+import { SubstituteState } from '../../../src/internals/SubstituteState'
 
 // Round 18: the lines, calls and record-path part of the round-17 findings (R17FE-5, R17-ADV-11, R17-ADV-3, R17V-3 =
-// R17-ADV-7), decided in the fix spec as E125-E128. The timing tests of E126 and E128 are in
-// round18-lines-hashing.test.ts (serial run).
+// R17-ADV-7), decided in the fix spec as E125-E128. E126 is tested by what a fluent call reads (no stack frame) and keeps
+// (no field of its own on its record) rather than by timings; E128 (not met, see the report) has no test here.
 
 const library = path.resolve(__dirname, '../../../src/index.js')
 
@@ -323,4 +324,64 @@ test('R17-ADV-11 (E126) a link to a hand-out of the substitute itself is still d
   fluent.on('a').emit('x')
   t.true(passes(() => fluent.on('a')[received](1).emit('x')))
   t.false(passes(() => fluent.on('b')[received](1).emit('x')))
+})
+
+test.serial('R17-ADV-11 (E126) the record of a call that answers the substitute itself has no field that the record of another call lacks, as at 8be3a70', t => {
+  // E111's flag and E126's pending link took a field each on the records of fluent calls (8 to 16 bytes per call, or on
+  // every record when the first records made were fluent ones); now neither is a field of the record
+  const records: unknown[] = []
+  const prototype = SubstituteState.prototype as any
+  const addRecord = prototype.addRecord
+  const fluent = Substitute.for<any>()
+  fluent[mimick]({ on() { return this } })
+  const plain = Substitute.for<any>()
+  plain[mimick]({ on() { return 1 } })
+  const res = Substitute.for<any>()
+  res.status(Arg.any()).returns(res)
+  const app = Substitute.for<any>()
+  app.status(Arg.any()).returns(Substitute.for<any>())
+  const recordsOf = (run: () => void): unknown[] => {
+    records.length = 0
+    prototype.addRecord = function (this: unknown, ...args: unknown[]) {
+      const record = addRecord.apply(this, args)
+      records.push(record)
+      return record
+    }
+    try {
+      run()
+    } finally {
+      prototype.addRecord = addRecord
+    }
+    return records.slice()
+  }
+  const fields = (record: unknown): string => Object.keys(record as object).sort().join(', ')
+  const fluentRecords = recordsOf(() => fluent.on('a', 1).on('b', 2).on('c', 3))
+  const plainRecords = recordsOf(() => { plain.on('a', 1); plain.on('b', 2) })
+  const selfRecords = recordsOf(() => res.status(200).json(1))
+  const otherRecords = recordsOf(() => app.status(200).json(1))
+  t.is(fluentRecords.length, 3)
+  t.is(selfRecords.length, 2)
+  t.is(otherRecords.length, 2)
+  const expected = fields(plainRecords[0])
+  for (const record of [...fluentRecords, ...plainRecords, ...selfRecords, ...otherRecords]) t.is(fields(record), expected)
+  // and the links are still decided by E111's line rule when a check follows them
+  t.notThrows(() => fluent.received(1).on('c', 3))
+  t.notThrows(() => res.received(1).status(200))
+})
+
+test('R17-ADV-11 (E126) a read right after a hand-out of the substitute itself, invoked later, is decided where it is invoked', t => {
+  // read on the line of the call that answered map itself, invoked on the next line: the setup leaves that call recorded
+  // (the invocation is a call made where it is invoked, E1; E111's line rule)
+  const map = Substitute.for<any>()
+  map.set(Arg.all()).returns(map)
+  const get = map.set('k', 1).get
+  get('x').returns(5)
+  t.is(map.get('x'), 5)
+  t.notThrows(() => map.received(1).set('k', 1))
+  // read and invoked on that line: the setup continues the call that answered map itself, which is not recorded
+  const other = Substitute.for<any>()
+  other.set(Arg.all()).returns(other)
+  other.set('k', 1).get('x').returns(5)
+  t.is(other.get('x'), 5)
+  t.notThrows(() => other.didNotReceive().set('k', 1))
 })

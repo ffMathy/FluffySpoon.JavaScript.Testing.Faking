@@ -1,4 +1,4 @@
-import { Frame, StackHolder, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
+import { Frame, NO_FRAMES, StackHolder, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 
 export type RecordKind = 'get' | 'set' | 'call'
 
@@ -33,18 +33,11 @@ export class CallRecord {
   /** E23: true when the invocation was a construction (`new sub.Client(url)`), which messages show with `new`. */
   public constructed?: boolean
   /**
-   * E111: true when the operation answered with the substitute it was made on itself, which a setup with matchers or the
-   * mimicked instance gives every call it matches (`io.to(Arg.any()).returns(io)`): only an operation on the same line
-   * continues its expression then (see the engine's continuesExpression).
+   * The record of the previous step when this one continues an expression chain (`a.b().c`), see chainPrevious. E126:
+   * or the previous step that handed out the substitute itself, while it is not decided yet whether this one continues its
+   * expression (see linkToSelfHandOut).
    */
-  public handedOutItself?: boolean
-  /** The record of the previous step when this one continues an expression chain (`a.b().c`), see chainPrevious. */
   private _chainPrevious: CallRecord | undefined
-  /**
-   * E126 (R17-ADV-11): the previous step when it is a hand-out of the substitute itself (handedOutItself), whose link is
-   * decided when it is first used (see chainPrevious and linkToSelfHandOut). (Left undeclared on other records.)
-   */
-  private _selfHandOut?: CallRecord
 
   constructor(
     public kind: RecordKind,
@@ -64,18 +57,19 @@ export class CallRecord {
    * linkToSelfHandOut), from where both operations are (see continuesSelfHandOut).
    */
   public get chainPrevious(): CallRecord | undefined {
-    const candidate = this._selfHandOut
-    if (candidate !== undefined) {
-      this._selfHandOut = undefined
+    const previous = this._chainPrevious
+    if (previous !== undefined && (this._stack as PendingLinkSite).pendingSelfLink === this.seq) {
+      (this._stack as PendingLinkSite).pendingSelfLink = undefined
       // (the candidate's frame first, as linkChain reads them)
-      const from = candidate.frame
-      if (continuesSelfHandOut(from, this.frame)) this._chainPrevious = candidate
+      const from = previous.frame
+      if (!continuesSelfHandOut(from, this.frame)) this._chainPrevious = undefined
     }
     return this._chainPrevious
   }
 
   public set chainPrevious(previous: CallRecord | undefined) {
-    if (this._selfHandOut !== undefined) this._selfHandOut = undefined
+    const site = this._stack as PendingLinkSite
+    if (site.pendingSelfLink === this.seq) site.pendingSelfLink = undefined
     this._chainPrevious = previous
   }
 
@@ -85,11 +79,18 @@ export class CallRecord {
    * is on the same line, after it (E111, see continuesSelfHandOut). Which it is, is decided only when a setup or a check
    * follows the chain back (see chainPrevious): the calls of a fluent method (`emitter.on('a', f).on('b', f)`) read no
    * stack frames until then, as before E111. (The frame of a read that is invoked later is then the invocation's, see
-   * convertToCall: for `sub.method(...)` both are at the same place.)
+   * convertToCall: for `sub.method(...)` both are at the same place.) That the link is pending is noted on this
+   * operation's capture (see PendingLinkSite), so that the record of a fluent call is no larger than before E111.
    */
   public linkToSelfHandOut(candidate: CallRecord): void {
-    this._chainPrevious = undefined
-    this._selfHandOut = candidate
+    const site = this._stack as PendingLinkSite
+    // without frames, it never does (see continuesSelfHandOut); that capture is shared, and frozen
+    if (site === NO_FRAMES) {
+      this._chainPrevious = undefined
+      return
+    }
+    this._chainPrevious = candidate
+    site.pendingSelfLink = this.seq
   }
 
   /** The captured call site itself (E48: the stack of a report about this operation). */
@@ -115,12 +116,28 @@ export class CallRecord {
    * invocation are the same expression (`sub.method(...)`), both are in the same function anyway.
    */
   public convertToCall(args: any[], site: StackHolder): void {
+    // E126: a pending link to a hand-out of the substitute itself is decided with the invocation's call site
+    const read = this._stack as PendingLinkSite
+    const pending = read.pendingSelfLink === this.seq
+    if (pending) read.pendingSelfLink = undefined
     this.kind = 'call'
     this.args = args
     this._stack = site
     this.seq = nextSequence()
+    if (!pending) return
+    if (site === NO_FRAMES) this._chainPrevious = undefined
+    else (site as PendingLinkSite).pendingSelfLink = this.seq
   }
 }
+
+/**
+ * E126 (R17-ADV-11): the capture of an operation whose link to a hand-out of the substitute itself is not decided yet (see
+ * CallRecord.linkToSelfHandOut) notes the operation's sequence number. The capture is an object of its own per operation,
+ * with room for it, so the record of a fluent call needs no field of its own for it (E126 and D30: what a record of
+ * 8be3a70 needed), and a number keeps nothing alive (E127). The number tells the record from any other that shares the
+ * capture (the two readings of `x.call(...)`, see pairReadings).
+ */
+type PendingLinkSite = StackHolder & { pendingSelfLink?: number }
 
 /**
  * Removes a record (and the chain of records that led to it) from the received calls, because the
@@ -140,7 +157,7 @@ export const retract = (record: CallRecord | undefined): void => {
 
 /**
  * E111 (R16-ADV-7): whether an operation at `frame` continues the expression of a hand-out of the substitute itself at
- * `from` (handedOutItself): only on the same line, after it, in the same function (E125: the same line of the source,
+ * `from` (see the engine's handOutShared): only on the same line, after it, in the same function (E125: the same line of the source,
  * where Node.js has a source map, see CallSite.sameLineAfter). Such a substitute is where the next statement starts,
  * too (`server.on('close', listener)`, then `server.received(1).on('error', Arg.any())`), and a statement before it is no
  * part of its expression (E39). Without frames (Error.stackTraceLimit = 0) it never does.
