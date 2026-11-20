@@ -1348,6 +1348,7 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
   const read = handleReads.get(entry)
   if (read === undefined || read.mimicked !== mimicked) {
     handleReads.set(entry, { mimicked, fn })
+    handleProxies.set(entryProxy(entry), entry)
     return entry
   }
   if (read.fn === fn) return entry
@@ -1356,6 +1357,7 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
   if (other === undefined) {
     other = new AutoEntry('get', state, key)
     handleReads.set(other, { mimicked, fn })
+    handleProxies.set(entryProxy(other), other)
     if (others.size >= OTHER_HANDLES) others.delete(others.keys().next().value)
     others.set(fn, other)
   }
@@ -1363,17 +1365,10 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
 }
 
 /**
- * E114: the member handles of mimicked substitutes that reads (and descriptors, E115) gave, by their proxies (see
- * ownHandleOf): found by identity, so that nothing is asked of the value (it may be a revoked proxy).
+ * E114: the member handles of mimicked substitutes (see mimickedHandle), by their proxies (see ownHandleOf): found by
+ * identity, so that nothing is asked of the value (it may be a revoked proxy).
  */
 const handleProxies = new WeakMap<object, AutoEntry>()
-
-/** E114: the proxy of a member handle of a mimicked substitute, as a read gives it. */
-const handleProxy = (entry: AutoEntry): any => {
-  const proxy = entryProxy(entry)
-  handleProxies.set(proxy, entry)
-  return proxy
-}
 
 /**
  * E114: the member handle of this substitute that a value is: the proxy of a handle read from it (of any of its members),
@@ -1479,7 +1474,7 @@ const invokedHandleRead = (state: SubstituteState, key: PropertyKey, subject: Fa
 const methodDescriptor = (state: SubstituteState, key: PropertyKey, descriptor: PropertyDescriptor): PropertyDescriptor => {
   if (!('value' in descriptor)) return descriptor
   const method = methodOf(state, descriptor.value)
-  return method === NO_METHOD ? descriptor : { ...descriptor, value: handleProxy(mimickedHandle(state, key, method)) }
+  return method === NO_METHOD ? descriptor : { ...descriptor, value: entryProxy(mimickedHandle(state, key, method)) }
 }
 
 /**
@@ -1616,7 +1611,7 @@ const realGet = (state: SubstituteState, key: PropertyKey, chainCandidate: CallR
     state.addPendingRead(record)
     const entry = mimickedHandle(state, key, method)
     entry.handOut(record)
-    return handleProxy(entry)
+    return entryProxy(entry)
   }
 
   const record = linkChain(state.addRecord('get', key, undefined, site), chainCandidate)
@@ -1645,7 +1640,7 @@ const peekGet = (state: SubstituteState, key: PropertyKey): any => {
     const value = delegate ? mimicked.instance[key] : undefined
     const method = delegate ? methodOf(state, value) : undefined
     if (method === NO_METHOD) return fromMimicked(value, mimicked.instance, state)
-    return handleProxy(mimickedHandle(state, key, method)) // E114
+    return entryProxy(mimickedHandle(state, key, method)) // E114
   }
   return entryProxy(state.propertyEntry(key))
 }
@@ -1716,7 +1711,7 @@ const invoke = (
     const read = invokedHandleRead(state, key, subject)
     if (read !== undefined) {
       if (isPartOfDelegation(state, key, read)) return partOfDelegation(state, key, read, args, self)
-      self = { ...self, read }
+      self = { thisArg: self.thisArg, explicit: self.explicit, construct: self.construct, newTarget: self.newTarget, read }
     }
   }
   if (libraryGuard.matching > 0) return peekCall(state, key, args, self) // E95
