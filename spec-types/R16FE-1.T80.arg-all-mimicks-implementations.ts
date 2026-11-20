@@ -116,7 +116,28 @@ const users = Substitute.for<Users>()
 users.save(Arg.all()).mimicks((entity: any) => Promise.resolve(entity))
 users.save(Arg.all()).mimicks(entity => Promise.resolve(entity as any))
 users.save(Arg.all()).mimicks((entity: any, options?: SaveOptions) => Promise.resolve(entity))
+users.save(Arg.all()).mimicks(async (entity: any) => entity)
+users.save(Arg.all()).mimicks(entity => Promise.resolve(entity as DeepPartial<User>))
+users.save(Arg.all()).mimicks(() => Promise.resolve({ id: 1, email: 'ann@example.com' }))
 // @ts-expect-error no overload passes a third argument
 users.save(Arg.all()).mimicks((entity: any, options: any, extra: any) => Promise.resolve(entity))
 // @ts-expect-error no overload resolves to a number
 users.save(Arg.all()).mimicks(() => Promise.resolve(42))
+// (Documented limitation.) An untyped parameter has the parameter types of all overloads with their type parameters
+// replaced by their constraints (`DeepPartial<User>[] | DeepPartial<User>`), so an implementation that returns its
+// argument returns a promise of that union, which is not what any one overload returns. A function assigned to the
+// member itself is generic there on TypeScript 4.3 and newer (its parameter has the type parameter's type) and fits;
+// the typings cannot tell such overloads from overloads without type parameters, for which TypeScript rejects that
+// function as well. Annotate the parameter (`(entity: any) => ...`) or cast what it returns, as above.
+// @ts-expect-error the limitation
+users.save(Arg.all()).mimicks(entity => Promise.resolve(entity))
+// @ts-expect-error the limitation
+users.save(Arg.all()).mimicks(async entity => entity)
+const plainSave: Users['save'] = entity => Promise.resolve(entity)
+// for overloads without type parameters, TypeScript rejects it too:
+interface PlainUsers { save(entities: User[]): Promise<User[]>; save(entity: User): Promise<User> }
+const plainUsers = Substitute.for<PlainUsers>()
+// @ts-expect-error a promise of `User[] | User` is not what either overload returns
+plainUsers.save(Arg.all()).mimicks(entity => Promise.resolve(entity))
+// @ts-expect-error the same for a function assigned to the member
+const plainSaveWithoutTypeParameters: PlainUsers['save'] = entity => Promise.resolve(entity)
