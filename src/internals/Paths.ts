@@ -1,3 +1,5 @@
+import { inspect } from 'util'
+
 import { SELF, keyToString } from './Constants'
 import { PATH_BOUNDS, formatBounded, withPrintGuard } from './utilities'
 import { libraryGuard } from './utilities/Guard'
@@ -211,6 +213,67 @@ export const sharedNotes = (leaves: Iterable<PathEntry | undefined>, context: Re
     }
   }
   return notes
+}
+
+/*
+ * E112 (R16-ADV-4, R16-ADV-6): the paths that a remedy in a message writes as code (`sub.users.where({ id: 1 })`): each
+ * member as JavaScript accesses it, and the whole path, as a test would write it.
+ */
+
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+const ARRAY_INDEX = /^(?:0|[1-9]\d{0,14})$/
+
+/** The well-known symbols (Symbol.iterator, ...), by the name they have on Symbol. */
+const WELL_KNOWN_SYMBOLS = new Map<symbol, string>()
+for (const name of Object.getOwnPropertyNames(Symbol)) {
+  const value = (Symbol as any)[name]
+  if (typeof value === 'symbol') WELL_KNOWN_SYMBOLS.set(value, name)
+}
+
+/**
+ * E112: a member access as code: `.logger`, `['my-key']`, `[0]`, `[Symbol.for('k')]`, `[Symbol.iterator]`. Undefined for
+ * a symbol that is neither registered (Symbol.for) nor well-known: code cannot name it.
+ */
+export const codeMember = (key: PropertyKey): string | undefined => {
+  if (typeof key === 'symbol') {
+    const registered = Symbol.keyFor(key)
+    if (registered !== undefined) return `[Symbol.for(${inspect(registered)})]`
+    const name = WELL_KNOWN_SYMBOLS.get(key)
+    return name === undefined ? undefined : `[Symbol.${name}]`
+  }
+  const text = String(key)
+  if (IDENTIFIER.test(text)) return `.${text}`
+  return ARRAY_INDEX.test(text) ? `[${text}]` : `[${inspect(text)}]`
+}
+
+/**
+ * E112: the path of an auto-substitute written as code, from the root substitute (`sub`) down to `leaf`, with every member
+ * (no `…` for a long one, unlike pathPieces) and the arguments of calls as paths print them (see pathArguments). A call
+ * that a substitute shared by a nested setup through a call with matchers was handed out to is written as that call when
+ * there was one such call (see recordPieces), or, with `firstHandOut`, as the first of several (they all answered the
+ * same substitute). Undefined when a member cannot be written as code (see codeMember), or when the path is longer than
+ * `limit` characters. Built only for a failure message.
+ */
+export const codePath = (leaf: PathEntry | undefined, context: RecordLabelContext, firstHandOut: boolean, limit: number): string | undefined => {
+  const pieces: string[] = []
+  let length = 3 // `sub`
+  for (let entry = leaf; entry !== undefined; entry = entry.parent.owner) {
+    const member = entry.key === SELF ? '' : codeMember(entry.key)
+    if (member === undefined) return undefined
+    let piece = member
+    if (entry.kind === 'call') {
+      let args = entry.argumentList
+      if (entry.specifiesMatchers === true) {
+        const { calls } = handOuts(entry, context)
+        if (calls.length === 1 || (firstHandOut && calls.length > 1)) args = calls[0].args
+      }
+      piece += pathArguments(args, entry)
+    }
+    length += piece.length
+    if (length > limit) return undefined
+    pieces.push(piece)
+  }
+  return `sub${pieces.reverse().join('')}`
 }
 
 /*
