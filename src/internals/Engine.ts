@@ -4,7 +4,7 @@ import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
-import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
+import { Frame, StackHolder, captureStack, currentFrame, sameExpression, sameLineAfter } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
 import { MAX_LISTED_CALLS, SubstituteException } from './SubstituteException'
 import {
@@ -397,8 +397,8 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
 const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
   if (!sameExpression(from, frame)) return false
   if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return true
-  return from !== null && frame !== null && typeof from.line === 'number' && from.line === frame.line &&
-    typeof from.column === 'number' && typeof frame.column === 'number' && from.column < frame.column
+  // E125: the same line of the source, where Node.js has a source map (see CallSite.sameLineAfter)
+  return from !== null && frame !== null && sameLineAfter(from, frame)
 }
 
 const adjacentHandOut = (face: Face): CallRecord | undefined => face.adjacentHandOut()

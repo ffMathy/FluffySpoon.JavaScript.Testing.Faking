@@ -337,3 +337,74 @@ export const sameExpression = (a: Frame | null, b: Frame | null): boolean => {
   if (a === null || b === null) return a === b
   return a.file === b.file && a.enclosing === b.enclosing
 }
+
+/** What Node.js' module.findSourceMap gives (Node.js 12.17+ and 13.7+), as far as it is used here. */
+type SourceMapEntry = { originalSource?: unknown, originalLine?: unknown }
+type SourceMapLike = { findEntry(lineOffset: number, columnOffset: number): SourceMapEntry | undefined }
+type FindSourceMap = (file: string) => SourceMapLike | undefined
+
+/** Node.js' module.findSourceMap, looked up when it is first needed (null: there is none). */
+let findSourceMapFunction: FindSourceMap | null | undefined
+
+const sourceMapFinder = (): FindSourceMap | null => {
+  if (findSourceMapFunction !== undefined) return findSourceMapFunction
+  let found: FindSourceMap | null = null
+  try {
+    const nodeModule = require('module')
+    if (typeof nodeModule?.findSourceMap === 'function') found = nodeModule.findSourceMap
+  } catch { /* a runtime without Node.js' module module: no source maps */ }
+  findSourceMapFunction = found
+  return found
+}
+
+/**
+ * E125: the source map Node.js has for a file, or undefined: Node.js keeps one for a module it loaded while source maps
+ * were enabled (node --enable-source-maps, process.setSourceMapsEnabled, module.setSourceMapsSupport; tsx enables them)
+ * and the module's code names one. Asked anew each time (a test runner in watch mode can load a changed file again),
+ * which is cheap: Node.js keeps the parsed map with the module.
+ */
+const sourceMapOf = (file: unknown): SourceMapLike | undefined => {
+  if (typeof file !== 'string' || file === '') return undefined
+  const find = sourceMapFinder()
+  if (find === null) return undefined
+  try {
+    const map = find(file)
+    return typeof map === 'object' && map !== null && typeof map.findEntry === 'function' ? map : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** E125: the source and line (0-based) that a source map gives for a position (1-based, as V8 reports it), or undefined. */
+const mappedLine = (map: SourceMapLike, line: number, column: number): SourceMapEntry | undefined => {
+  try {
+    const entry = map.findEntry(line - 1, column - 1)
+    return typeof entry === 'object' && entry !== null && typeof entry.originalLine === 'number' ? entry : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Whether the operation at `to` comes after the one at `from` on the same line of the same file (the caller has checked
+ * that they are in the same function, see sameExpression): as V8 reports their positions, before source maps, and E125
+ * (R17FE-5), when V8 puts them on the same line, on the same line of the source too, where Node.js has a source map for
+ * the file. A transpiler can put several lines of the source on one line of its output: tsx (esbuild with
+ * minifyWhitespace) puts a whole file on one. Without a source map, two statements written on one line of the file that
+ * runs are on the same line.
+ * Only when the two lines are the same is the source map looked at, which is rare: the rules that ask this only ask it
+ * for a call that answered with the substitute it was made on (see the engine's continuesExpression) and for a matcher
+ * that threw a usage error (see Assertions' cancelDeferredReportOf).
+ */
+export const sameLineAfter = (from: Frame, to: Frame): boolean => {
+  const line = from.line
+  const fromColumn = from.column
+  const toColumn = to.column
+  if (typeof line !== 'number' || line !== to.line || typeof fromColumn !== 'number' || typeof toColumn !== 'number' || toColumn <= fromColumn) return false
+  const map = sourceMapOf(from.file)
+  if (map === undefined) return true
+  const fromSource = mappedLine(map, line, fromColumn)
+  const toSource = mappedLine(map, line, toColumn)
+  if (fromSource === undefined || toSource === undefined) return true
+  return fromSource.originalLine === toSource.originalLine && fromSource.originalSource === toSource.originalSource
+}
