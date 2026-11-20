@@ -375,23 +375,26 @@ const frameAt = (stackStart: Function) => (): Frame | null => currentFrame(stack
 /** The candidate (an adjacent hand-out) if the current operation continues its expression. */
 const continuedChain = (candidate: CallRecord | undefined, current: () => Frame | null): CallRecord | undefined => {
   if (candidate === undefined) return undefined
-  return continuesExpression(candidate, current()) ? candidate : undefined
+  const from = candidate.frame
+  return continuesExpression(candidate, from, current()) ? candidate : undefined
 }
 
 /** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
-  if (candidate !== undefined && continuesExpression(candidate, record.frame)) record.chainPrevious = candidate
+  if (candidate === undefined) return record
+  // (the candidate's frame first: it is the one read last, which is kept, see CallSite.frameOfStack)
+  const from = candidate.frame
+  if (continuesExpression(candidate, from, record.frame)) record.chainPrevious = candidate
   return record
 }
 
 /**
- * D25: whether the operation at `frame` continues the expression of `candidate`, an adjacent hand-out. E111: a hand-out of
- * the substitute that was called itself (see handOutConfigured) only when the operation is on the same line, after the
- * call: such a substitute is where the next statement starts, too (`server.on('close', listener)`, then
+ * D25: whether the operation at `frame` continues the expression of `candidate` (at `from`), an adjacent hand-out. E111: a
+ * hand-out of the substitute that was called itself (see handOutConfigured) only when the operation is on the same line,
+ * after the call: such a substitute is where the next statement starts, too (`server.on('close', listener)`, then
  * `server.received(1).on('error', Arg.any())`), and a statement before it is no part of its expression (E39).
  */
-const continuesExpression = (candidate: CallRecord, frame: Frame | null): boolean => {
-  const from = candidate.frame
+const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
   if (!sameExpression(from, frame)) return false
   if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return true
   return from !== null && frame !== null && typeof from.line === 'number' && from.line === frame.line &&
