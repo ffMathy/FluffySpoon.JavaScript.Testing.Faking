@@ -620,9 +620,7 @@ class CallSubstitutions {
     if (withMatchers.length === 0) return best
     // E100 (R15-ADV-4): one guard for the matchers of the whole pass. A real call opens the look of its arguments (see
     // Look); anything else (a setup's registration, a matcher's look itself) looks with nothing recorded at all.
-    // E109: with what the call's search for matchers found out about its arguments (see Look)
-    const look = real && libraryGuard.matching === 0
-      ? openLook(actualArguments, RecordedArguments.clearArgumentsOf(actualArguments), RecordedArguments.scannedItems) : undefined
+    const look = real && libraryGuard.matching === 0 ? openLook(actualArguments) : undefined
     if (look === undefined) libraryGuard.matching++
     try {
       for (let index = withMatchers.length - 1; index >= 0; index--) {

@@ -130,7 +130,7 @@ test('R4-ADV-2 (E9) wide objects and Maps shared by many values, or passed again
   t.is(api.fetch(request), 'two')
 })
 
-test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container once, and at a too wide one never again', t => {
+test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container once, and into a wide one too', t => {
   const shared = { role: Arg.any('string') }
   const repository = Substitute.for<any>()
   repository.save([{ user: shared }, { user: shared }]).returns('saved')
@@ -143,12 +143,12 @@ test('R4-ADV-2 (E9) the search for nested matchers looks at a shared container o
   repository.import(rows).returns('imported')
   t.is(repository.import(rows.map((row, index) => ({ ...row, id: index }))), 'imported')
 
-  // a matcher in an object with more than 1024 keys is not looked for (the documented bound): it is a literal value
+  // a matcher in an object with more than 1024 keys is found: the call is a setup
   const wide = wideObject(2000)
   wide.extra = Arg.any()
   const store = Substitute.for<any>()
-  store.put(wide)
-  t.notThrows(() => store.received(1).put(wide))
+  store.put(wide).returns('found')
+  t.is(store.put({ ...wide, extra: 1 }), 'found')
 
   const elapsedLimit = timeLimit(250)
   const elapsed = bestOfThree(() => {

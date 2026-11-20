@@ -43,43 +43,17 @@ export type LibraryGuard = {
 
 /**
  * E100 (R15-ADV-4): the values that the matchers of one real call look at while the call is matched against setups (see
- * Look): the call's arguments, then what the substitutes among them answered meanwhile. Kept on the shared guard, so that
- * a substitute of another copy among them is looked at too; each copy walks it by the same rules (see Look).
+ * Look). Kept on the shared guard, so that a substitute of another copy among them is looked at too.
  */
 export type ArgumentLook = {
   /** The call's arguments. */
   args: readonly unknown[]
-  /** The values that looked substitutes answered, in that order (created by the first). */
-  answers: unknown[] | undefined
-  /** How many of the arguments, then of the answers, the walk has taken so far. */
-  taken: number
-  /** The values that the walk has still to look at, each followed by its depth (created by the first walk). */
-  pending: unknown[] | undefined
-  /** The substitutes (proxies, of any copy) that the walk found so far (created by the first walk). */
+  /** The substitutes (proxies, of any copy) among them and among what looked substitutes answered (walked when first asked). */
   reached: Set<object> | undefined
-  /** The objects walked so far, each one once (created by the first walk). */
-  seen: Set<object> | undefined
-  /** How many more items the walks of this look may list. */
-  budget: number
+  /** The objects walked so far, each one once. */
+  seen: Set<object>
   /** The look under way when this one began (a real call made by code that a matcher runs, see Look). */
   outer: ArgumentLook | undefined
-  /*
-   * E109 (R16-ADV-2): optional, so that a look opened by an earlier version of the library, which every copy walks, still
-   * works (see Look).
-   */
-  /** The arguments that the search for matchers found to hold no substitute (a bit per argument), see Look. */
-  clear?: number
-  /** For those of them that are containers, the items that the walk would have listed in them, by position. */
-  clearItems?: number[]
-  /**
-   * How often the walk met something that keeps it from vouching that the containers under way hold no substitute: a
-   * substitute, or what the bounds left out (see Look).
-   */
-  vague?: number
-  /** The containers walked so far that the walk could not vouch for, or has not finished yet (created by the first). */
-  unclear?: Set<object>
-  /** How many walks of this look are under way (one that comes back while another lists a container, see Look). */
-  walks?: number
 }
 
 const GUARD_KEY = Symbol.for('@fluffy-spoon/substitute:guard')

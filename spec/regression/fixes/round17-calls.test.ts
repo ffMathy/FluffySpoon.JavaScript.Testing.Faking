@@ -2,7 +2,6 @@ import test, { ExecutionContext } from 'ava'
 
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { hashSettings } from '../../../src/internals/utilities/ArgumentHash'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 17: the calls-and-arguments part of the round-16 findings (R16-ADV-2, R16FE-5, R16-ADV-8, R16V-1), decided in
@@ -20,16 +19,6 @@ const failureOf = (t: ExecutionContext, check: () => void, label?: string): stri
   }
   t.fail(`the check passed, but it should have failed${label === undefined ? '' : `: ${label}`}`)
   return ''
-}
-
-/** Runs `run` with the memos of the argument hash, the search for matchers and the look (E109) off. */
-const withoutMemos = <T>(run: () => T): T => {
-  hashSettings.memos = false
-  try {
-    return run()
-  } finally {
-    hashSettings.memos = true
-  }
 }
 
 const rows = (count: number, keys = 30) => Array.from({ length: count }, (_, index) => {
@@ -61,7 +50,7 @@ test('R16-ADV-2 (E109) a predicate\'s callback and the substitutes it closes ove
   // ...and with a new wrapper around the same table every time
   for (let index = 0; index < 3; index++) t.is(db.insert({ tenant: 't1', rows: table }), 1)
   t.notThrows(() => config.received(7).tenant)
-  // and with a new table every time (which the search for matchers finds to hold no substitute)
+  // and with a new table every time
   for (let index = 0; index < 3; index++) t.is(db.insert({ tenant: 't1', rows: rows(300) }), 1)
   t.notThrows(() => config.received(10).tenant)
 })
@@ -71,7 +60,7 @@ test('R16-ADV-2 (E109) substitutes among the arguments are still looked at on ev
   item.id.returns(7)
   const store = Substitute.for<any>()
   store.put(Arg.is((value: any) => value.list[value.list.length - 1].item.id === 7)).returns('stored')
-  // a large plain table with a substitute at its end, passed again and again (never remembered as holding none)
+  // a large plain table with a substitute at its end, passed again and again
   const table: any[] = rows(600, 3)
   table.push({ item })
   for (let index = 0; index < 3; index++) t.is(store.put({ list: table }), 'stored')
@@ -87,7 +76,7 @@ test('R16-ADV-2 (E109) substitutes among the arguments are still looked at on ev
   for (let index = 0; index < 3; index++) t.is(store.keep(byId), 'kept')
   t.notThrows(() => item.didNotReceive().id)
 
-  // an array that inherits from a substitute (the search for matchers does not vouch for it)
+  // an array that inherits from a substitute
   const base = Substitute.for<any>()
   const tagged: any = rows(300, 2)
   Object.setPrototypeOf(tagged, base)
@@ -112,55 +101,26 @@ test('R16-ADV-2 (E109) an object whose prototype is the substitute asked about i
   t.notThrows(() => item.didNotReceive().id)
 })
 
-test('R16-ADV-2 (E109) the arguments that are not walked still count towards the 32,768 items of a look', t => {
-  // 32 arrays of 1,023 numbers: 32,768 items and keys, as many as a look lists; the substitute in the next argument is
-  // beyond the bound, so the predicate's read of it is recorded, as at 8be3a70 (where the first argument was walked)
-  const full: Record<string, number[]> = {}
-  for (let key = 0; key < 32; key++) full[`k${key}`] = Array.from({ length: 1023 }, (_, index) => index)
-  const owner = Substitute.for<any>()
-  owner.name.returns('ann')
+test('R16-ADV-2 (E109) a container that gains a substitute after it was passed is looked through', t => {
+  const item = Substitute.for<any>()
+  item.id.returns(7)
+  // (the predicate reads a substitute that it closes over, so that the look walks the arguments on every call)
+  const config = Substitute.for<any>()
+  config.enabled.returns(true)
   const store = Substitute.for<any>()
-  store.put(Arg.any(), Arg.is((value: any) => value.owner.name === 'ann')).returns('stored')
-  t.is(store.put(full, { owner }), 'stored')
-  t.is(store.put(full, { owner }), 'stored', 'also once the table is remembered')
-  t.notThrows(() => owner.received(2).name)
-  // with one array less, the substitute is within the bound and looked at
-  const fewer = { ...full }
-  delete fewer.k31
-  const other = Substitute.for<any>()
-  other.name.returns('ann')
-  t.is(store.put(fewer, { owner: other }), 'stored')
-  t.is(store.put(fewer, { owner: other }), 'stored')
-  t.notThrows(() => other.didNotReceive().name)
-})
-
-test('R16-ADV-2 (E109) documented limitation: a remembered container that gains a substitute later is not looked through (with the memos off, it is)', t => {
-  for (const memos of [true, false]) {
-    const run = () => {
-      const item = Substitute.for<any>()
-      item.id.returns(7)
-      // (the predicate reads a substitute that it closes over, so that the look walks the arguments on every call)
-      const config = Substitute.for<any>()
-      config.enabled.returns(true)
-      const store = Substitute.for<any>()
-      store.put(Arg.is((value: any) => config.enabled && value.list.length > 0 &&
-        (value.list[value.list.length - 1].item === undefined || value.list[value.list.length - 1].item.id === 7))).returns('stored')
-      // plain records (remembered by the search for matchers) and class instances (remembered by the look)
-      class Entity { constructor(public id: number, public item?: unknown) { } }
-      const lists = [rows(300, 3) as any[], Array.from({ length: 300 }, (_, index) => new Entity(index)) as any[]]
-      for (const list of lists) {
-        t.is(store.put({ list }), 'stored')
-        t.is(store.put({ list }), 'stored')
-        t.is(store.put({ list }), 'stored')
-        list.push({ item }) // changed after it was passed (not supported, amended D15)
-        t.is(store.put({ list }), 'stored')
-      }
-      return item
-    }
-    const item = memos ? run() : withoutMemos(run)
-    if (memos) t.notThrows(() => item.received(2).id, 'not looked through: the predicate\'s reads are recorded')
-    else t.notThrows(() => item.didNotReceive().id, 'looked through')
+  store.put(Arg.is((value: any) => config.enabled && value.list.length > 0 &&
+    (value.list[value.list.length - 1].item === undefined || value.list[value.list.length - 1].item.id === 7))).returns('stored')
+  // plain records and class instances
+  class Entity { constructor(public id: number, public item?: unknown) { } }
+  const lists = [rows(300, 3) as any[], Array.from({ length: 300 }, (_, index) => new Entity(index)) as any[]]
+  for (const list of lists) {
+    t.is(store.put({ list }), 'stored')
+    t.is(store.put({ list }), 'stored')
+    t.is(store.put({ list }), 'stored')
+    list.push({ item }) // changed after it was passed (not supported, amended D15)
+    t.is(store.put({ list }), 'stored')
   }
+  t.notThrows(() => item.didNotReceive().id, 'looked through')
 })
 
 test('R16-ADV-2 (E109) a proxy among the arguments is walked on every call, never remembered', t => {
