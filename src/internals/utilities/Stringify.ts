@@ -287,9 +287,9 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  *   another order), and the own properties of errors and functions (E78). (Each line prints in its own order.)
  * - E68: nor does a difference that the lines do not show, beyond the characters a value is cut after.
  * So the expected arguments are printed with their matchers replaced by the received values at their places, and the
- * two calls print differently where both their texts differ: as they print, and with the keys and entries of their
- * values in a fixed order (util.inspect's `sorted` option, and compactError's; Node.js 10.0 to 10.11 do not know the
- * option: there, keys and entries are in the order in which they print). Getters are not run.
+ * two calls print differently where both their texts differ: as they print, and in full with the keys and entries of
+ * their values in a fixed order (util.inspect's `sorted` option, and compactError's; Node.js 10.0 to 10.11 do not know
+ * the option: there, keys and entries are in the order in which they print). Getters are not run.
  */
 
 /** The expected arguments with their matchers replaced by the received values at their places (see above). */
@@ -332,7 +332,8 @@ const withReceivedValues = (expected: readonly unknown[], actual: readonly unkno
 /** The texts of arguments that the comparison compares (see above), `depth` levels deep: as they print, and sorted. */
 const comparisonTexts = (args: readonly unknown[], depth: number): [string, string] => {
   const bounds = messageBounds(depth)
-  return [formatArguments(args, false, bounds), formatArguments(args, false, bounds, value => formatValue(value, false, bounds, true))]
+  const whole = { ...bounds, characters: Infinity }
+  return [formatArguments(args, false, bounds), formatArguments(args, false, bounds, value => formatValue(value, false, whole, true))]
 }
 
 /**
