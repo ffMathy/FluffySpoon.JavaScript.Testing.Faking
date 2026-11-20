@@ -782,12 +782,12 @@ type OverloadReturnTypeFor<TOverload, P> =
 
 // The signatures of one distinct parameter list `A`: for each number of arguments `n` from 0 to 6 that the list
 // accepts, a positional signature that takes exactly `n` arguments, its first `n` parameters (T45, R6TD-1); in `more`,
-// the signature for more than 6 arguments (also with a rest parameter); in `full`, the signature with the whole list,
-// when it has optional parameters; and the `Arg.all()` signatures. A call that omits optional parameters (`get('k')`
-// of `get(key: string, options?: OptionsV1)` and `get(key: string, options?: OptionsV2)`) then resolves to a signature
-// with just the parameters it passes, whose result takes what every variant that accepts these arguments returns (see
-// `PrefixCallResult`). `list` keeps the boxes of different lists apart: TypeScript would otherwise infer only one box
-// for `UnionToIntersection` when the box of one list is assignable to the box of another.
+// the signature for more than 6 arguments (also with a rest parameter); in `full`, the signature with the whole list;
+// and the `Arg.all()` signatures. A call that omits optional parameters (`get('k')` of `get(key: string, options?:
+// OptionsV1)` and `get(key: string, options?: OptionsV2)`) then resolves to a signature with just the parameters it
+// passes, whose result takes what every variant that accepts these arguments returns (see `PrefixCallResult`). `list`
+// keeps the boxes of different lists apart: TypeScript would otherwise infer only one box for `UnionToIntersection`
+// when the box of one list is assignable to the box of another.
 type ListBox<A, TView extends SubstituteView, TFunction> = A extends any[] ? {
   list: (list: A) => A
   0: PrefixSignature<A, 0, TView, TFunction>
@@ -809,14 +809,7 @@ type PrefixSignature<A extends any[], TCount extends ArgumentCount, TView extend
 // signatures above first; these make sure that when TypeScript calls the union, it finds the same parameter list as
 // a variant's own method among the substitute's signatures and leaves the plain method out. (TypeScript tries a
 // signature whose parameters have literal types, such as `read(path: string, encoding?: 'buffer')`, first.)
-// Left out for a list of required parameters: the prefix signature with all its parameters is the same signature, and
-// having it twice made TypeScript 3.7 and 3.8 check a union of 60 variants 8 times slower. (Not for an empty list,
-// whose prefix signature comes last: a call without arguments resolves to the signatures of the variants without
-// parameters first.)
-type FullSignature<A extends any[], TView extends SubstituteView, TFunction> =
-  RequiredParametersOnly<A> extends true ? unknown : PrefixSignatureOf<A, A, TView, TFunction>
-type RequiredParametersOnly<A extends any[]> =
-  MaximumArguments<A> extends 0 ? false : MinimumArguments<A> extends MaximumArguments<A> ? true : false
+type FullSignature<A extends any[], TView extends SubstituteView, TFunction> = PrefixSignatureOf<A, A, TView, TFunction>
 type ArgumentCount = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7
 type ArgumentCounts = [[], [any], [any, any], [any, any, any], [any, any, any, any], [any, any, any, any, any],
   [any, any, any, any, any, any], [any, any, any, any, any, any, any]]
