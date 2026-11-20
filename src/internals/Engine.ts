@@ -393,7 +393,7 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
 const continuesExpression = (candidate: CallRecord, frame: Frame | null): boolean => {
   const from = candidate.frame
   if (!sameExpression(from, frame)) return false
-  if (candidate.handedOutItself !== true) return true
+  if (selfHandOutCount === 0 || candidate.handedOutItself !== true) return true
   return from !== null && frame !== null && typeof from.line === 'number' && from.line === frame.line &&
     typeof from.column === 'number' && typeof frame.column === 'number' && from.column < frame.column
 }
@@ -567,8 +567,14 @@ const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, s
   if (shared) sharedHandOutCount++
   face.noteConfiguredHandOut(record, owner, shared)
   // E111: the substitute itself (see continuesExpression)
-  if ((face instanceof AutoEntry ? face.materializedState : face) === owner) record.handedOutItself = true
+  if ((face instanceof AutoEntry ? face.materializedState : face) === owner) {
+    record.handedOutItself = true
+    selfHandOutCount++
+  }
 }
+
+/** E111: how many hand-outs of the substitute that was called itself were made (see continuesExpression), none as a rule. */
+let selfHandOutCount = 0
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
