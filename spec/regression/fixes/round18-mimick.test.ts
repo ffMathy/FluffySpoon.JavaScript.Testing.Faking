@@ -394,6 +394,16 @@ test('R17-ADV-10 (E131) recursion through `this`, a stale handle outside a deleg
   t.is(helperCalls.length, 2)
   t.notThrows(() => via.didNotReceive().helper(Arg.all()))
   t.is(via.helper(1), 100)
+
+  // a handle of a member that nothing replaced, called by a wrapper of another member: a call of the substitute, as before
+  const cross = Substitute.for<any>()
+  cross[mimick]({ a: (x: number) => 'a' + x, b: (x: number) => 'b' + x })
+  const originalA = cross.a
+  cross.b = function (this: unknown, x: number) { return originalA.call(this, x) + '!' }
+  cross[clearReceivedCalls]()
+  t.is(cross.b(1), 'a1!')
+  t.notThrows(() => cross.received(1).a(1))
+  t.notThrows(() => cross.received(1).b(1))
 })
 
 // ---- E132 (R17-ADV-5): the 'check that substitute' remedy is code only when its arguments print as code ---------------

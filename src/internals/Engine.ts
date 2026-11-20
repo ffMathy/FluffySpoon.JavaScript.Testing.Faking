@@ -1614,22 +1614,24 @@ const isPartOfDelegation = (state: SubstituteState, key: PropertyKey, read: Hand
 }
 
 /**
- * E131 (R17-ADV-10): whether a call through a member handle is one that the mimicked instance makes itself: its `this` is
- * the instance, while a call of this substitute (of any member) is being delegated to the instance. That is a call
- * through `this` (`this.validate(order)` in `place()`) of a member that a spy or a wrapper replaced on the instance and
- * that forwards to the handle it read (jest.spyOn, vi.spyOn, node:test's mock, `original.apply(this, args)`). Without the
- * spy, `this.validate` would be the instance's own function, which is no call of the substitute; with it, the call is the
- * instance's own as well (see partOfDelegation): not recorded and not matched against the setups. The spy still runs.
+ * E131 (R17-ADV-10): whether a call through a stale member handle (see isPartOfDelegation) is one that the mimicked
+ * instance makes itself: its `this` is the instance, while a call of this substitute (of any member) is being delegated to
+ * the instance. That is a call through `this` (`this.validate(order)` in `place()`) of a member that a spy or a wrapper
+ * replaced on the instance and that forwards to the handle it read (jest.spyOn, vi.spyOn, node:test's mock,
+ * `original.apply(this, args)`). Without the spy, `this.validate` would be the instance's own function, which is no call
+ * of the substitute; with it, the call is the instance's own as well (see partOfDelegation): not recorded and not matched
+ * against the setups. The spy still runs.
  */
-const isInstanceOwnCall = (state: SubstituteState, thisArg: unknown): boolean => {
+const isInstanceOwnCall = (state: SubstituteState, key: PropertyKey, read: HandleRead, thisArg: unknown): boolean => {
   if (delegations.length === 0 || thisArg !== state.mimicked!.instance) return false
-  for (let index = delegations.length - 2; index >= 0; index -= 2) if (delegations[index] === state) return true
-  return false
+  let delegating = false
+  for (let index = delegations.length - 2; index >= 0 && !delegating; index -= 2) delegating = delegations[index] === state
+  return delegating && read.fn !== currentMethod(state, key)
 }
 
 /** E114, E131: whether a call through a member handle runs as part of what is being delegated (see partOfDelegation). */
 const runsInDelegation = (state: SubstituteState, key: PropertyKey, read: HandleRead, thisArg: unknown): boolean =>
-  isPartOfDelegation(state, key, read) || isInstanceOwnCall(state, thisArg)
+  isPartOfDelegation(state, key, read) || isInstanceOwnCall(state, key, read, thisArg)
 
 /**
  * E114: a call that is part of the call being delegated (see isPartOfDelegation): that call was recorded and matched
