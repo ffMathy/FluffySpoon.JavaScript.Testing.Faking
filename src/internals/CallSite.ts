@@ -339,7 +339,7 @@ export const sameExpression = (a: Frame | null, b: Frame | null): boolean => {
 }
 
 /** What Node.js' module.findSourceMap gives (Node.js 12.17+ and 13.7+), as far as it is used here. */
-type SourceMapEntry = { generatedLine?: unknown, originalSource?: unknown, originalLine?: unknown }
+type SourceMapEntry = { generatedLine?: unknown, generatedColumn?: unknown, originalSource?: unknown, originalLine?: unknown }
 type SourceMapLike = { findEntry(lineOffset: number, columnOffset: number): SourceMapEntry | undefined }
 type FindSourceMap = (file: string) => SourceMapLike | undefined
 
@@ -377,14 +377,26 @@ const sourceMapOf = (file: unknown): SourceMapLike | undefined => {
 
 /**
  * E125: the source and line (0-based) that a source map gives for a position (1-based, as V8 reports it), or undefined.
- * findEntry gives the mapping that starts last at or before the position, which can be on an earlier line of the file
- * that runs when the line has none so far (tsc maps `log` in `    .log(...)`, and V8 puts the read of it at the dot):
- * then it tells nothing about this line.
+ * findEntry gives the mapping that starts last at or before the position. V8 can put an operation at a character that
+ * no mapping starts at: a property read of a chain at its dot (`.log` in `logger.received(2).log(...)`), where tsc and
+ * esbuild map the name after it. That character belongs to the mapping before it, which for a chain over several lines
+ * of the source is on the line before. So a mapping that starts one or two characters later (the name after `.` or
+ * `?.`) is taken first, then the one before it on the same line of the file that runs; one that starts on an earlier
+ * line of that file tells nothing about this line.
  */
 const mappedLine = (map: SourceMapLike, line: number, column: number): SourceMapEntry | undefined => {
-  try {
-    const entry = map.findEntry(line - 1, column - 1)
+  const at = (offset: number): SourceMapEntry | undefined => {
+    const entry = map.findEntry(line - 1, column - 1 + offset)
     return typeof entry === 'object' && entry !== null && entry.generatedLine === line - 1 && typeof entry.originalLine === 'number' ? entry : undefined
+  }
+  try {
+    const before = at(0)
+    if (before !== undefined && before.generatedColumn === column - 1) return before
+    for (let offset = 1; offset <= 2; offset++) {
+      const after = at(offset)
+      if (after !== undefined && after.generatedColumn === column - 1 + offset) return after
+    }
+    return before
   } catch {
     return undefined
   }

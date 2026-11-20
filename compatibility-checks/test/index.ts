@@ -224,7 +224,8 @@ test.describe('Verifies test runner compatibility', () => {
         'map received(1) on the next line': 'passes',
         'mimicked on() then didNotReceive on the next line': 'throws: Call count mismatch in @Substitute.on',
         'stored handle, didNotReceive on a later line': 'throws: Call count mismatch in @Substitute.emit',
-        'check through io.to(room-b) on one line': "throws: Call count mismatch in @Substitute.to('room-b').emit"
+        'check through io.to(room-b) on one line': "throws: Call count mismatch in @Substitute.to('room-b').emit",
+        'check through io.to(room-b) over two lines': 'passes'
       },
       reported: ['Call count mismatch in @Substitute.m']
     }

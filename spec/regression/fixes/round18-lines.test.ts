@@ -32,16 +32,22 @@ const vlq = (value: number): string => {
 }
 
 /**
- * The layout of tsx 4 (esbuild with minifyWhitespace): the whole file on one line, with a source map that maps the start
- * of each source line to that line. Every line of `source` must end a statement or open or close a block.
+ * The layout of tsx 4 (esbuild with minifyWhitespace): the whole file on one line, with a source map that maps the first
+ * token of each source line to that line, and, as tsc and esbuild do, the name after a leading dot rather than the dot
+ * (V8 puts a property read of a chain at the dot). Every line of `source` must end a statement, open or close a block,
+ * or continue a chain.
  */
 const onOneLine = (source: string[], sourceName: string): string => {
   let column = 0
   let previous = 0
+  let previousOriginal = 0
   const segments: string[] = []
   source.forEach((line, index) => {
-    segments.push(vlq(column - previous) + vlq(0) + vlq(index === 0 ? 0 : 1) + vlq(0))
-    previous = column
+    const indent = line.length - line.trimStart().length
+    const token = indent + (line.trimStart().startsWith('.') ? 1 : 0)
+    segments.push(vlq(column + token - previous) + vlq(0) + vlq(index === 0 ? 0 : 1) + vlq(token - previousOriginal))
+    previous = column + token
+    previousOriginal = token
     column += line.length + 1
   })
   const map = { version: 3, sources: [sourceName], names: [] as string[], mappings: segments.join(','), sourcesContent: [source.join('\n')] }
@@ -100,6 +106,15 @@ const scenario = [
   "  io.to('room-b').received(1).emit('m');",
   '}',
   "report('check through io.to(room-b) on one line', oneLine);",
+  // a check over two lines is a check of io itself (the dot of `.received` belongs to the second line)
+  'function twoLines() {',
+  '  const io = Substitute.for();',
+  '  io.to(Arg.any()).returns(io);',
+  "  io.to('room-a').emit('m');",
+  "  io.to('room-b')",
+  "    .received(1).emit('m');",
+  '}',
+  "report('check through io.to(room-b) over two lines', twoLines);",
   // part B: a matcher usage error in a later statement never cancels the report of an earlier check (README 'Assertions that fail later')
   'function deferredRead() {',
   '  const sub = Substitute.for();',
@@ -114,13 +129,23 @@ const scenario = [
   "  try { Arg.is('x') } catch (error) { }",
   '}',
   'danglingView();',
-  // and one in the same statement still cancels it (E37)
+  // and one in the same statement still cancels it (E37), also in a chain over lines with the arguments on the member's line
   'function sameStatement() {',
   '  const sub = Substitute.for();',
   "  sub.log('x');",
   "  try { sub.received(2).log(Arg.any('String')) } catch (error) { }",
   '}',
   'sameStatement();',
+  'function chainOverLines() {',
+  '  const logger = Substitute.for();',
+  "  logger.log('a');",
+  '  try {',
+  '    logger',
+  '      .received(2)',
+  "      .log(Arg.any('String'));",
+  '  } catch (error) { }',
+  '}',
+  'chainOverLines();',
   'setTimeout(() => console.log(JSON.stringify({ results, reported })), 20);'
 ]
 
@@ -148,7 +173,8 @@ const documented: Outcome = {
     'mimicked on() then didNotReceive on the next line': 'throws: Call count mismatch in @Substitute.on',
     'mimicked fluent logger, received(1) on the next line': 'passes',
     'stored handle, didNotReceive on a later line': 'throws: Call count mismatch in @Substitute.emit',
-    'check through io.to(room-b) on one line': "throws: Call count mismatch in @Substitute.to('room-b').emit"
+    'check through io.to(room-b) on one line': "throws: Call count mismatch in @Substitute.to('room-b').emit",
+    'check through io.to(room-b) over two lines': 'passes'
   },
   reported: ['Call count mismatch in @Substitute.m', '@Substitute.didNotReceive() checked nothing']
 }

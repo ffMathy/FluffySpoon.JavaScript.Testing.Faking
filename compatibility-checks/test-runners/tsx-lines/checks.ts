@@ -53,6 +53,14 @@ report('check through io.to(room-b) on one line', () => {
   io.to('room-b').received(1).emit('m')
 })
 
+report('check through io.to(room-b) over two lines', () => {
+  const io = Substitute.for<any>()
+  io.to(Arg.any()).returns(io)
+  io.to('room-a').emit('m')
+  io.to('room-b')
+    .received(1).emit('m')
+})
+
 const deferredRead = () => {
   const sub = Substitute.for<any>()
   sub.m(1)
@@ -67,5 +75,16 @@ const sameStatement = () => {
   try { sub.received(2).log(Arg.any('String' as any)) } catch { }
 }
 sameStatement()
+
+const chainOverLines = () => {
+  const logger = Substitute.for<any>()
+  logger.log('a')
+  try {
+    logger
+      .received(2)
+      .log(Arg.any('String' as any))
+  } catch { }
+}
+chainOverLines()
 
 setTimeout(() => console.log(JSON.stringify({ results, reported })), 20)
