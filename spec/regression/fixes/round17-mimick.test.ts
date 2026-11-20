@@ -2,7 +2,7 @@ import test, { ExecutionContext } from 'ava'
 import { EventEmitter } from 'events'
 import { mock } from 'node:test'
 
-import { Substitute, Arg, mimick, configure } from '../../../src'
+import { Substitute, Arg, mimick, configure, received } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
 import { codeMember } from '../../../src/internals/Paths'
 
@@ -604,4 +604,33 @@ test('R16-ADV-6 (E112) shared substitutes: returned to several calls, the fluent
   // unshared, as before
   const plainHint = followRemedy(t, s => s.getLogger('x').child('y').info('m'), s => s.getLogger('x').received(1).info('m'), "('m')")
   t.true(plainHint.includes("(sub.getLogger('x').child(Arg.all()).returns(sub.getLogger('x')))"), plainHint)
+})
+
+// ---- E120 (the integrator's O2): usage errors name records on a shared substitute as the listings do --------------------
+
+test('O2 (E120) the usage errors of checks through a call with matchers name a record on a shared substitute with the call it was returned to', t => {
+  const firstLine = (message: string) => message.split('\n')[0]
+
+  // E106: a read of a member step answered by a value that is not a substitute
+  const app = Substitute.for<any>()
+  app.session(Arg.any()).user.returns(5)
+  app.session('s1').user
+  const read = firstLine(failureOf(t, () => app.session(Arg.any()).user[received](1).name))
+  t.true(read.startsWith('Cannot check through @Substitute.session(Arg.any{any}).user: the read of @Substitute.session(\'s1\').user, which it goes ' +
+    'through, is configured with returns(5), and that value is not a substitute.'), read)
+
+  // E88: a received call answered by a value that is not a substitute
+  const api = Substitute.for<any>()
+  api.client(Arg.any()).get(Arg.any()).resolves({ ok: 1 })
+  api.client('a').get('/x')
+  const call = firstLine(failureOf(t, () => api.client(Arg.any()).get(Arg.any())[received](1).then))
+  t.true(call.startsWith('Cannot check through @Substitute.client(Arg.any{any}).get(Arg.any{any}): the received call ' +
+    "@Substitute.client('a').get('/x'), which it matches, is configured with resolves({ ok: 1 })"), call)
+  const concrete = firstLine(failureOf(t, () => api.client('a').get(Arg.any())[received](1).then))
+  t.true(concrete.includes("the received call @Substitute.client('a').get('/x'), which it matches,"), concrete)
+
+  // returned to several calls: the label with the matchers, as the listings show it
+  api.client('b').get('/y')
+  const several = firstLine(failureOf(t, () => api.client(Arg.any()).get(Arg.any())[received](1).then))
+  t.true(several.includes("the received call @Substitute.client(Arg.any{any}).get('/x'), which it matches,"), several)
 })

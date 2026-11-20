@@ -2,7 +2,7 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
-import { pathArguments, recordLabelContext, relativePath, relativeRecordPath } from './Paths'
+import { pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
@@ -2418,15 +2418,26 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
   else if (answer === THREW) how = 'threw an error instead of answering a substitute'
   else if (answer === CONFIGURED) how = 'is answered by a configured value that is not a substitute'
   else how = `returned ${formatValue(answer, false)}, which is not a substitute`
+  // E120 (O2): the record named as failure messages list it (see recordMemberPath)
   const what = record.kind === 'call'
-    ? `the received call ${describeCall(state, record.key, record.args)}, which it matches,`
-    : `the read of ${state.memberPath(record.key)}, which it goes through,`
+    ? `the received call ${recordMemberPath(state, record.key)}${formatArguments(record.args ?? [], false)}, which it matches,`
+    : `the read of ${recordMemberPath(state, record.key)}, which it goes through,`
   return SubstituteException.generic(
     `Cannot check through ${through}: ${what} ${how}. ` +
     `A check through a call with matchers counts the calls of the substitutes that the matching calls answered, and the calls ` +
     `made on that value are not recorded there. ${instead}, or check a concrete call.`,
     start
   )
+}
+
+/**
+ * E120 (O2): a member of a substitute as failure messages name its records: a substitute that a setup with matchers shares
+ * is shown with the concrete call it was handed out to, when there was one (`@Substitute.session('s1').user`, see
+ * Paths.recordPath), as the listings of received calls show it.
+ */
+const recordMemberPath = (state: SubstituteState, key: PropertyKey): string => {
+  const path = state.owner === undefined ? state.path : recordPath(state.owner, recordLabelContext((a, b) => RecordedArguments.literalsEqual(a, b)))
+  return key === SELF ? path : `${path}.${keyToString(key)}`
 }
 
 /** E89: several substitutes to count, and one of them is of another copy of the library (whose calls it counts itself). */
