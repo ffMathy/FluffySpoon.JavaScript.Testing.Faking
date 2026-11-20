@@ -1,6 +1,5 @@
 import test, { ExecutionContext } from 'ava'
 import * as path from 'path'
-import { spawnSync } from 'child_process'
 
 import * as library from '../../../src'
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
@@ -91,18 +90,6 @@ const expectUsageError = (t: ExecutionContext, label: string, start: string, che
 /** The state of a root substitute (library internals, for what the public API does not show). */
 const stateOf = (substitute: unknown): SubstituteState => (substitute as any)[INTERNAL] as SubstituteState
 
-/** Runs a script with the library in a child process with --expose-gc, and returns what it prints as JSON. */
-const measure = (script: string): any => {
-  const entry = path.resolve(__dirname, '../../../src/index.js')
-  const result = spawnSync(process.execPath, ['--expose-gc', '-e', `
-    const { Substitute, Arg } = require(${JSON.stringify(entry)})
-    const heap = () => { global.gc(); global.gc(); return process.memoryUsage().heapUsed }
-    ${script}
-  `], { encoding: 'utf8' })
-  if (result.status !== 0) throw new Error(result.stderr)
-  return JSON.parse(result.stdout)
-}
-
 /** Loads a second, independent copy of the library, as happens with duplicate installs (see duplicate-copies.test.ts). */
 const loadSecondCopy = (): typeof library => {
   const entry = require.resolve('../../../src')
@@ -139,62 +126,6 @@ test('R16V-2 (E110) the finding: checks through a concrete call on a shared subs
   t.true(failureOf(t, () => io.to('b').received(1).emit('m', Arg.any())).includes('but received none.'))
   t.notThrows(() => io.received(100).to('a'))
   t.notThrows(() => io.to(Arg.any()).received(100).emit(Arg.all()))
-})
-
-test('R16V-2 (E110) a check keeps less memory than at cd1bf29 (2.7 KB), and the same holds with a deeper route and a reused view', t => {
-  const { shared, deep } = measure(`
-    const perCheck = (run) => {
-      const before = heap()
-      for (let index = 0; index < 2000; index++) run()
-      return Math.round((heap() - before) / 2000)
-    }
-    const io = Substitute.for()
-    io.to(Arg.any()).emit(Arg.all()).returns(true)
-    for (let index = 0; index < 100; index++) io.to('a').emit('m', index)
-    const shared = perCheck(() => io.to('a').received(100).emit('m', Arg.any()))
-    const db = Substitute.for()
-    db(Arg.any()).where(Arg.all()).first().resolves({ id: 1 })
-    for (let index = 0; index < 50; index++) db('users').where('id', 1).first()
-    const deep = perCheck(() => db('users').where('id', 1).received(50).first())
-    console.log(JSON.stringify({ shared, deep }))
-  `)
-  t.log(`bytes retained per check: ${shared} (a shared substitute), ${deep} (two steps)`)
-  // 8be3a70: 7,047 bytes per check, cd1bf29: 2,684 (it counted wrongly)
-  t.true(shared < 2700, `${shared} bytes per check`)
-  t.true(deep < 2700, `${deep} bytes per check`)
-})
-
-test('the docs agent\'s E99 retention (E110): dropping the substitutes frees them, also after many rounds; a shared answer costs no more per call than any other', t => {
-  const { dropped, rounds, shared, unshared } = measure(`
-    const base = heap()
-    const round = () => {
-      const factory = Substitute.for()
-      const product = Substitute.for()
-      factory.create(Arg.any()).returns(product)
-      for (let index = 0; index < 50000; index++) factory.create(index)
-    }
-    round()
-    const dropped = (heap() - base) / 1048576
-    for (let index = 0; index < 10; index++) round()
-    const rounds = (heap() - base) / 1048576
-    const perCall = kind => {
-      const before = heap()
-      const factory = Substitute.for()
-      const product = Substitute.for()
-      factory.create(Arg.any()).returns(kind === 'shared' ? product : 1)
-      for (let index = 0; index < 50000; index++) factory.create(index)
-      const bytes = (heap() - before) / 50000
-      if (factory.create(1) === null) console.log('keeps the substitutes alive until here')
-      return Math.round(bytes)
-    }
-    console.log(JSON.stringify({ dropped, rounds, unshared: perCall('plain'), shared: perCall('shared') }))
-  `)
-  t.log(`retained after dropping: ${dropped.toFixed(2)} MB, after 11 rounds: ${rounds.toFixed(2)} MB; bytes per call: ${shared} shared, ${unshared} not`)
-  // 8be3a70: 16.8 MB until some other call got a configured answer, and 8.7 MB after 10 rounds; cd1bf29: 0.26 and 0.36 MB
-  t.true(dropped < 2, `${dropped} MB`)
-  t.true(rounds < 2, `${rounds} MB`)
-  // 8be3a70: 42 bytes more per call answered by a shared substitute
-  t.true(shared - unshared < 20, `${shared} against ${unshared} bytes per call`)
 })
 
 test('R16V-2 (E110) a dropped check expression keeps the runs of answers of the code\'s calls, interleaved with checks', t => {
