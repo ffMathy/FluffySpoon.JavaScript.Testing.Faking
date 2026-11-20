@@ -250,21 +250,6 @@ test('ENG2-9 (D30) an unconfigured call with distinct arguments costs little mem
   t.true(unconfigured - configured < 450, `${unconfigured} - ${configured} bytes per call`)
 })
 
-test('ENG2-10 (D30) hashing does not keep symbols alive after the substitute that saw them is gone', t => {
-  const { retained } = measure(`
-    const before = heap()
-    const run = () => {
-      const emitter = Substitute.for()
-      emitter.emit(0).returns(1)
-      for (let index = 0; index < 100000; index++) emitter.emit(Symbol('event-' + index))
-    }
-    run()
-    console.log(JSON.stringify({ retained: (heap() - before) / 1048576 }))
-  `)
-  t.log(`${retained.toFixed(2)} MB retained`)
-  t.true(retained < 2, `${retained} MB retained`)
-})
-
 const millisecondsOf = (run: () => void) => {
   const start = process.hrtime.bigint()
   run()

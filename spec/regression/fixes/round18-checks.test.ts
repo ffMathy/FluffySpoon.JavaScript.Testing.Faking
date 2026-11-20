@@ -6,7 +6,7 @@ import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 18, engine (checks through a call with matchers, and through a concrete call that a setup with matchers
 // answered): the round-17 findings R17-ADV-1, R17-ADV-2, R17-ADV-12 and R17V-1 (= R17-ADV-6), decided in the fix spec as
-// E122, E123 and E124. (E121, R17V-2, is a timing test: see round18-checks-hashing.test.ts.)
+// E122, E123 and E124.
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
