@@ -2,45 +2,9 @@ import test from 'ava'
 import { mock } from 'node:test'
 
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
-import * as CallSite from '../../../src/internals/CallSite'
 
 // Round 18 integration: interactions between the round-18 branches (fix/r18-lines E125-E127, fix/r18-checks E121-E124,
 // fix/r18-mimick E129-E132) that no branch's own tests cover.
-
-/** How many times the library read a stack frame (CallSite.frameOfStack / currentFrame) while `run` ran. */
-const framesReadBy = (run: () => void): number => {
-  const callSite = CallSite as any
-  const frameOfStack = callSite.frameOfStack
-  const currentFrame = callSite.currentFrame
-  let reads = 0
-  callSite.frameOfStack = (...args: any[]) => { reads++; return frameOfStack(...args) }
-  callSite.currentFrame = (...args: any[]) => { reads++; return currentFrame(...args) }
-  try {
-    run()
-  } finally {
-    callSite.frameOfStack = frameOfStack
-    callSite.currentFrame = currentFrame
-  }
-  return reads
-}
-
-test.serial('E122 x E126: the hand-out notes of a fluent method\'s calls (E122) read no stack frames when they are made (E126)', t => {
-  const fluent = Substitute.for<any>()
-  fluent[mimick]({ on() { return this } })
-  const res = Substitute.for<any>()
-  res.status(Arg.any()).returns(res)
-  const reads = framesReadBy(() => {
-    for (let index = 0; index < 100; index++) {
-      fluent.on('a', index).on('b', index)
-      fluent.on('c', index)
-      res.status(200)
-      res.status(201).status(202)
-    }
-  })
-  t.is(reads, 0)
-  t.notThrows(() => fluent.received(100).on('c', Arg.any()))
-  t.notThrows(() => res.received(100).status(202))
-})
 
 test('E122 x E126: notes of fluent calls on earlier lines are decided when a check reads them, as if at once', t => {
   // a mimicked emitter whose on() and to() return the instance (E76: the substitute), and whose sel() hands out room

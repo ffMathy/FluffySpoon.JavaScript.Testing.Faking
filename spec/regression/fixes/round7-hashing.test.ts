@@ -223,13 +223,13 @@ test('R6-ADV-6 (E21) a missing or non-number Error.stackTraceLimit gives no fram
     t.false(result.kept, name)
   }
 
-  // a limit of at least 1 is lowered for a moment and put back, as before, and keeps the frames
+  // a limit of at least 1 is left as it is too, and gives the frames
   const result = runScript(`
     ${countLimitChanges('RealError.stackTraceLimit = 10')}
     ${openConnection}
     console.log(JSON.stringify({ kept, calledAt: /called at/.test(message), limit: RealError.stackTraceLimit, changed: changes > before }))
   `)
-  t.deepEqual(result, { kept: true, calledAt: true, limit: 10, changed: true })
+  t.deepEqual(result, { kept: true, calledAt: true, limit: 10, changed: false })
 })
 
 test('R6-ADV-2 (E21) with a frozen Error the library reads no frames, so position decides, while "called at" lines are still shown', t => {

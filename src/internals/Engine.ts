@@ -1,7 +1,7 @@
 import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
-import { ArgumentHashes, AutoEntry, Substitution, SubstituteState, clearsSoFar } from './SubstituteState'
+import { ArgumentHashes, AutoEntry, Substitution, SubstituteState } from './SubstituteState'
 import { codeMember, pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
@@ -47,12 +47,8 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
  * own per view). It can be constructed (E23), and it has no non-configurable `prototype`, so that the traps can hide
  * its own properties (E25, see viewTraps).
  */
-/*
- * E40: a neutral name for util.inspect without custom inspection (see returnThis). E64: the declared parameters are never
- * used; they give the targets bound from this function (and from returnThis) the arity that brands them (see
- * isLibraryTarget).
- */
-const viewFunction = function substitute(this: Printer, _1?: unknown, _2?: unknown, _3?: unknown, _4?: unknown, _5?: unknown, _6?: unknown, _7?: unknown): Printer { return this }
+/* E40: a neutral name for util.inspect without custom inspection (see returnThis). */
+const viewFunction = function substitute(this: Printer): Printer { return this }
 
 /**
  * The inspect.custom hook of the views' targets. util.inspect reads it from the target of a proxy, but calls it with the
@@ -77,32 +73,11 @@ const inspectView = function (this: unknown, depth: number, options?: InspectOpt
  * library's: the inherited inspect.custom hooks print it as an ordinary function and never call it, and it is not taken
  * for a substitute (isFaceProxy requires a proxy).
  *
- * The hooks call `this` only when it is one of the library's own targets, recognised by a brand that binding, wrapping
- * and copying prototypes do not reproduce: a target is a bound function (native source text) bound, with no arguments,
- * from returnThis or viewFunction, so its own `name` is exactly 'bound substitute' and its own `length` is exactly
- * TARGET_LENGTH, their unusual arity. A natively bound function is named after the function it binds ('bound memoized',
- * and 'bound ' for a substitute, whose `name` reads as an auto-substitute, not a string), and gets that function's
- * arity less its bound arguments; a mimic-fn wrapper keeps its own arity, and the `length` that a substitute reports
- * (E65, which util.promisify copies) is 0. The proxies never let the code under test reach a target. A target that the
- * code under test froze or gave properties (E25) has lost its `name` and `length`: it is recognised by identity
- * (ownedTargets). The descriptors are read only from values that are not proxies, so reading them runs no code of the
- * code under test. (No per-target bookkeeping otherwise: D30 keeps an auto-substitute small.)
+ * The hooks call `this` only when it is one of the library's own targets, recognised by identity (binding, wrapping and
+ * copying prototypes do not reproduce it). The proxies never let the code under test reach a target.
  */
-const TARGET_NAME = 'bound substitute'
-const TARGET_LENGTH = 7
-const functionToString = Function.prototype.toString
-const boundSourceText = functionToString.call(function () { /* empty */ }.bind(null))
-const isLibraryTarget = (value: Function): boolean => {
-  try {
-    if (ownedTargetCount > 0 && ownedTargets.has(value)) return true
-    const name = Reflect.getOwnPropertyDescriptor(value, 'name')
-    if (name === undefined || name.value !== TARGET_NAME) return false
-    const length = Reflect.getOwnPropertyDescriptor(value, 'length')
-    return length !== undefined && length.value === TARGET_LENGTH && functionToString.call(value) === boundSourceText
-  } catch {
-    return false
-  }
-}
+const libraryTargets = new WeakSet<Function>()
+const isLibraryTarget = (value: Function): boolean => libraryTargets.has(value)
 
 /** An ordinary printout of a value that merely inherits one of the hooks (see isLibraryTarget): never calls it. */
 const inspectForeign = (value: object, options?: InspectOptions): string =>
@@ -115,6 +90,7 @@ const viewTargetPrototype = Object.create(Function.prototype, {
 const viewTarget = (print: Printer): any => {
   const target = viewFunction.bind(print)
   Object.setPrototypeOf(target, viewTargetPrototype)
+  libraryTargets.add(target)
   return target
 }
 
@@ -170,7 +146,7 @@ const functionDescriptor = (property: PropertyKey, name: () => string): Property
 
 const anonymous = () => ''
 
-/** The traps that every view shares (E58: one set for all of them, see createView). */
+/** The traps that every view shares (see createView). */
 const viewTraps = {
   defineProperty: function defineProperty(target: () => Printer): boolean {
     throw definePropertyError(target, defineProperty)
@@ -189,14 +165,7 @@ const viewTraps = {
  * getOwnPropertyDescriptor traps, if it has them, take the place of the shared ones (E48: an assertion view is told
  * that the code changes it; E65: a bound function has a name of its own).
  */
-const createView = (print: Printer, handler: ProxyHandler<any>): any => {
-  if (handler.defineProperty === undefined) handler.defineProperty = viewTraps.defineProperty
-  if (handler.preventExtensions === undefined) handler.preventExtensions = viewTraps.preventExtensions
-  handler.deleteProperty = viewTraps.deleteProperty
-  handler.ownKeys = viewTraps.ownKeys
-  if (handler.getOwnPropertyDescriptor === undefined) handler.getOwnPropertyDescriptor = viewTraps.getOwnPropertyDescriptor
-  return new Proxy(viewTarget(print), handler)
-}
+const createView = (print: Printer, handler: ProxyHandler<any>): any => new Proxy(viewTarget(print), { ...viewTraps, ...handler })
 
 // ---- printing ---------------------------------------------------------------------------------
 
@@ -247,27 +216,11 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
       if (nested !== undefined) pending.push(nested)
     }
   }
-  const prefixes = new Map<SubstituteState, string>()
-  const prefixOf = (owner: SubstituteState): string => {
-    let prefix = prefixes.get(owner)
-    if (prefix === undefined) {
-      prefix = relativePath(owner, state)
-      prefixes.set(owner, prefix)
-    }
-    return prefix
-  }
+  const prefixOf = (owner: SubstituteState): string => relativePath(owner, state)
   // E99 (R15FE-5): received calls are shown with the call that a substitute shared by a setup with matchers was handed
   // out to, when there is one (see Paths.relativeRecordPath); setups keep the matchers
-  const recordPrefixes = new Map<SubstituteState, string>()
   const labels = recordLabelContext(RecordedArguments.literalsEqual)
-  const recordPrefixOf = (owner: SubstituteState): string => {
-    let prefix = recordPrefixes.get(owner)
-    if (prefix === undefined) {
-      prefix = relativeRecordPath(owner, state, labels)
-      recordPrefixes.set(owner, prefix)
-    }
-    return prefix
-  }
+  const recordPrefixOf = (owner: SubstituteState): string => relativeRecordPath(owner, state, labels)
 
   const lines: string[] = []
   // D26: an invocation through call/apply is shown once, as its direct-call reading
@@ -379,21 +332,11 @@ const continuedChain = (candidate: CallRecord | undefined, current: () => Frame 
   return continuesExpression(candidate, from, current()) ? candidate : undefined
 }
 
-/**
- * Links a new record to the candidate if it continues the candidate's expression (the record has its frame). E126
- * (R17-ADV-11): a candidate that handed out the substitute itself is linked for later, and whether the record continues
- * its expression is decided only when a setup or a check follows the chain back (see CallRecord.linkToSelfHandOut), so
- * that the calls of a fluent method read no frames.
- */
+/** Links a new record to the candidate if it continues the candidate's expression (the record has its frame). */
 const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallRecord => {
   if (candidate === undefined) return record
-  if (handedOutItself(candidate)) {
-    record.linkToSelfHandOut(candidate)
-    return record
-  }
-  // (the candidate's frame first: it is the one read last, which is kept, see CallSite.frameOfStack)
-  const from = candidate.frame
-  if (continuesExpression(candidate, from, record.frame)) record.chainPrevious = candidate
+  if (candidate.handedOutItself === true) record.afterSelfHandOut = candidate
+  if (continuesExpression(candidate, candidate.frame, record.frame)) record.chainPrevious = candidate
   return record
 }
 
@@ -403,7 +346,7 @@ const linkChain = (record: CallRecord, candidate: CallRecord | undefined): CallR
  * after the call (see CallRecord.continuesSelfHandOut).
  */
 const continuesExpression = (candidate: CallRecord, from: Frame | null, frame: Frame | null): boolean => {
-  if (!handedOutItself(candidate)) return sameExpression(from, frame)
+  if (candidate.handedOutItself !== true) return sameExpression(from, frame)
   return continuesSelfHandOut(from, frame)
 }
 
@@ -435,7 +378,7 @@ const handOutConfigured = <T>(value: T, record: CallRecord, owner: SubstituteSta
     const face = (value as any)[INTERNAL] as Face | undefined
     if (face !== undefined) {
       const shared = record.kind === 'call' && sharesAnswer(source)
-      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner || face.continuesConfiguredHandOut(record)) {
+      if (shared || (face instanceof AutoEntry ? face.materializedState : face) !== owner || continuesHandOutOf(face, record)) {
         handOutShared(face, record, owner, shared)
       }
       owner.noteConfiguredAnswer(record, face)
@@ -560,44 +503,41 @@ const isOtherCopySubstitute = (value: unknown): value is Function =>
  * calls as if they all came through that call. So the calls of a check expression that such a setup answered (the setup
  * that answered them has matchers, or the mimicked instance answered them: the call has no setup of its own) are found,
  * and the check counts along the route of the expression (see concreteRoute), deciding from the answers noted for the
- * calls which calls the shared substitute was returned to (see throughCall).
- * E110 (R16V-2, the docs agent's E99 retention): such a hand-out is noted with the substitute handed out, for its latest
- * hand-out only (see SubstituteState.ConfiguredHandOut), not per call: no cost per call, and nothing that keeps the
- * substitute the call was made on alive once it is dropped. Nothing is noted for other calls before the first such
- * hand-out: no cost when no such substitute is involved.
+ * calls which calls the shared substitute was returned to (see throughCall). Such a hand-out is noted for the record
+ * that made it (see configuredHandOuts).
  */
-let sharedHandOutCount = 0
 
 /** E99: whether what gave an answer (answerSource) gives it to every call that matches: a setup with matchers, or the mimicked instance. */
 const sharesAnswer = (source: Substitution | object | undefined): boolean =>
   source === MIMICKED || (source instanceof Substitution && source.args !== undefined && hasMatchers(source.args))
 
 /**
- * E39, E99, E110: `record` (of `owner`) hands out the substitute `face` as a configured value, which `shared` says a setup
- * with matchers or the mimicked instance gives every call that it matches (see ConfiguredHandOut).
+ * E39, E99: what a record handed out as a configured value: the substitute (`face`), the substitute that answered with it
+ * (`from`, the record's own) and whether that answer is shared (E99: a setup with matchers, or the mimicked instance,
+ * gives it every call that it matches), so that a check through it finds where its expression came from (see
+ * concreteRoute), step by step (E122: also past a substitute that the expression handed out again, a self-returning
+ * builder or a cycle).
+ */
+type ConfiguredHandOut = { readonly face: Face, readonly from: SubstituteState, readonly shared: boolean }
+const configuredHandOuts = new WeakMap<CallRecord, ConfiguredHandOut>()
+
+/** E122: whether `record` continues an expression that handed out `face` as a configured value (see handOutConfigured). */
+const continuesHandOutOf = (face: Face, record: CallRecord): boolean => {
+  for (let previous = record.chainPrevious; previous !== undefined; previous = previous.chainPrevious)
+    if (configuredHandOuts.get(previous)?.face === face) return true
+  return false
+}
+
+/**
+ * E39, E99: `record` (of `owner`) hands out the substitute `face` as a configured value, which `shared` says a setup with
+ * matchers or the mimicked instance gives every call that it matches (see ConfiguredHandOut).
  */
 const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, shared: boolean): void => {
   face.handOut(record)
-  if (shared) sharedHandOutCount++
-  face.noteConfiguredHandOut(record, owner, shared)
+  configuredHandOuts.set(record, { face, from: owner, shared })
   // E111: the substitute itself (see continuesExpression)
-  if ((face instanceof AutoEntry ? face.materializedState : face) === owner) {
-    latestSelfHandOut = record.seq
-    selfHandOutCount++
-  }
+  if ((face instanceof AutoEntry ? face.materializedState : face) === owner) record.handedOutItself = true
 }
-
-/** E111: how many hand-outs of the substitute that was called itself were made (see continuesExpression), none as a rule. */
-let selfHandOutCount = 0
-/**
- * E111, E126: the sequence number of the record of the latest such hand-out. A chain candidate is always the latest
- * operation of all (an adjacent hand-out), so this tells whether it handed out the substitute itself, with no field on
- * the records (the record of a fluent call is no larger than before E111) and no reference that keeps one alive (E127).
- */
-let latestSelfHandOut = 0
-
-/** E111: whether `candidate`, an adjacent hand-out, handed out the substitute it was made on itself (see handOutShared). */
-const handedOutItself = (candidate: CallRecord): boolean => selfHandOutCount !== 0 && candidate.seq === latestSelfHandOut
 
 /*
  * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
@@ -641,7 +581,6 @@ const faceTargetPrototype = Object.create(Function.prototype, {
  * inherits from a substitute (E46) is never one of them.
  */
 const reprototyped = new WeakSet<object>()
-let reprototypedCount = 0
 
 /** The proxies of the substitutes themselves (an auto-substitute keeps its own, AutoEntry.proxy). */
 const rootProxies = new WeakMap<SubstituteState, object>()
@@ -654,7 +593,7 @@ const proxyOf = (face: Face): object | undefined => face instanceof AutoEntry ? 
  * configured answer, an argument or a member's value) throws for it, and is simply not one (E14: matched by identity).
  */
 const isFaceProxy = (value: unknown): value is Function => typeof value === 'function' && types.isProxy(value) &&
-  (hasFacePrototype(value) || (reprototypedCount > 0 && reprototyped.has(value)))
+  (hasFacePrototype(value) || reprototyped.has(value))
 
 const hasFacePrototype = (value: Function): boolean => {
   try {
@@ -672,10 +611,8 @@ const hasFacePrototype = (value: Function): boolean => {
  * the code under test defined, and the proxy's answers cannot conflict with them (a frozen target without own
  * properties constrains nothing; frozen `length` and `name` would bind what reading them answers). A defined property is
  * a real property: reads and assignments use it, and are not recorded. Everything else works as before, frozen or not.
- * Taking over is rare, so the hot path only checks a counter.
  */
 const ownedTargets = new WeakSet<object>()
-let ownedTargetCount = 0
 const hasOwnProperty = Object.prototype.hasOwnProperty
 
 const takeOver = (target: FaceTarget): void => {
@@ -683,10 +620,9 @@ const takeOver = (target: FaceTarget): void => {
   delete (target as any).length
   delete (target as any).name
   ownedTargets.add(target)
-  ownedTargetCount++
 }
 
-const isOwned = (target: FaceTarget): boolean => ownedTargetCount > 0 && ownedTargets.has(target)
+const isOwned = (target: FaceTarget): boolean => ownedTargets.has(target)
 
 /** Whether the code under test defined the property on the substitute (E25). */
 const isDefined = (target: FaceTarget, property: PropertyKey): boolean => isOwned(target) && hasOwnProperty.call(target, property)
@@ -720,8 +656,7 @@ const looksAt = (subject: Face | object): boolean =>
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
     if (isDefined(target, property)) return Reflect.get(target, property, receiver)
-    if ((typeof property === 'symbol' || answersOnlyItself(property) || isPrinting() || isComparing() || isFunctionHelperKey(property)) &&
-      inheritsFromSubstitute(receiver)) {
+    if (inheritsFromSubstitute(receiver)) {
       const inherited = inheritedMember(target(), property, receiver)
       if (inherited !== AS_USUAL) return inherited
     }
@@ -758,10 +693,7 @@ const faceHandler: ProxyHandler<FaceTarget> = {
   setPrototypeOf: function setPrototypeOf(target: FaceTarget, prototype: object | null) {
     if (!Reflect.setPrototypeOf(target, prototype)) throw notExtensibleError(target(), setPrototypeOf)
     const proxy = proxyOf(target())
-    if (proxy !== undefined && !reprototyped.has(proxy)) {
-      reprototyped.add(proxy)
-      reprototypedCount++
-    }
+    if (proxy !== undefined) reprototyped.add(proxy)
     return true
   },
   // E115: on a substitute that mimicks an object, the instance's member is deleted (a spy's restore, see defineOnInstance)
@@ -940,9 +872,7 @@ const mimickedDescriptor = (face: Face, key: PropertyKey): PropertyDescriptor | 
 /**
  * E65: the `name` a substitute reports as its own: a member handle is named after its member, as a method is (`getKey`,
  * `[description]` for a symbol), so that what util.promisify, util.callbackify and mimic-fn make of it is named as for a
- * real method; a substitute itself and the result of a call are anonymous. (The `length` reported with it, 0, keeps
- * what binding or wrapping it gives apart from the library's targets, even for a member called `substitute`: see
- * isLibraryTarget.)
+ * real method; a substitute itself and the result of a call are anonymous.
  */
 const functionName = (face: Face): string => {
   if (!(face instanceof AutoEntry) || face.kind !== 'get') return ''
@@ -984,7 +914,7 @@ const defineOnReceiver = (receiver: object, property: PropertyKey, value: unknow
  * after its path, or renaming the function with defineProperty, costs memory for every auto-substitute: 160 to 240
  * bytes per unconfigured call, measured on Node.js 22 and 24.)
  */
-const returnThis = function substitute(this: Face, _1?: unknown, _2?: unknown, _3?: unknown, _4?: unknown, _5?: unknown, _6?: unknown, _7?: unknown): Face { return this }
+const returnThis = function substitute(this: Face): Face { return this }
 
 /**
  * E26: `key in sub` (and Reflect.has) is true for a key with a setup (as a property or a method, or a nested setup
@@ -1002,6 +932,7 @@ const faceHas = (face: Face, key: PropertyKey): boolean => {
 const createFaceProxy = (face: Face): any => {
   const target: FaceTarget = returnThis.bind(face)
   Object.setPrototypeOf(target, faceTargetPrototype)
+  libraryTargets.add(target)
   return new Proxy(target, faceHandler)
 }
 
@@ -1085,7 +1016,7 @@ const faceContextFunction = (face: Face, context: ContextMethod, head: CallRecor
   // E111: the check view uses the hand-out up: the next statement does not continue its expression (a substitute that a
   // setup with matchers answers with itself, `io.to(Arg.any()).returns(io)`, is where the next statement starts as well)
   if (check) face.forgetHandOut(head!)
-  const subject = check && sharedHandOutCount > 0 ? () => concreteSubject(faceState(face), head) : undefined
+  const subject = check ? () => concreteSubject(faceState(face), head) : undefined
   return contextFunction(context, () => faceState(face), head, subject)
 }
 
@@ -1453,12 +1384,10 @@ const proxyOfState = (state: SubstituteState): any => state.owner !== undefined 
  * [mimick](), which a new [mimick]() replaces): a handle read from an earlier instance, or before the substitute mimicked
  * anything, calls what the instance has when it is called, as before. `fn` is undefined when the instance had no
  * function for the member then (only setups answer that handle's calls). `others`, on the member's first handle: the
- * handles read since with other functions, so that a read finds them again (a few: a getter can give a new function at
- * every read, as on an ordinary object).
+ * handles read since with other functions, so that a read finds them again.
  */
 type HandleRead = { readonly mimicked: object, readonly fn: Function | undefined, others?: Map<Function | undefined, AutoEntry> }
 const handleReads = new WeakMap<AutoEntry, HandleRead>()
-const OTHER_HANDLES = 8
 
 /** E114: the member handle that a read of `key` gives while the mimicked instance has `fn` for it (see above). */
 const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function | undefined): AutoEntry => {
@@ -1477,7 +1406,6 @@ const mimickedHandle = (state: SubstituteState, key: PropertyKey, fn: Function |
     other = new AutoEntry('get', state, key)
     handleReads.set(other, { mimicked, fn })
     handleProxies.set(entryProxy(other), other)
-    if (others.size >= OTHER_HANDLES) others.delete(others.keys().next().value)
     others.set(fn, other)
   }
   return other
@@ -1548,25 +1476,19 @@ const wrapsOwnHandle = (value: Function): boolean => {
  * the handle is a matcher's look there, E95).
  */
 type MockContext = { mockImplementationOnce(implementation: Function): void }
-const mockContexts = new WeakMap<Function, MockContext | null>()
 
 const mockContextOf = (wrapper: Function): MockContext | undefined => {
-  let context = mockContexts.get(wrapper)
-  if (context === undefined) {
-    let value: any
-    libraryGuard.matching++
-    try {
-      value = Reflect.get(wrapper, 'mock')
-    } catch {
-      value = undefined // a proxy of the code under test whose get trap throws: no mock
-    } finally {
-      libraryGuard.matching--
-    }
-    context = typeof value === 'object' && value !== null && typeof value.mockImplementationOnce === 'function' &&
-      typeof value.callCount === 'function' ? value as MockContext : null
-    mockContexts.set(wrapper, context)
+  let value: any
+  libraryGuard.matching++
+  try {
+    value = Reflect.get(wrapper, 'mock')
+  } catch {
+    value = undefined // a proxy of the code under test whose get trap throws: no mock
+  } finally {
+    libraryGuard.matching--
   }
-  return context ?? undefined
+  return typeof value === 'object' && value !== null && typeof value.mockImplementationOnce === 'function' &&
+    typeof value.callCount === 'function' ? value as MockContext : undefined
 }
 
 /** E129: the answer of a setup to a call through a handle for node:test's mock, shown to the mock (see mockContextOf). */
@@ -1969,9 +1891,6 @@ const invoke = (
     const chained = continuedChain(chainCandidate, frameAt(stackStart))
     retract(read)
     retract(chained)
-    // E121: the read of the member is forgotten (it is its latest record), so that a check through a call with matchers
-    // looks at the records of real calls only, and costs the same however many setups and checks came before it
-    if (read !== undefined) state.dropRetracted(read)
     return callWithMatchers(state, key, RecordedArguments.forSpecification(args), read !== undefined ? read.chainPrevious : chained)
   }
 
@@ -1995,7 +1914,7 @@ const invoke = (
  */
 const callWithMatchers = (state: SubstituteState, key: PropertyKey, specification: RecordedArguments, head: CallRecord | undefined): any => {
   const stringAssertion = isStringAssertionKey(key)
-  const route = sharedHandOutCount > 0 && !stringAssertion ? concreteRoute(state, head) : undefined
+  const route = !stringAssertion ? concreteRoute(state, head) : undefined
   if (route !== undefined) return routedView(() => configureCall(state, key, specification), extendRoute(route, callStep(key, specification)), false)
   return configureCall(state, key, specification, stringAssertion)
 }
@@ -2025,11 +1944,9 @@ const NO_SELF: Self = { thisArg: undefined, explicit: false }
 const CONSTRUCT: Self = { thisArg: undefined, explicit: false, construct: true }
 
 const constructing = (newTarget: unknown): Self => {
-  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its prototype
-  // first (a substitute or an auto-substitute), then by its marker (the other values the library hands out). A subclass
-  // of a substitute inherits the marker, but it is not a proxy.
-  if (typeof newTarget !== 'function' || isFaceProxy(newTarget) ||
-    (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
+  // a substitute as new.target: `new sub(...)` (or one substitute constructed for another), found by its marker (as are
+  // the other values the library hands out). A subclass of a substitute inherits the marker, but it is not a proxy.
+  if (typeof newTarget !== 'function' || (types.isProxy(newTarget) && isSubstituteProxy(newTarget))) return CONSTRUCT
   return { thisArg: undefined, explicit: false, construct: true, newTarget }
 }
 
@@ -2274,7 +2191,7 @@ const resolveStringAssertion = (entry: AutoEntry, chainHead: CallRecord | undefi
   retract(chainHead)
   const count = entry.key === 'didNotReceive' ? 0 : validateExpectedCount(args[0], stackStart)
   // (the call of received or didNotReceive continues the expression of the substitute it is a member of)
-  const subject = chainHead === undefined || sharedHandOutCount === 0 ? entry.parent : concreteSubject(entry.parent, chainHead.chainPrevious)
+  const subject = chainHead === undefined ? entry.parent : concreteSubject(entry.parent, chainHead.chainPrevious)
   const other = subject instanceof MatchedSubstitutes ? subject.open(entry.key as StringAssertionKey, count, stackStart) : undefined
   return { state: subject, count, other }
 }
@@ -2516,20 +2433,11 @@ const stateOf = (checked: SubstituteState | AutoEntry): SubstituteState | undefi
 /** Collects substitutes without repeats, in the order they are added. */
 class CheckedList {
   readonly items: Checked[] = []
-  // (E110: only once there are several, as a step mostly leads to one substitute, over and over)
-  private seen?: Set<Checked>
+  private readonly seen = new Set<Checked>()
   add(checked: Checked | undefined): void {
-    if (checked === undefined) return
-    const items = this.items
-    if (items.length === 0) {
-      items.push(checked)
-      return
-    }
-    if (items[0] === checked) return
-    const seen = this.seen ?? (this.seen = new Set(items))
-    if (seen.has(checked)) return
-    seen.add(checked)
-    items.push(checked)
+    if (checked === undefined || this.seen.has(checked)) return
+    this.seen.add(checked)
+    this.items.push(checked)
   }
 }
 
@@ -2554,25 +2462,17 @@ type RouteStep = {
   matchesCall(actualArguments: readonly unknown[]): boolean
   /**
    * E99: when the step is the call of the check expression itself, and a concrete call that a setup with matchers (or the
-   * mimicked instance) answered with a substitute that it gives every call it matches (see sharedHandOutCount), that
+   * mimicked instance) answered with a substitute that it gives every call it matches (see handOutShared), that
    * substitute.
    */
   readonly shared?: SubstituteState
 }
-/**
- * `undetermined` (E122): the route of a check through a concrete call (see concreteRoute) went up through a record that
- * handed out a substitute as a configured value, which is no longer known to have come from where (that substitute was
- * handed out since by another expression), with the substitute it handed out: the check is a usage error then.
- */
-type CheckRoute = {
-  readonly origin: SubstituteState, readonly steps: readonly RouteStep[], readonly undetermined?: { readonly record: CallRecord, readonly answered: SubstituteState }
-}
+type CheckRoute = { readonly origin: SubstituteState, readonly steps: readonly RouteStep[] }
 
 const memberStep = (key: PropertyKey): RouteStep => ({ kind: 'get', key, argumentList: undefined, matchesCall: () => false })
 const callStep = (key: PropertyKey, specification: RecordedArguments): RouteStep =>
   ({ kind: 'call', key, argumentList: specification.value, matchesCall: actualArguments => specification.matches(actualArguments) })
-const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute =>
-  ({ origin: route.origin, steps: [...route.steps, step], undetermined: route.undetermined })
+const extendRoute = (route: CheckRoute, step: RouteStep): CheckRoute => ({ origin: route.origin, steps: [...route.steps, step] })
 
 /**
  * E99: the step of a record of a check expression: its read, or its call with the arguments it was made with (`shared`:
@@ -2585,22 +2485,9 @@ const concreteStep = (record: CallRecord, shared: SubstituteState | undefined): 
     kind: 'call',
     key: record.key,
     argumentList: args,
-    matchesCall: actualArguments => sameArguments(args, actualArguments),
+    matchesCall: actualArguments => RecordedArguments.literalsEqual(args, actualArguments),
     shared
   }
-}
-
-/**
- * E110: whether the arguments of a received call are those of a call of a check expression (RecordedArguments.literalsEqual),
- * the same values first (as for the calls of a loop that a check goes through, call after call).
- */
-const sameArguments = (expected: readonly unknown[], actual: readonly unknown[]): boolean => {
-  if (expected.length === actual.length) {
-    let index = 0
-    while (index < expected.length && Object.is(expected[index], actual[index])) index++
-    if (index === expected.length) return true
-  }
-  return RecordedArguments.literalsEqual(expected, actual)
 }
 
 /** `.on('saved', Arg.any{any})`, `.items`, `('a')`: a step as a path shows it. */
@@ -2616,23 +2503,19 @@ const routePath = (route: CheckRoute, steps = route.steps.length): string => {
   return path
 }
 
-/** E99: at most this many records of a check expression are looked at, from where the check is opened up. */
-const MAX_EXPRESSION_STEPS = 1000
-
 /**
  * E110: what a record of a check expression handed out (`answered`, the substitute the next step of the expression was
  * made on, or the one the check is opened on) tells about it: the substitute it was made on (`owner`), the record that is
  * its step (D26/E82: the direct reading of a call/apply invocation, see below), and whether a setup with matchers (or the
- * mimicked instance) shares that answer. Undefined when that is not known any more (the configured value was handed out
- * again since), so that the route stops there.
+ * mimicked instance) shares that answer. Undefined when the record did not hand it out, so that the route stops there.
  */
 type HandOutStep = { readonly record: CallRecord, readonly owner: SubstituteState, readonly shared: boolean }
 
 const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutStep | undefined => {
   const entry = answered.owner
-  // a configured value, noted with the substitute that answered it (see handOutShared)
-  const configured = (entry ?? answered).configuredHandOut(record)
-  if (configured !== undefined) return { record, owner: configured.from, shared: configured.shared }
+  // a configured value, noted for the record that handed it out (see handOutShared)
+  const configured = configuredHandOuts.get(record)
+  if (configured !== undefined && configured.face === (entry ?? answered)) return { record, owner: configured.from, shared: configured.shared }
   if (entry === undefined) return undefined
   // an auto-substitute, of the substitute that the call or the read was made on (E99: that of a nested setup through a
   // call with matchers is one that every call matching it gets). E82: the auto-substitute of the direct call, which a
@@ -2648,28 +2531,19 @@ const handOutStepOf = (answered: SubstituteState, record: CallRecord): HandOutSt
  * where the check is opened, along the records of the expression (`head`: the record that handed out `state`, the
  * substitute the check is opened on). Undefined when the expression went through no such call: the check then counts
  * the calls of that substitute, as always.
- * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf), with nothing noted per
- * call. The records of the expression, which the check has retracted, are then forgotten where they are the latest of
- * their member (see SubstituteState.dropRetracted), so that later checks do not look at them again.
+ * E110 (R16V-2): found from the bottom up, from what each record handed out (see handOutStepOf).
  * E122 (R17-ADV-1, R17-ADV-2): a substitute that the expression handed out several times (a self-returning builder, a
- * cycle) has a note for each of those hand-outs (see SubstituteState.HandOutNotes), so the route goes on past each. A
- * record above a step that E99 narrows whose hand-out is no longer known (see CheckRoute.undetermined) makes the check a
- * usage error rather than a check of the route below it, which could pass wrongly.
+ * cycle) has a note for each of those hand-outs (see configuredHandOuts), so the route goes on past each.
  */
 const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): CheckRoute | undefined => {
-  if (head === undefined || sharedHandOutCount === 0) return undefined
+  if (head === undefined) return undefined
   const found: HandOutStep[] = []
   const answers: SubstituteState[] = []
   let top = 0
   let answered = state
-  let undetermined: CheckRoute['undetermined']
-  for (let record: CallRecord | undefined = head; record !== undefined && found.length < MAX_EXPRESSION_STEPS;) {
+  for (let record: CallRecord | undefined = head; record !== undefined;) {
     const step = handOutStepOf(answered, record)
-    if (step === undefined) {
-      // (a substitute itself is handed out as a configured value only, which is noted, see handOutShared)
-      if (top > 0 && answered.owner === undefined) undetermined = { record, answered }
-      break
-    }
+    if (step === undefined) break
     found.push(step)
     answers.push(answered)
     if (step.shared) top = found.length
@@ -2681,9 +2555,7 @@ const concreteRoute = (state: SubstituteState, head: CallRecord | undefined): Ch
   if (top === 0) return undefined
   const steps: RouteStep[] = []
   for (let index = top - 1; index >= 0; index--) steps.push(concreteStep(found[index].record, found[index].shared ? answers[index] : undefined))
-  // (from the bottom up: each is the latest record of its member then)
-  for (const step of found) step.owner.dropRetracted(step.record)
-  return { origin: found[top - 1].owner, steps, undetermined }
+  return { origin: found[top - 1].owner, steps }
 }
 
 /** E99: what a check opened on `state` counts, when its expression reached `state` from `head` (see concreteRoute). */
@@ -2857,23 +2729,6 @@ const sharedSubstituteError = (
 }
 
 /**
- * E122: a check through a concrete call whose expression went, further up, through a call (`record`) that handed out the
- * substitute `answered` as a configured value, while where that call was made is no longer known (`answered` was handed
- * out since, by another expression): which calls came through the route cannot be told. A usage error, naming the call.
- */
-const undeterminedRouteError = (route: CheckRoute, record: CallRecord, answered: SubstituteState, start: Function | undefined) => {
-  const call = record.kind === 'call' ? `${memberLabel(record.key)}${formatArguments(record.args ?? [], false)}` : memberLabel(record.key)
-  return SubstituteException.generic(
-    `Cannot check through ${routePath(route)}: before it, the expression went through ${call}, which answered ` +
-    `${printAnswer(answered)}, and which call that was, and so which calls came through the expression, cannot be told ` +
-    `any more (${printAnswer(answered)} was handed out by another expression since). Check the calls of each substitute ` +
-    `directly instead (for example ${asExpression(route.origin.path)}.received(1)${stepText(route.steps[0])}), or check a ` +
-    `concrete call in an expression of its own.`,
-    start
-  )
-}
-
-/**
  * E124 (R17V-1, R17-ADV-6): whether what a call or a read answered (as noted, see SubstituteState.noteConfiguredAnswer) is
  * a substitute of this copy: its AutoEntry or SubstituteState. Every other object noted is the library's own (a setup, or
  * MIMICKED, THREW, CONFIGURED); a function is a value that answered, which may be any proxy, a revoked one too, so it is
@@ -2910,20 +2765,16 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
       answered.add(checkedOf(step.shared))
       continue
     }
-    // E110: one pass over the received calls, with what each answered by position (no map of them)
-    const records = at.state.receivedRecordsOf(at.key)
-    const answers = at.state.configuredAnswersByPosition(at.key)
     const sharing = step.shared !== undefined && follow === 'count'
     let shared: Set<object> | undefined
     // E99: the calls that do not match the step and answered a substitute, which may be one that matching calls answered
-    let others: number[] | undefined
-    for (let position = 0; position < records.length; position++) {
-      const record = records[position]
+    let others: CallRecord[] | undefined
+    for (const record of at.state.recordsFor(at.key)) {
       // (E123: not a call made before the clear of a substitute further up the route, see followRoute)
-      if (record.retracted || record.kind !== 'call' || record.seq <= since) continue
-      const answer = answers === undefined ? undefined : answers[position]
+      if (record.kind !== 'call' || record.seq <= since) continue
+      const answer = at.state.configuredAnswerOf(record)
       if (!step.matchesCall(record.args ?? [])) {
-        if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(position)
+        if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(record)
         continue
       }
       if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, new ArgumentHashes(record.args ?? [])))
@@ -2939,11 +2790,11 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
     // E99: the calls that do not match the step, which a substitute that matching calls answered was returned to as well
     const returnedTo: CallRecord[] = []
     let sharedAnswer: object | undefined
-    for (const position of others) {
-      const answer = answers![position]!
+    for (const record of others) {
+      const answer = at.state.configuredAnswerOf(record)!
       if (!shared.has(answer)) continue
       if (sharedAnswer === undefined) sharedAnswer = answer
-      if (answer === sharedAnswer) returnedTo.push(records[position])
+      if (answer === sharedAnswer) returnedTo.push(record)
     }
     if (sharedAnswer !== undefined) throw sharedSubstituteError(through(), at.state, step, sharedAnswer, returnedTo, start)
   }
@@ -3002,14 +2853,13 @@ const latestClear = (checked: readonly Checked[], since: number): number => {
  * such a substitute itself still counts them (its own records are cleared by clearing it).
  */
 const followRoute = (route: CheckRoute, start: Function | undefined, follow: Follow = 'count'): RouteEnd => {
-  if (route.undetermined !== undefined && follow === 'count') throw undeterminedRouteError(route, route.undetermined.record, route.undetermined.answered, start)
   let checked: Checked[] = [checkedOf(route.origin)]
   let since = 0
   const steps = route.steps
   for (let index = 0; index < steps.length; index++) {
     const step = steps[index]
     const through = () => routePath(route, index + 1)
-    if (clearsSoFar() > 0) since = latestClear(checked, since)
+    since = latestClear(checked, since)
     checked = step.kind === 'get' ? throughRead(checked, step.key, through, start, follow, since) : throughCall(checked, step, through, start, follow, since)
     if (follow !== 'count') continue
     const foreign = checked.find(isForeign)
@@ -3038,14 +2888,9 @@ class MatchedSubstitutes implements SeveralSubstitutes {
   /**
    * E92 (R14-ADV-6), E107 (R15-ADV-3): the substitutes whose records were listed so far, with those records, for this use
    * of the check view only (see use), so that a report made from it and thrown later (D9) names each record's substitute,
-   * and another use counts afresh. (Created when records are first listed: the check itself, before a use, lists none.)
-   * E110: while the records listed are those of one substitute (`_first`), as a rule, nothing is kept per record. E121
-   * (R17V-2): once those of another substitute are listed, each record's substitute is kept in a map (`_owners`, with
-   * those of `_first`), so that listing the records of many substitutes costs O(1) per record, as at cd1bf29.
+   * and another use counts afresh.
    */
-  private _first?: Checked
-  private _firstRecords?: readonly CallRecord[]
-  private _owners?: Map<CallRecord, Checked>
+  private readonly _owners = new Map<CallRecord, Checked>()
 
   constructor(private readonly route: CheckRoute, private _end?: RouteEnd) { }
 
@@ -3104,7 +2949,6 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * shares, made through other calls than the concrete one the check goes through.
    */
   public uncountedFor(key: PropertyKey): CallRecord[] {
-    if (!this.route.steps.some(step => step.shared !== undefined)) return []
     const counted = new Set(this.checked)
     const listed = followRoute(this.route, undefined, 'list')
     const uncounted = listed.checked.filter(checked => !counted.has(checked))
@@ -3118,59 +2962,26 @@ class MatchedSubstitutes implements SeveralSubstitutes {
    * has the same owner.)
    */
   private listRecords(checkedList: readonly Checked[], key: PropertyKey, except: ReadonlySet<CallRecord> | undefined, since: number): CallRecord[] {
-    let records: CallRecord[] | undefined
+    const records: CallRecord[] = []
     let several = false
-    // (indexed loops, and the owners noted in the same loop: a check of many substitutes runs this once or twice, mostly
-    // before it is optimized)
-    for (let index = 0; index < checkedList.length; index++) {
-      const checked = checkedList[index]
+    for (const checked of checkedList) {
       if (isForeign(checked)) continue
       const at = recordedAt(checked, key)
       if (at === undefined) continue
-      let own = at.state.recordsFor(at.key)
-      if (except !== undefined) own = own.filter(record => !except.has(record))
       // (E123: not those received before a clear further up the route, see followRoute)
-      if (since > 0) own = own.filter(record => record.seq > since)
+      const own = at.state.recordsFor(at.key).filter(record => except?.has(record) !== true && record.seq > since)
       if (own.length === 0) continue
-      const owners = this._owners
-      if (owners === undefined) this.noteOwner(checked, own)
-      if (records === undefined) {
-        records = own
-        if (owners !== undefined) for (let at = 0; at < own.length; at++) owners.set(own[at], checked)
-      } else {
-        if (!several) records = records.slice()
-        several = true
-        for (let at = 0; at < own.length; at++) {
-          const record = own[at]
-          if (owners !== undefined) owners.set(record, checked)
-          records.push(record)
-        }
+      if (records.length > 0) several = true
+      for (const record of own) {
+        this._owners.set(record, checked)
+        records.push(record)
       }
     }
-    if (records === undefined) return []
     return several ? records.sort((a, b) => a.seq - b.seq) : records
   }
 
-  /** E121: notes that `records` (listed now) belong to `checked` (see _first), while no map is kept. */
-  private noteOwner(checked: Checked, records: readonly CallRecord[]): void {
-    // (a check lists the records of the same member again when it is invoked, see assertionMember)
-    if (this._first === undefined || this._first === checked) {
-      this._first = checked
-      this._firstRecords = records
-      return
-    }
-    const owners = this._owners = new Map<CallRecord, Checked>()
-    const first = this._first
-    const firstRecords = this._firstRecords!
-    for (let at = 0; at < firstRecords.length; at++) owners.set(firstRecords[at], first)
-    this._firstRecords = undefined
-    for (let at = 0; at < records.length; at++) owners.set(records[at], checked)
-  }
-
   public ownerOf(record: CallRecord): { readonly path: string } | undefined {
-    // (the records listed are those of one substitute, as a rule)
-    const owners = this._owners
-    const owner = owners === undefined ? this._first : owners.get(record)
+    const owner = this._owners.get(record)
     return owner === undefined || isForeign(owner) ? undefined : owner
   }
 }

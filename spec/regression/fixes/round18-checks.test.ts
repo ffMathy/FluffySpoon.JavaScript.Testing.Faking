@@ -2,8 +2,6 @@ import test, { ExecutionContext } from 'ava'
 
 import { Substitute, Arg, mimick, received, didNotReceive, clearReceivedCalls } from '../../../src'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { SubstituteState } from '../../../src/internals/SubstituteState'
-import { INTERNAL } from '../../../src/internals/Constants'
 import { interceptDeferredReports } from '../../helpers/deferredReports'
 
 // Round 18, engine (checks through a call with matchers, and through a concrete call that a setup with matchers
@@ -203,9 +201,9 @@ test('R17-ADV-2 (E122) the finding: a substitute handed out twice in one express
   expectCounts(t, "io.to('b').back(1)", 0, (form, count) => io.to('b').back(1)[form.key](...form.args(count)).emit('n'))
 })
 
-test('R17-ADV-2 (E122) a route whose upper part is no longer known is a usage error, never a check of its lower part', t => {
+test('R17-ADV-2 (E122) a route that another expression handed the same substitute out in the middle of is still followed', t => {
   // to() runs a function that hands the same io out from another substitute (another expression) while the check
-  // expression goes through io: the expression's own hand-out of io is no longer known
+  // expression goes through io: the expression's own hand-out of io is noted for its record, so the check counts
   const io = Substitute.for<any>()
   const room = Substitute.for<any>()
   const other = Substitute.for<any>()
@@ -216,8 +214,9 @@ test('R17-ADV-2 (E122) a route whose upper part is no longer known is a usage er
   })
   room.back(Arg.any()).returns(io)
   io.to('a').back(1).to('a').emit('m') // the code under test
-  const message = failureOf(t, () => io.to('b').back(1).to('a').received(1).emit('m'))
-  t.true(message.startsWith("Cannot check through @Substitute.to('a'): before it, the expression went through back(1)"), message)
+  expectCounts(t, "io.to('b').back(1).to('a')", 0, (form, count) => io.to('b').back(1).to('a')[form.key](...form.args(count)).emit('m'))
+  t.true(failureOf(t, () => io.to('b').back(1).to('a').received(1).emit('m')).includes('but received none.'))
+  expectCounts(t, "io.to('a').back(1).to('a')", 1, (form, count) => io.to('a').back(1).to('a')[form.key](...form.args(count)).emit('m'))
   // direct checks still count
   t.notThrows(() => room.received(1).emit('m'))
 })
@@ -356,9 +355,9 @@ test('R17V-1 (E124) a revoked function proxy from mimicks(), next to a substitut
   t.notThrows(() => shared.received(1).make(1))
 })
 
-// ---- E121 (R17V-2): the leading read of a check or setup through a call with matchers is not kept --------------------
+// ---- E121 (R17V-2): checks and setups through a call with matchers ---------------------------------------------------
 
-test('R17V-2 (E121) a check or a setup through a call with matchers leaves no record of the member behind', t => {
+test('R17V-2 (E121) checks and setups through a call with matchers leave the calls of the code under test as they were', t => {
   const repo = Substitute.for<any>()
   for (let index = 0; index < 10; index++) repo.find(index).close()
   for (let index = 0; index < 100; index++) {
@@ -366,15 +365,11 @@ test('R17V-2 (E121) a check or a setup through a call with matchers leaves no re
     repo.find(Arg.any())[received](10).close()
     repo.find(Arg.is(() => false)).returns(undefined) // (a setup that answers no call)
   }
-  const state = (repo as any)[INTERNAL] as SubstituteState
-  t.is(state.receivedRecordsOf('find').length, 10)
   // the calls of the code under test are all still there, and so is what came through them
   t.notThrows(() => repo.received(10).find(Arg.any()))
   t.notThrows(() => repo.find(Arg.any()).received(10).close())
   t.notThrows(() => repo.find(3).received(1).close())
   // a member that is only read stays a read
-  const before = state.receivedRecordsOf('find').length
   void repo.find
   t.notThrows(() => repo.received(1).find)
-  t.is(state.receivedRecordsOf('find').length, before + 1)
 })

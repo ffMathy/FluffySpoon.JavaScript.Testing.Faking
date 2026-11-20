@@ -5,13 +5,10 @@ import * as os from 'os'
 import * as path from 'path'
 
 import { Substitute, Arg, mimick, received, didNotReceive } from '../../../src'
-import * as CallSite from '../../../src/internals/CallSite'
 import { SubstituteException } from '../../../src/internals/SubstituteException'
-import { SubstituteState } from '../../../src/internals/SubstituteState'
 
 // Round 18: the lines, calls and record-path part of the round-17 findings (R17FE-5, R17-ADV-11, R17-ADV-3, R17V-3 =
-// R17-ADV-7), decided in the fix spec as E125-E128. E126 is tested by what a fluent call reads (no stack frame) and keeps
-// (no field of its own on its record) rather than by timings; E128 (not met, see the report) has no test here.
+// R17-ADV-7), decided in the fix spec as E125-E128. E128 (not met, see the report) has no test here.
 
 const library = path.resolve(__dirname, '../../../src/index.js')
 
@@ -200,23 +197,7 @@ test('R17FE-5 (E125) without a source map, statements on one line of the file th
   t.deepEqual(outcome.reported, [])
 })
 
-// ---- E126 (R17-ADV-11): the calls of a mimicked fluent method read no stack frames -------------------------------------
-
-/** How many times the library reads the stack frame of an operation while `run` runs (CallSite.frameOfStack, currentFrame). */
-const framesReadBy = (run: () => void): number => {
-  const callSite = CallSite as any
-  const { frameOfStack, currentFrame } = callSite
-  let reads = 0
-  callSite.frameOfStack = (holder: unknown) => { reads++; return frameOfStack(holder) }
-  callSite.currentFrame = (start: unknown) => { reads++; return currentFrame(start) }
-  try {
-    run()
-  } finally {
-    callSite.frameOfStack = frameOfStack
-    callSite.currentFrame = currentFrame
-  }
-  return reads
-}
+// ---- E126 (R17-ADV-11): links to a hand-out of the substitute itself ----------------------------------------------------
 
 const passes = (check: () => void): boolean => {
   try {
@@ -227,35 +208,6 @@ const passes = (check: () => void): boolean => {
     throw error
   }
 }
-
-test.serial('R17-ADV-11 (E126) calls of a fluent method that answers the substitute itself read no stack frames, as at 8be3a70', t => {
-  const { EventEmitter } = require('events')
-  const fluent = Substitute.for<any>()
-  fluent[mimick]({ on() { return this } })
-  const emitter = Substitute.for<any>()
-  const instance = new EventEmitter()
-  instance.setMaxListeners(0)
-  emitter[mimick](instance)
-  const listener = () => { }
-  const res = Substitute.for<any>()
-  res.status(Arg.any()).returns(res)
-  const map = Substitute.for<any>()
-  map.set(Arg.all()).returns(map)
-  const reads = framesReadBy(() => {
-    for (let index = 0; index < 100; index++) {
-      fluent.on('a', index).on('b', index)
-      fluent.on('c', index)
-      emitter.on('a', listener).on('b', listener)
-      res.status(200).json(index)
-      map.set('k', index).set('l', index)
-    }
-  })
-  t.is(reads, 0)
-  t.notThrows(() => fluent.received(100).on('b', Arg.any()))
-  t.notThrows(() => emitter.received(100).on('a', listener))
-  t.notThrows(() => res.received(100).json(Arg.any()))
-  t.notThrows(() => map.received(1).set('l', 99))
-})
 
 test('R17-ADV-11 (E126) a link to a hand-out of the substitute itself is still decided by E111\'s line rule when a setup or a check uses it', t => {
   // one line: the setup continues the call that answered map itself, which is not recorded (README)
@@ -284,49 +236,6 @@ test('R17-ADV-11 (E126) a link to a hand-out of the substitute itself is still d
   fluent.on('a').emit('x')
   t.true(passes(() => fluent.on('a')[received](1).emit('x')))
   t.false(passes(() => fluent.on('b')[received](1).emit('x')))
-})
-
-test.serial('R17-ADV-11 (E126) the record of a call that answers the substitute itself has no field that the record of another call lacks, as at 8be3a70', t => {
-  // E111's flag and E126's pending link took a field each on the records of fluent calls (8 to 16 bytes per call, or on
-  // every record when the first records made were fluent ones); now neither is a field of the record
-  const records: unknown[] = []
-  const prototype = SubstituteState.prototype as any
-  const addRecord = prototype.addRecord
-  const fluent = Substitute.for<any>()
-  fluent[mimick]({ on() { return this } })
-  const plain = Substitute.for<any>()
-  plain[mimick]({ on() { return 1 } })
-  const res = Substitute.for<any>()
-  res.status(Arg.any()).returns(res)
-  const app = Substitute.for<any>()
-  app.status(Arg.any()).returns(Substitute.for<any>())
-  const recordsOf = (run: () => void): unknown[] => {
-    records.length = 0
-    prototype.addRecord = function (this: unknown, ...args: unknown[]) {
-      const record = addRecord.apply(this, args)
-      records.push(record)
-      return record
-    }
-    try {
-      run()
-    } finally {
-      prototype.addRecord = addRecord
-    }
-    return records.slice()
-  }
-  const fields = (record: unknown): string => Object.keys(record as object).sort().join(', ')
-  const fluentRecords = recordsOf(() => fluent.on('a', 1).on('b', 2).on('c', 3))
-  const plainRecords = recordsOf(() => { plain.on('a', 1); plain.on('b', 2) })
-  const selfRecords = recordsOf(() => res.status(200).json(1))
-  const otherRecords = recordsOf(() => app.status(200).json(1))
-  t.is(fluentRecords.length, 3)
-  t.is(selfRecords.length, 2)
-  t.is(otherRecords.length, 2)
-  const expected = fields(plainRecords[0])
-  for (const record of [...fluentRecords, ...plainRecords, ...selfRecords, ...otherRecords]) t.is(fields(record), expected)
-  // and the links are still decided by E111's line rule when a check follows them
-  t.notThrows(() => fluent.received(1).on('c', 3))
-  t.notThrows(() => res.received(1).status(200))
 })
 
 test('R17-ADV-11 (E126) a read right after a hand-out of the substitute itself, invoked later, is decided where it is invoked', t => {

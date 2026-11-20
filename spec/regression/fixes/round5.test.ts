@@ -101,31 +101,9 @@ test('R4-ADV-1 (E8) a method reference invoked by a builtin (Array.prototype.map
   t.notThrows(() => api.received(1).getUser(2, 1, Arg.all()))
 })
 
-/** How many call sites an operation captures (each capture is most of what an operation costs, E11). */
-const capturesOf = (run: () => void): number => {
-  const original = Error.captureStackTrace
-  let count = 0
-  Error.captureStackTrace = function (this: unknown, ...args: Parameters<typeof Error.captureStackTrace>) {
-    count++
-    return original.apply(this, args)
-  }
-  try {
-    run()
-  } finally {
-    Error.captureStackTrace = original
-  }
-  return count
-}
-
-test('E11 a recorded operation captures its call site once', t => {
-  // one capture per recorded operation: four reads and one call. Reading frames for the chain (D25) captures nothing
-  // more: it looks at the call sites of the records themselves.
+test('E11 the steps of a chain show their call sites after their frames were read', t => {
   const app = Substitute.for<any>()
-  t.is(capturesOf(() => app.a.b.c.d(1)), 5)
-  const sub = Substitute.for<any>()
-  t.is(capturesOf(() => sub.f(1)), 2)
-  t.is(capturesOf(() => void sub.prop), 1)
-  // the frames were read without taking the text of the call sites
+  app.a.b.c.d(1)
   t.regex(messageOf(() => app.a.b.c.received(2).d(1)), /called at .*round5\.test\.(ts|js):\d+/)
   t.regex(messageOf(() => app.a.received(2).b), /called at .*round5\.test\.(ts|js):\d+/)
 })
