@@ -2,7 +2,7 @@ import { inspect, InspectOptions, types } from 'util'
 
 import { constants, isSubstituteProxy, substituteMarker } from '../shared'
 import { AutoEntry, Substitution, SubstituteState } from './SubstituteState'
-import { codeMember, pathArguments, recordLabelContext, recordPath, relativePath, relativeRecordPath } from './Paths'
+import { codeMember, pathArguments, recordPath, relativePath, relativeRecordPath } from './Paths'
 import { CallRecord, continuesSelfHandOut, currentSequence, pairReadings, retract } from './CallRecord'
 import { Frame, StackHolder, captureStack, currentFrame, sameExpression } from './CallSite'
 import { RecordedArguments, isComparing } from './RecordedArguments'
@@ -43,9 +43,9 @@ type ReadSource = typeof TAKE_PENDING_READ | CallRecord | undefined
 /**
  * The target of the short-lived proxies (assertions, configure views, deferred reads). util.inspect inspects the
  * target of a proxy (it does not trigger traps), so the target carries the printer: it is a bound function that
- * returns its printer, and its inspect.custom hook is inherited from a shared prototype (E58: cheaper than a hook of its
- * own per view). It can be constructed (E23), and it has no non-configurable `prototype`, so that the traps can hide
- * its own properties (E25, see viewTraps).
+ * returns its printer, and its inspect.custom hook is inherited from a shared prototype (E58). It can be constructed
+ * (E23), and it has no non-configurable `prototype`, so that the traps can hide its own properties (E25, see
+ * viewTraps).
  */
 /* E40: a neutral name for util.inspect without custom inspection (see returnThis). */
 const viewFunction = function substitute(this: Printer): Printer { return this }
@@ -198,9 +198,9 @@ const andMore = (hidden: number): string[] => hidden > 0 ? [`    … and ${hidde
  * The received calls and setups of a substitute and (E24) of its auto-substitutes, which are shown under their paths
  * relative to it (`logger.info('started')`, `logger.level => returns(3)`): the calls in the order they were made, the
  * setups in the order they were configured. An empty list means that there is nothing to show.
- * E35: the auto-substitutes are visited without recursion, at most MAX_NESTED_LINES of their calls and setups are
- * shown, and only the paths of the lines shown are built (bounded, see Paths), so a deep chain of auto-substitutes (a
- * list walk, a fluent builder in a loop) prints quickly and small.
+ * E35: the auto-substitutes are visited without recursion, so a deep chain of auto-substitutes (a list walk, a fluent
+ * builder in a loop) prints without overflowing the stack, and at most MAX_NESTED_LINES of their calls and setups are
+ * shown, under bounded paths (see Paths).
  */
 const stateLines = (state: SubstituteState, colors: boolean): string[] => {
   const records: Array<{ record: CallRecord, owner: SubstituteState }> = []
@@ -219,8 +219,7 @@ const stateLines = (state: SubstituteState, colors: boolean): string[] => {
   const prefixOf = (owner: SubstituteState): string => relativePath(owner, state)
   // E99 (R15FE-5): received calls are shown with the call that a substitute shared by a setup with matchers was handed
   // out to, when there is one (see Paths.relativeRecordPath); setups keep the matchers
-  const labels = recordLabelContext(RecordedArguments.literalsEqual)
-  const recordPrefixOf = (owner: SubstituteState): string => relativeRecordPath(owner, state, labels)
+  const recordPrefixOf = (owner: SubstituteState): string => relativeRecordPath(owner, state, RecordedArguments.literalsEqual)
 
   const lines: string[] = []
   // D26: an invocation through call/apply is shown once, as its direct-call reading
@@ -445,8 +444,7 @@ const CONFIGURED: object = Object.freeze({ answeredBy: 'a configured value' })
 /**
  * E88: what gave the configured answer that was given last: its setup (set by execute once it has its value, after the
  * setup's own code ran, which can give answers of its own) or MIMICKED (see fromMimicked). Read right after the answer,
- * and E110 (the docs agent's E99 retention) taken then (see takeAnswerSource): a setup kept here would keep its values
- * alive, and a substitute among them the records it handed out last, until the next configured answer anywhere.
+ * and taken then (E110, see takeAnswerSource).
  */
 let answerSource: Substitution | object | undefined
 
@@ -540,9 +538,9 @@ const handOutShared = (face: Face, record: CallRecord, owner: SubstituteState, s
 }
 
 /*
- * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. To keep them small,
- * all of them share one handler, and the target of each one is a function that returns its face. util.inspect looks
- * at the target of a proxy without triggering traps, so the printer is inherited from a shared prototype.
+ * D30: a substitute, and every auto-substitute (one per distinct unconfigured call), is a proxy. All of them share one
+ * handler, and the target of each one is a function that returns its face. util.inspect looks at the target of a
+ * proxy without triggering traps, so the printer is inherited from a shared prototype.
  */
 type FaceTarget = () => Face
 
@@ -574,11 +572,10 @@ const faceTargetPrototype = Object.create(Function.prototype, {
 
 /*
  * E55 (R9-ADV-2): the library tells its own proxies (substitutes and auto-substitutes of this copy) apart from other
- * values by the prototype of their target, faceTargetPrototype, which costs nothing per auto-substitute. The code under
- * test can replace that prototype (`Object.setPrototypeOf(sub, Repo.prototype)`, the usual trick to pass an
- * `instanceof Repo` check); the proxies for which it did that are recognised by identity instead (see the
- * setPrototypeOf trap), so they keep every symbol API, isSubstituteProxy, printing and JSON. An object that merely
- * inherits from a substitute (E46) is never one of them.
+ * values by the prototype of their target, faceTargetPrototype. The code under test can replace that prototype
+ * (`Object.setPrototypeOf(sub, Repo.prototype)`, the usual trick to pass an `instanceof Repo` check); the proxies for
+ * which it did that are recognised by identity instead (see the setPrototypeOf trap), so they keep every symbol API,
+ * isSubstituteProxy, printing and JSON. An object that merely inherits from a substitute (E46) is never one of them.
  */
 const reprototyped = new WeakSet<object>()
 
@@ -650,8 +647,8 @@ const looksAt = (subject: Face | object): boolean =>
   isLooked(subject instanceof AutoEntry ? subject.proxy : subject instanceof SubstituteState ? proxyOfState(subject) : subject)
 
 /*
- * E11: capturing a call site is what an operation costs most, and the cost grows with every frame between the capture
- * and the trap function it starts from, so the traps capture it themselves, and only for operations that are recorded.
+ * E11: the traps capture the call site themselves (the stack starts at the code that made the operation), and only for
+ * operations that are recorded.
  */
 const faceHandler: ProxyHandler<FaceTarget> = {
   get: function get(target: FaceTarget, property: PropertyKey, receiver: unknown) {
@@ -907,12 +904,10 @@ const defineOnReceiver = (receiver: object, property: PropertyKey, value: unknow
   return Reflect.defineProperty(receiver, property, { value, writable: true, enumerable: true, configurable: true })
 }
 
-// bound to the face: a bound function is smaller than a closure and its context
 /*
- * E40 (R7FE-7): util.inspect without custom inspection (node:assert's messages) shows the target of a proxy, a bound
- * function named after the function it is bound to. A neutral name: `[Function: bound substitute]`. (Naming each target
- * after its path, or renaming the function with defineProperty, costs memory for every auto-substitute: 160 to 240
- * bytes per unconfigured call, measured on Node.js 22 and 24.)
+ * The target of a face's proxy is this function bound to the face. E40 (R7FE-7): util.inspect without custom
+ * inspection (node:assert's messages) shows the target of a proxy, a bound function named after the function it is
+ * bound to. A neutral name: `[Function: bound substitute]`.
  */
 const returnThis = function substitute(this: Face): Face { return this }
 
@@ -925,7 +920,7 @@ const faceHas = (face: Face, key: PropertyKey): boolean => {
   if (isSpecialProperty(key)) return false
   const state = face instanceof AutoEntry ? face.materializedState : face
   if (state === undefined) return false
-  // E35: O(1); the 'auto' registrations of nested setups and matcher chains are not setups (see isConfiguredKey)
+  // E35: the 'auto' registrations of nested setups and matcher chains are not setups (see isConfiguredKey)
   return state.isConfiguredKey(key) || (state.mimicked !== undefined && hasMember(state.mimicked.instance, key))
 }
 
@@ -995,7 +990,7 @@ const faceGet = (face: Face, property: PropertyKey, stackStart: Function): any =
   return REAL_READ
 }
 
-/** `sub.received(n).member` (see faceGet; a function of its own, which keeps faceGet small for the hot path). */
+/** `sub.received(n).member` (see faceGet). */
 const stringCheckMember = (entry: AutoEntry, property: PropertyKey, chainHead: () => CallRecord | undefined, stackStart: Function): any => {
   // E48: `sub.received(n)` is followed by something (a check, or a setup of a member called received)
   const opening = useStringCheck(entry)
@@ -1290,11 +1285,7 @@ const peekBind = (face: Face, rawArgs: any[], thisArg: unknown, boundArgs: any[]
   return answer !== NOT_CONFIGURED ? answer : createBoundProxy(face, memberState.callEntry('bind', rawArgs), thisArg, boundArgs)
 }
 
-/*
- * E100: the peeks of a substitute that the look at the arguments of a real call looks at (see lookedPeek), as functions
- * of their own: a closure in the traps, invoke and the call/apply helpers themselves would make every operation allocate
- * its context, also when nothing is looked at.
- */
+/* E100: the peeks of a substitute that the look at the arguments of a real call looks at (see lookedPeek). */
 const lookedGet = (state: SubstituteState, key: PropertyKey): any => lookedPeek(() => peekGet(state, key))
 const lookedCall = (state: SubstituteState, key: PropertyKey, args: any[], self: Self): any => lookedPeek(() => peekCall(state, key, args, self))
 const lookedExecute = (substitution: Substitution): any => lookedPeek(() => peekExecute(substitution))
@@ -2656,7 +2647,7 @@ const notSubstituteError = (through: string, state: SubstituteState, record: Cal
  * Paths.recordPath), as the listings of received calls show it.
  */
 const recordMemberPath = (state: SubstituteState, key: PropertyKey): string => {
-  const path = state.owner === undefined ? state.path : recordPath(state.owner, recordLabelContext((a, b) => RecordedArguments.literalsEqual(a, b)))
+  const path = state.owner === undefined ? state.path : recordPath(state.owner, RecordedArguments.literalsEqual)
   return key === SELF ? path : `${path}.${keyToString(key)}`
 }
 

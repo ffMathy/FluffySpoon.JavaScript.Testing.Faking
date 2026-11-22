@@ -1,6 +1,4 @@
 import { inspect, InspectOptions, isDeepStrictEqual } from 'util'
-// (from the module itself rather than '../shared', whose re-exports are getters in CommonJS output: the matcher search
-// runs on the arguments of every call, and a getter per lookup cost more than E75's own check)
 import {
   MatcherKind, argumentKindOf, argumentsAreEquivalent, evaluateMatcher, foreignMatcherKind, foreignMatcherOf, isAllArguments,
   isArgMatcher, isArgumentMatcher, matcherFactoryOf, matcherKindOf

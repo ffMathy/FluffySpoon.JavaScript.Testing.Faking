@@ -76,7 +76,8 @@ test('R4-ADV-2 (E9) the search for nested matchers finds them in a shared contai
   t.is(repository.save([{ user: { role: 'admin' } }, { user: { role: 'guest' } }]), 'saved')
   t.not(repository.save([{ user: { role: 1 } }, { user: { role: 'guest' } }]), 'saved')
 
-  // in an array of 1,000 objects, each object is searched (README "Matchers inside objects and arrays")
+  // in an array of 1,000 objects, the matcher in the last one is found (README "Matchers inside objects and arrays":
+  // every array and plain object is searched, whatever its size)
   const rows = Array.from({ length: 1000 }, (_, index): Record<string, unknown> => ({ id: index, a: 1, b: 2, c: 3, d: 4 }))
   rows[999] = { ...rows[999], id: Arg.any() }
   repository.import(rows).returns('imported')

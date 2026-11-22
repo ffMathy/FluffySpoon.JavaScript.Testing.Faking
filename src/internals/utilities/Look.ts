@@ -17,7 +17,7 @@ import { ArgumentLook, libraryGuard } from './Guard'
  * The pass that matches a real call against the setups of its member opens one look for all of its matchers (see
  * CallSubstitutions.match), and the record path asks it whether the substitute an operation is made on is among the
  * values looked at (see isLooked). The arguments are walked the first time an operation on a substitute happens during
- * the look (E109: once per look), and each value a looked substitute answers when it answers it.
+ * the look (once per look), and each value a looked substitute answers when it answers it.
  */
 
 /** How deep the walk goes into a value, and how far up the prototype chain of an object it looks for a substitute. */

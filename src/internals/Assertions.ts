@@ -3,7 +3,7 @@ import { inspect, types } from 'util'
 import { AutoEntry, SubstituteState } from './SubstituteState'
 import { RecordedArguments } from './RecordedArguments'
 import { SubstituteException, ListedCall, ExpectedKind, RecordLabels } from './SubstituteException'
-import { RecordLabelContext, SameArguments, codeMember, codePath, recordLabelContext, recordPath, sharedNotes } from './Paths'
+import { SameArguments, codeMember, codePath, recordPath, sharedNotes } from './Paths'
 import { CallRecord } from './CallRecord'
 import { StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
@@ -56,19 +56,16 @@ const entryOf = (substitute: { readonly path: string } | undefined): AutoEntry |
  * E99 (R15FE-5): the path of a substitute as its received calls are shown: with the call that a substitute shared by a
  * nested setup through a call with matchers was handed out to, when there is one (see Paths.recordPath).
  */
-const recordPathOf = (substitute: { readonly path: string }, context: RecordLabelContext): string => {
+const recordPathOf = (substitute: { readonly path: string }, same: SameArguments): string => {
   const entry = entryOf(substitute)
-  return entry === undefined ? substitute.path : recordPath(entry, context)
+  return entry === undefined ? substitute.path : recordPath(entry, same)
 }
 
 /** E99: how a failure message shows the substitutes of the records it lists (see SubstituteException.RecordLabels). */
-const recordLabels = (subject: CheckSubject): RecordLabels => {
-  const context = recordLabelContext(sameArguments)
-  return {
-    path: owner => recordPathOf(owner ?? subject, context),
-    notes: owners => sharedNotes(owners.map(owner => entryOf(owner ?? subject)), context)
-  }
-}
+const recordLabels = (subject: CheckSubject): RecordLabels => ({
+  path: owner => recordPathOf(owner ?? subject, sameArguments),
+  notes: owners => sharedNotes(owners.map(owner => entryOf(owner ?? subject)), sameArguments)
+})
 
 /** received(n): n must be omitted or be a non-negative safe integer. received(0) is didNotReceive(). */
 export const validateExpectedCount = (count: unknown, stackStart?: Function): ExpectedCount => {
@@ -125,8 +122,7 @@ const asHints = (hint: string | undefined): string[] | undefined => hint === und
 
 /**
  * E97: how many places fluentChainHint names, at most. Like a printout of a substitute (E35), its search walks the
- * auto-substitutes without recursion and builds only the paths it shows (bounded, see Paths); it runs only when a check
- * fails.
+ * auto-substitutes without recursion, and the paths it shows are bounded (see Paths).
  */
 const FLUENT_PATHS_SHOWN = 3
 /** E97: and the characters of each path it names, at most (each argument in a path is bounded, but a path has many). */
@@ -181,8 +177,7 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   }
   if (found.length === 0) return undefined
   // (E99: as their records are shown, with the call that a substitute shared by a setup with matchers was handed out to)
-  const context = recordLabelContext(sameArguments)
-  const paths = found.map(state => `${truncateText(`${recordPathOf(state, context)}.${keyToString(key)}`, FLUENT_PATH_CHARACTERS)}(...)`)
+  const paths = found.map(state => `${truncateText(`${recordPathOf(state, sameArguments)}.${keyToString(key)}`, FLUENT_PATH_CHARACTERS)}(...)`)
   if (more) paths.push('more')
   const lead = `${keyToString(key)} was not called on ${subject.path} itself, but on ${paths.length === 1 ? 'a substitute' : 'substitutes'} further down: ${andList(paths)}.`
   // E108: the steps from the checked substitute (one of the roots) down to the first place named
@@ -199,11 +194,11 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   const received = `received(${count === undefined ? '' : count})`
   if (steps.some(step => step.kind !== 'call' || step.specifiesMatchers)) {
     // E112: written as code, with the call a shared substitute was handed out to when there was one (see codePath)
-    const expression = codePath(place.owner, context, false, FLUENT_PATH_CHARACTERS, true)
+    const expression = codePath(place.owner, sameArguments, false, FLUENT_PATH_CHARACTERS, true)
     const member = codeMember(key)
     // E132 (R17-ADV-5): arguments that are not code (see codePath): the path as messages print it, without code
     if (typeof expression !== 'string' && expression.notCode === 'arguments' && member !== undefined) {
-      return `${lead} To check calls there, check that substitute, ${truncateText(recordPathOf(place, context), FLUENT_PATH_CHARACTERS)}, ` +
+      return `${lead} To check calls there, check that substitute, ${truncateText(recordPathOf(place, sameArguments), FLUENT_PATH_CHARACTERS)}, ` +
         `reached with the same arguments, with ${received} on it; its arguments cannot be written as code.`
     }
     if (typeof expression !== 'string' || member === undefined) {
@@ -215,7 +210,7 @@ const fluentChainHint = (subject: CheckSubject, key: PropertyKey, count: Expecte
   // every step is a call: each of those methods (once each, from the top) returns the checked substitute (E112: written
   // as code, with the call that a shared substitute was handed out to, the first of several: all of them answered it;
   // its arguments as paths print them, E132 is for the check remedy above)
-  const parent = state.owner === undefined ? 'sub' : codePath(state.owner, context, true, FLUENT_PATH_CHARACTERS, false)
+  const parent = state.owner === undefined ? 'sub' : codePath(state.owner, sameArguments, true, FLUENT_PATH_CHARACTERS, false)
   const methods: PropertyKey[] = []
   for (let index = steps.length - 1; index >= 0; index--) if (!methods.includes(steps[index].key)) methods.push(steps[index].key)
   const shown = methods.slice(0, FLUENT_METHODS_SHOWN)

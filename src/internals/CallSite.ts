@@ -198,9 +198,8 @@ const mappedLine = (map: SourceMapLike, line: number, column: number): SourceMap
  * the file. A transpiler can put several lines of the source on one line of its output: tsx (esbuild with
  * minifyWhitespace) puts a whole file on one. Without a source map, two statements written on one line of the file that
  * runs are on the same line.
- * Only when the two lines are the same is the source map looked at, which is rare: the rules that ask this only ask it
- * for a call that answered with the substitute it was made on (see the engine's continuesExpression) and for a matcher
- * that threw a usage error (see Assertions' cancelDeferredReportOf).
+ * The rules that ask this ask it for a call that answered with the substitute it was made on (see the engine's
+ * continuesExpression) and for a matcher that threw a usage error (see Assertions' cancelDeferredReportOf).
  */
 export const sameLineAfter = (from: Frame, to: Frame): boolean => {
   const line = from.line

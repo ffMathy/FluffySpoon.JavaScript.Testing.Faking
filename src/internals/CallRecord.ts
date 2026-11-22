@@ -26,7 +26,7 @@ export class CallRecord {
    * D26: an invocation through `x.call(...)` / `x.apply(...)` is recorded once, with two readings: a call of x's
    * member `call` / `apply` with the raw arguments, and a direct call of x. Each reading is a record of its own
    * substitute and member, so that assertions match either one, and each one points to the other. Retracting one
-   * retracts both. (Left undeclared on ordinary records, which then do not carry the fields.)
+   * retracts both.
    */
   public twin?: CallRecord
   /** True on the direct-call reading of such an invocation. */

@@ -51,7 +51,7 @@ export class Substitution {
  * with matching arguments gets the same entry, so nested setups and assertions find each other.
  */
 export class AutoEntry {
-  // D30: the state (records, configuration, nested auto-substitutes) is only allocated when it is needed
+  // D30: the state (records, configuration, nested auto-substitutes), created when it is first used
   private _state?: SubstituteState = undefined
   public proxy: any = undefined
   /** The record of the operation that last handed out this entry's proxy, and the sequence number at that time. */
@@ -206,8 +206,6 @@ export type ConfiguredAnswer = object
 /**
  * Everything the library knows about one substitute (the root, or a cached auto-substitute):
  * the received calls, the configured substitutions, the mimicked instance and the auto-substitutes.
- * Received calls and configured substitutions are kept apart, so that resolving a call never scans
- * the history of received calls.
  */
 export class SubstituteState {
   private readonly _records: CallRecord[] = []
@@ -266,7 +264,7 @@ export class SubstituteState {
   /**
    * E35: whether `key in sub` holds for a setup: the member has a setup of its own (a property or a call, not the
    * 'auto' registrations of nested setups and of matcher chains), or one of its auto-substitutes has one, or mimicks an
-   * instance. O(1): a setup notes its key here and in every substitute above it (noteSetup).
+   * instance. A setup notes its key here and in every substitute above it (noteSetup).
    */
   public isConfiguredKey(key: PropertyKey): boolean {
     return this._configuredKeys !== undefined && this._configuredKeys.has(key)
@@ -372,7 +370,7 @@ export class SubstituteState {
   /**
    * E123 (R17-ADV-12): when the received calls of this substitute were cleared last (the sequence value then; 0 if they
    * never were), so that a check through one of its calls does not count the calls that the substitutes it handed out
-   * received before (see the engine's followRoute). (Left undeclared until a clear.)
+   * received before (see the engine's followRoute).
    */
   private _clearedAt?: number
 

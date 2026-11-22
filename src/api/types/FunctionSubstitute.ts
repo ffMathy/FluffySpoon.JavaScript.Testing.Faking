@@ -32,8 +32,7 @@ type CallReturnType<TFunction, TArguments, TReturnType> =
 // answer, without looking at the parameters. Otherwise it is the union of `UnionReturnTypes`. The choice is an indexed
 // access, as for the kinds in Utilities.ts (`ReturnsKind` is `'same'` or `any`, which selects the number index
 // signature): where a return type involves a type parameter (`(() => T) | (() => string)` in `Box<T>`), TypeScript
-// cannot decide it and uses `'same'`, the union of all return types. The index signature's type is only an object
-// type whose property is computed when it is selected.
+// cannot decide it and uses `'same'`, the union of all return types.
 type UnionReturnType<TFunction, TArguments> = {
   same: { returnType: AllReturnTypes<TFunction> }
   [differs: number]: { returnType: UnionReturnTypes<TFunction, TArguments> }
@@ -359,7 +358,6 @@ type PositionalSignatureOf<A extends any[], R, V extends SubstituteView, F> = (.
 //   literal, a union of them with optional parameters, or `number` with a rest parameter) is greater than `n`. The
 //   nesting stops at the first position the overload does not have. (`A extends [any?]` would be shorter, but
 //   TypeScript 4.0 and 4.1 consider `[string, number?]` assignable to `[any?]`.)
-// (The return types are written inside each signature, where TypeScript only computes them when the signature is used.)
 // Only the last overload has the signature for a single `Arg.all()`, whose result is that of all the overloads
 // (`TOverloads`, see `AllArgumentsResult`): a call with a single `Arg.all()` matches the calls of every overload. The
 // earlier overloads only have the signatures with leading arguments. (Their own signatures for a single `Arg.all()`
@@ -614,8 +612,7 @@ type EachArgumentCountFits<TCount, TArguments> = TArguments extends any[] ? (TCo
 // The return type is inferred from the value types of matcher arguments (`keyof Config` for `Arg.is(key => ...)`,
 // whose type is `Argument<keyof Config> & keyof Config`, R9FE-1, T60): TypeScript cannot infer it from the matcher types
 // themselves when the method uses the type parameter as an index (`Config[K]`), which gave `any`. (Function matchers,
-// `Arg.any('function')`, are kept as they are. Unwrapping the arguments for every call costs less than a second
-// inference after a failed one, which comparisons of such signatures with a method's own generic signature reach.)
+// `Arg.any('function')`, are kept as they are.)
 type CallReturnTypeOf<F, P extends any[], TReturnType> = CallReturnTypeFor<F, P, Extract<MatcherValues<P>, any[]>, TReturnType>
 type CallReturnTypeFor<F, P extends any[], TValues extends any[], TReturnType> =
   F extends (...args: P) => any ? (F extends (...args: TValues) => infer R ? (IsAny<R> extends true ? TReturnType : R) : any) :

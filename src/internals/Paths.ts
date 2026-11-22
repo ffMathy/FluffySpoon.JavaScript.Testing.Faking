@@ -118,11 +118,6 @@ export type SameArguments = (a: readonly unknown[], b: readonly unknown[]) => bo
 /** E99: the calls a shared auto-substitute was handed out to (see handOuts). */
 type HandOuts = { readonly calls: readonly HandOut[], readonly more: number }
 
-/** E99: what showing records with the calls that handed their substitutes out needs: how to compare arguments. */
-export type RecordLabelContext = { readonly same: SameArguments }
-
-export const recordLabelContext = (same: SameArguments): RecordLabelContext => ({ same })
-
 /** E99: how many calls a note of sharedNotes names, at most. */
 const HAND_OUTS_SHOWN = 3
 
@@ -131,17 +126,15 @@ const NO_HAND_OUTS: HandOuts = { calls: [], more: 0 }
 
 /**
  * E99: the received calls (not retracted) that the auto-substitute of a nested setup through a call with matchers was
- * handed out to: the first HAND_OUTS_SHOWN distinct ones (by `context.same`), in the order they were received, and how
- * many calls more there are with other arguments than those (each call is compared with those only, so that this costs
- * no more than HAND_OUTS_SHOWN comparisons per call). None for any other auto-substitute.
+ * handed out to: the first HAND_OUTS_SHOWN distinct ones (by `same`), in the order they were received, and how
+ * many calls more there are with other arguments than those. None for any other auto-substitute.
  */
-export const handOuts = (entry: PathEntry, context: RecordLabelContext): HandOuts => {
+export const handOuts = (entry: PathEntry, same: SameArguments): HandOuts => {
   if (entry.specifiesMatchers !== true) return NO_HAND_OUTS
   const calls: HandOut[] = []
   let more = 0
   const answers = entry.parent.configuredAnswers?.(entry.key)
   if (answers !== undefined) {
-    const same = context.same
     for (const [record, answer] of answers) {
       if (answer !== entry || record.retracted || record.kind !== 'call') continue
       const args = record.args ?? NO_ARGUMENTS
@@ -154,9 +147,9 @@ export const handOuts = (entry: PathEntry, context: RecordLabelContext): HandOut
 }
 
 /** E99: how a member is shown in the path of records (see above). */
-const recordPieces = (context: RecordLabelContext) => (entry: PathEntry): string => {
+const recordPieces = (same: SameArguments) => (entry: PathEntry): string => {
   if (entry.specifiesMatchers === true && entry.kind === 'call') {
-    const { calls } = handOuts(entry, context)
+    const { calls } = handOuts(entry, same)
     if (calls.length === 1) return `${memberOf(entry)}${pathArguments(calls[0].args, entry)}`
   }
   return pieceOf(entry)
@@ -166,13 +159,13 @@ const recordPieces = (context: RecordLabelContext) => (entry: PathEntry): string
  * E99: the path of an auto-substitute as its received calls are shown (`@Substitute.to('room-a')`, see above); its path
  * when it is not below a nested setup through a call with matchers.
  */
-export const recordPath = (entry: PathEntry, context: RecordLabelContext): string =>
-  `${rootLabel(rootOf(entry))}${pathPieces(entry, undefined, recordPieces(context))}`
+export const recordPath = (entry: PathEntry, same: SameArguments): string =>
+  `${rootLabel(rootOf(entry))}${pathPieces(entry, undefined, recordPieces(same))}`
 
 /** E99: relativePath, as the received calls of `state` are shown (see above). */
-export const relativeRecordPath = (state: PathState, ancestor: PathState, context: RecordLabelContext): string => {
+export const relativeRecordPath = (state: PathState, ancestor: PathState, same: SameArguments): string => {
   if (state === ancestor) return ''
-  const pieces = pathPieces(state.owner, ancestor, recordPieces(context))
+  const pieces = pathPieces(state.owner, ancestor, recordPieces(same))
   return pieces.startsWith('.') ? pieces.slice(1) : pieces
 }
 
@@ -182,7 +175,7 @@ export const relativeRecordPath = (state: PathState, ancestor: PathState, contex
  * handed out to, a line each that says so, outermost first: `@Substitute.to(Arg.any{any}) is shared by every call
  * matching it; it was returned to @Substitute.to('room-a'), @Substitute.to('room-b'), @Substitute.to('room-c') and 2 more.`
  */
-export const sharedNotes = (leaves: Iterable<PathEntry | undefined>, context: RecordLabelContext): string[] => {
+export const sharedNotes = (leaves: Iterable<PathEntry | undefined>, same: SameArguments): string[] => {
   const notes: string[] = []
   const seen = new Set<PathEntry>()
   for (const leaf of leaves) {
@@ -193,12 +186,12 @@ export const sharedNotes = (leaves: Iterable<PathEntry | undefined>, context: Re
     }
     for (let index = shared.length - 1; index >= 0; index--) {
       const entry = shared[index]
-      const { calls, more } = handOuts(entry, context)
+      const { calls, more } = handOuts(entry, same)
       if (calls.length < 2) continue
-      const parent = entry.parent.owner === undefined ? undefined : recordPath(entry.parent.owner, context)
+      const parent = entry.parent.owner === undefined ? undefined : recordPath(entry.parent.owner, same)
       const texts = calls.map(call => `${parent ?? rootLabel(entry.parent)}${memberOf(entry)}${pathArguments(call.args, entry)}`)
       const returnedTo = more > 0 ? `${texts.join(', ')} and ${more} more` : `${texts.slice(0, -1).join(', ')} and ${texts[texts.length - 1]}`
-      notes.push(`${recordPath(entry, context)} is shared by every call matching it; it was returned to ${returnedTo}.`)
+      notes.push(`${recordPath(entry, same)} is shared by every call matching it; it was returned to ${returnedTo}.`)
     }
   }
   return notes
@@ -303,7 +296,7 @@ const NOT_CODE_LENGTH: NotCode = { notCode: 'length' }
  * message.
  */
 export const codePath = (
-  leaf: PathEntry | undefined, context: RecordLabelContext, firstHandOut: boolean, limit: number, codeArguments: boolean
+  leaf: PathEntry | undefined, same: SameArguments, firstHandOut: boolean, limit: number, codeArguments: boolean
 ): string | NotCode => {
   const pieces: string[] = []
   let length = 3 // `sub`
@@ -316,7 +309,7 @@ export const codePath = (
     if (entry.kind === 'call') {
       let args = entry.argumentList
       if (entry.specifiesMatchers === true) {
-        const { calls } = handOuts(entry, context)
+        const { calls } = handOuts(entry, same)
         if (calls.length === 1 || (firstHandOut && calls.length > 1)) args = calls[0].args
       }
       const values = args ?? []
