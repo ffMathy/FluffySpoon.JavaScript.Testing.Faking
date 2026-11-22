@@ -292,39 +292,43 @@ export const deepestMatcher = (args: readonly unknown[], limit: number): number 
  * the option: there, keys and entries are in the order in which they print). Getters are not run.
  */
 
-/** The expected arguments with their matchers replaced by the received values at their places (see above). */
-const withReceivedValues = (expected: readonly unknown[], actual: readonly unknown[]): unknown[] => {
-  const ancestors = new Map<object, unknown>()
-  const replaced = (value: unknown, received: { value: unknown } | undefined): unknown => {
+/**
+ * The expected arguments with their matchers replaced by the received values at their places (see above), in containers
+ * at most `depth` levels below an argument: those deeper print as `[Object]` and `[Array]`, whatever they hold.
+ * S-ADV-3: a container that is reached again with the same received container (one that the arguments share, or a
+ * cycle) is copied once, unless it is reached nearer to its argument than where it was copied, where that copy may stop
+ * too early.
+ */
+const withReceivedValues = (expected: readonly unknown[], actual: readonly unknown[], depth: number): unknown[] => {
+  const copies = new Map<object, Map<object, { readonly copy: object, readonly level: number }>>()
+  const replaced = (value: unknown, received: { value: unknown } | undefined, level: number): unknown => {
     if (isArgumentMatcher(value)) return received === undefined ? value : received.value
-    if (typeof value !== 'object' || value === null || types.isProxy(value) || received === undefined) return value
+    if (level > depth || typeof value !== 'object' || value === null || types.isProxy(value) || received === undefined) return value
     // a plain object or an array, where the received call has a container of the same kind
     const other = received.value
     const prototype = Object.getPrototypeOf(value)
     if (!(Array.isArray(value) || prototype === Object.prototype || prototype === null) || typeof other !== 'object' || other === null ||
       types.isProxy(other) || Array.isArray(value) !== Array.isArray(other) || prototype !== Object.getPrototypeOf(other)) return value
-    const ancestor = ancestors.get(value)
-    if (ancestor !== undefined) return ancestor // a cycle
+    let copiesWith = copies.get(value)
+    if (copiesWith === undefined) copies.set(value, copiesWith = new Map())
+    const known = copiesWith.get(other)
+    if (known !== undefined && known.level <= level) return known.copy
     const copy = Array.isArray(value) ? Object.setPrototypeOf([], prototype) : Object.create(prototype)
-    ancestors.set(value, copy)
-    try {
-      for (const key of Reflect.ownKeys(value)) {
-        const descriptor = Object.getOwnPropertyDescriptor(value, key)!
-        if ('value' in descriptor) {
-          const at = Object.getOwnPropertyDescriptor(other, key)
-          descriptor.value = replaced(descriptor.value, at !== undefined && 'value' in at ? { value: at.value } : undefined)
-        }
-        Object.defineProperty(copy, key, descriptor)
+    copiesWith.set(other, { copy, level })
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)!
+      if ('value' in descriptor) {
+        const at = Object.getOwnPropertyDescriptor(other, key)
+        descriptor.value = replaced(descriptor.value, at !== undefined && 'value' in at ? { value: at.value } : undefined, level + 1)
       }
-    } finally {
-      ancestors.delete(value)
+      Object.defineProperty(copy, key, descriptor)
     }
     return copy
   }
   const all = expected.findIndex(isAllArguments)
   const count = all >= 0 ? all : expected.length
   const result: unknown[] = []
-  for (let index = 0; index < count; index++) result.push(replaced(expected[index], index < actual.length ? { value: actual[index] } : undefined))
+  for (let index = 0; index < count; index++) result.push(replaced(expected[index], index < actual.length ? { value: actual[index] } : undefined, 0))
   if (all >= 0) result.push(...actual.slice(all))
   return result
 }
@@ -343,7 +347,8 @@ const comparisonTexts = (args: readonly unknown[], depth: number): [string, stri
  */
 export const leastDifference = (expected: readonly unknown[], actual: readonly unknown[], from: number, to: number): number => {
   try {
-    const compared = withReceivedValues(expected, actual)
+    // (a container `to` levels deep prints its entries, one level deeper it prints as `[Object]` or `[Array]`)
+    const compared = withReceivedValues(expected, actual, to + 1)
     for (let depth = from; depth <= to; depth++) {
       const [printed, sorted] = comparisonTexts(compared, depth)
       const [actualPrinted, actualSorted] = comparisonTexts(actual, depth)
@@ -601,7 +606,9 @@ export const formatBounded = (value: unknown, bounds: PrintBounds, colors: boole
     colors
   }
   if (bounds.breakLength !== undefined) options.breakLength = bounds.breakLength
-  if (sorted) options.sorted = true
+  // (on one line: util.inspect breaks lines by the entries it printed last, before it sorts them, so the same entries in
+  // another order could be laid out differently, S-EQ-2)
+  if (sorted) Object.assign(options, { sorted: true, breakLength: Infinity, compact: true })
   let printable: unknown
   try {
     printable = prepared(value, 0, { bounds, ancestors: new Map(), sorted })
@@ -653,14 +660,13 @@ export const describeOtherReading = (
   return ` via .${String(twin.key)}${formatArguments(twin.args, colors)}`
 }
 
-/** The first "at ..." line of a stack trace, if there is one (there is none with Error.stackTraceLimit = 0). */
+/**
+ * The first "at ..." line of a stack trace, if there is one (there is none with Error.stackTraceLimit = 0). S-ADV-1: it
+ * can be the first line, where an Error.prepareStackTrace writes no "Error" line above the frames.
+ */
 export const firstStackFrame = (stack: string | undefined): string | undefined => {
   if (typeof stack !== 'string') return undefined
-  const lines = stack.split('\n')
-  for (let index = 1; index < lines.length; index++) {
-    if (/^\s*at /.test(lines[index])) return lines[index]
-  }
-  return undefined
+  return stack.split('\n').find(line => /^\s*at /.test(line))
 }
 
 export const plural = (word: string, count: number | undefined) => `${word}${count === 1 ? '' : 's'}`

@@ -8,7 +8,7 @@ import { CallRecord } from './CallRecord'
 import { StackHolder, captureStack, currentFrame, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
 import { SELF, isStringAssertionKey, keyToString } from './Constants'
 import { isSubstituteProxy } from '../shared'
-import { plural, truncateText } from './utilities'
+import { firstStackFrame, plural, truncateText } from './utilities'
 
 /** undefined means "1 or more" */
 export type ExpectedCount = number | undefined
@@ -502,10 +502,8 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
     site,
     error: () => {
       const error = createError()
-      // (as text: its call sites may have been read, see cancelDeferredReportOf)
-      const stack = stackText(site)
-      const frames = typeof stack === 'string' ? stack.split('\n').slice(1, 2).join('\n') : ''
-      if (frames !== '') error.stack = `${error.name}: ${error.message}\n${frames}`
+      const frame = firstStackFrame(stackText(site))
+      if (frame !== undefined) error.stack = `${error.name}: ${error.message}\n${frame}`
       return error
     }
   }
@@ -556,9 +554,8 @@ export const deferDanglingCheck = (state: { readonly path: string }, form: Check
     applies,
     error: () => {
       const error = danglingCheckError(state, form, count)
-      const stack = stackText(site)
-      const frames = typeof stack === 'string' ? stack.split('\n').slice(1, 2).join('\n') : ''
-      error.stack = frames !== '' ? `${error.name}: ${error.message}\n${frames}` : `${error.name}: ${error.message}`
+      const frame = firstStackFrame(stackText(site))
+      error.stack = frame !== undefined ? `${error.name}: ${error.message}\n${frame}` : `${error.name}: ${error.message}`
       return error
     }
   }

@@ -1,4 +1,5 @@
 import { Frame, StackHolder, frameOfStack, sameExpression, sameLineAfter, stackText } from './CallSite'
+import { AutoEntry } from './SubstituteState'
 
 export type RecordKind = 'get' | 'set' | 'call'
 
@@ -42,6 +43,12 @@ export class CallRecord {
   public handedOutItself?: boolean
   /** E111: the hand-out of the substitute itself that this operation came right after, decided again in convertToCall. */
   public afterSelfHandOut?: CallRecord
+  /**
+   * E81 (S-ADV-2): the auto-substitute that this call answered, when nothing configured answered it, so that a check
+   * through a call with matchers counts the calls made on it (see the engine's throughCall), also once an argument of the
+   * call has changed to equal that of another call.
+   */
+  public autoAnswer?: AutoEntry
 
   constructor(
     public kind: RecordKind,

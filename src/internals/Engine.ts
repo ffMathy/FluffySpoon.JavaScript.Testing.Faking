@@ -1211,7 +1211,8 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
           const directEntry = direct.state.callEntry(direct.key, directArgs!)
           directEntry.handOut(memberRecord)
           directAnswers.set(memberRecord, memberState)
-          // E81: the direct reading finds this auto-substitute again from its arguments, the member reading by this note
+          // E81: both readings answered this auto-substitute (the member reading's own is another one)
+          directRecord.autoAnswer = directEntry
           memberState.noteConfiguredAnswer(memberRecord, directEntry)
           return entryProxy(directEntry)
         }
@@ -1219,12 +1220,14 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         // direct call with matchers (`redis(Arg.any())[received](1).toString()`) counts the calls made on it
         const entry = memberState.callEntry(helper, rawArgs)
         entry.handOut(memberRecord)
+        memberRecord.autoAnswer = entry
         if (directRecord.kind === 'call') direct.state.noteConfiguredAnswer(directRecord, entry)
         return entryProxy(entry)
       }
     }
     const entry = memberState.callEntry(helper, rawArgs)
     entry.handOut(memberRecord)
+    memberRecord.autoAnswer = entry
     return entryProxy(entry)
   }
 
@@ -1257,6 +1260,7 @@ const dualHelper = (face: Face, helper: FunctionHelperKey, chainHead: CallRecord
         if (answer !== NOT_CONFIGURED) return answer
         const entry = memberState.callEntry('bind', rawArgs)
         entry.handOut(memberRecord)
+        memberRecord.autoAnswer = entry
         return createBoundProxy(face, entry, thisArg, boundArgs)
       }
   }
@@ -2045,6 +2049,7 @@ const resolveCall = (state: SubstituteState, key: PropertyKey, args: any[], reco
   if (self.newTarget !== undefined) return instanceOf(self.newTarget)
   const entry = state.callEntry(key, args)
   entry.handOut(record)
+  record.autoAnswer = entry
   if (isStringAssertionKey(key) && self.construct !== true) deferStringCheck(state, key, args, entry, record)
   return entryProxy(entry)
 }
@@ -2742,7 +2747,7 @@ type Follow = 'count' | 'list'
 
 /**
  * The substitutes that the received calls of a step's member on `checked` whose arguments match answered: the configured
- * value noted for a call (see handOutConfigured), or else the auto-substitute of its arguments, if it has been created.
+ * value noted for a call (see handOutConfigured), or else the auto-substitute it answered (CallRecord.autoAnswer).
  * E88: a call answered with a value that is not a substitute is a usage error (`through`: the route so far, `start`: where).
  * E99: at a concrete step whose answer is shared (step.shared), a substitute that matching calls answered and calls that do
  * not match were returned as well is a usage error (see sharedSubstituteError); one that only calls that do not match
@@ -2770,7 +2775,7 @@ const throughCall = (checked: readonly Checked[], step: RouteStep, through: () =
         if (sharing && isFaceAnswer(answer)) (others ?? (others = [])).push(record)
         continue
       }
-      if (answer === undefined) answered.add(at.state.existingCallEntry(at.key, record.args ?? []))
+      if (answer === undefined) answered.add(record.autoAnswer)
       else if (isFaceAnswer(answer)) {
         answered.add(checkedOf(answer))
         if (sharing) (shared ?? (shared = new Set())).add(answer)

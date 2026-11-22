@@ -338,8 +338,7 @@ export class SubstituteState {
    * value, the auto-substitute of a nested setup through a call with matchers, a mimicked instance's value), so that a
    * check through a call with matchers can count that substitute's calls. E88 (R14-ADV-5): and what answered a call with
    * any other configured value (see ConfiguredAnswer), so that such a check knows that it cannot count it. An
-   * unconfigured call answers the auto-substitute of its arguments, which is found again from them (existingCallEntry), so
-   * it is not noted.
+   * unconfigured call notes the auto-substitute it answered on its record (CallRecord.autoAnswer).
    */
   public noteConfiguredAnswer(record: CallRecord, answer: ConfiguredAnswer): void {
     this._configuredAnswers.set(record, answer)
@@ -478,14 +477,6 @@ export class SubstituteState {
       list.push(entry)
     }
     return entry
-  }
-
-  /**
-   * E81: the auto-substitute that callEntry gives a call with these actual arguments, if it has been created: the one
-   * that an unconfigured call with them answered.
-   */
-  public existingCallEntry(key: PropertyKey, actual: readonly unknown[]): AutoEntry | undefined {
-    return this._callEntries.get(key)?.find(candidate => candidate.matchesCall(actual))
   }
 
   /** The auto-substitute for a call specification used in a nested setup (`a(Arg.any()).b.returns(1)`). */

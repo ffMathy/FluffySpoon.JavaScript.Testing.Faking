@@ -35,15 +35,21 @@ const NO_MATCH: ArgumentsMatch = { matches: false, predicateThrew: false }
  */
 export const isComparing = (): boolean => libraryGuard.comparing > 0
 
+/**
+ * S-ADV-4: what the getters of the values compared do to substitutes is the library's comparison, not the code under
+ * test's: it leaves no trace, as a matcher's look (E95, `libraryGuard.matching`).
+ */
 const literalEquals = (expected: unknown, actual: unknown): boolean => {
   if (expected === actual) return expected !== 0 || Object.is(expected, actual)
   libraryGuard.comparing++
+  libraryGuard.matching++
   try {
     return isDeepStrictEqual(expected, actual)
   } catch {
     return false
   } finally {
     libraryGuard.comparing--
+    libraryGuard.matching--
   }
 }
 
