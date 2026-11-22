@@ -86,7 +86,7 @@ test('S-ADV-2 (E81) a service that changes a filter after using it: both queries
 // ---- S-ADV-3: a failure message whose expected argument shares containers -----------------------------------------
 
 test('S-ADV-3 a failing check whose expected argument shares containers reports its failure (each shared container is copied once)', t => {
-  // a resolved dependency graph: the packages of a layer share one array of dependencies (2^n paths through n layers)
+  // a resolved dependency graph: the packages of a layer share one array of dependencies (3^n paths through n layers)
   const graph = (version: string, layers: number) => {
     let next: unknown[] = []
     for (let layer = 0; layer < layers; layer++) {
