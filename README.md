@@ -924,7 +924,7 @@ repository.didNotReceive().save({ id: Arg.any(), name: 'bob', roles: [] })
 * `Arg.all()` as the last item of an array matches the remaining items, also none: `['level', Arg.all()]` matches `['level']` and `['level', 1, 2]`. Anywhere else in an array it is a `SubstituteException`. As the value of a key, `Arg.all()` matches any value, but the key must be there. (In TypeScript, `Arg.all()` inside an object or array does not type-check; use `Arg.any()` for a single value.)
 * Only plain objects (created with `{ }` or `Object.create(null)`) and arrays are searched for matchers, and an object with matchers only matches an argument with the same prototype: `{ id: Arg.any() }` does not match a class instance. A matcher inside a class instance, a `Map` or a `Set` is not looked for: it is compared as a value, so such a setup never matches, and the call is an ordinary call. Matchers behind getters are not looked for either. Use `Arg.is()` for the whole argument in these cases.
 * An array that holds a matcher is compared by its items only. Its other keys, such as the `total` of an array of rows, are not compared then: `Object.assign([Arg.any(), 2], { total: 5 })` matches `[1, 2]` and `Object.assign([1, 2], { total: 9 })`, too. An array without a matcher is compared in full, other keys included. Use `Arg.is()` for the whole array to check its other keys along with a matcher.
-* Arrays and objects more than 32 levels below the argument are not searched. Every other array and plain object is searched, whatever its size, each time the argument is passed, and one that several values of one argument refer to, or that refers to itself, is searched once. A matcher that is not found is compared as a value, as above.
+* Each argument is searched for a matcher 32 levels deep: arrays and objects more than 32 levels below the argument are not searched. When that finds no matcher, a matcher further down is not found: it is compared as a value, as above, and the call is an ordinary call. When it finds one, every array and plain object of that argument is searched, at any depth, so a matcher further down in it is used as well: in `{ id: Arg.any(), tree }`, the matchers deep in `tree` count too. The arrays and plain objects are searched whatever their size, each time the argument is passed, and one that several values of one argument refer to, or that refers to itself, is searched once.
 * `String(sub)` shows nested matchers, for example `save({ id: Arg.any{any}, name: 'bob' }) => returns('saved')`.
 
 ## Matchers of test runners
@@ -1014,6 +1014,27 @@ In TypeScript, vitest types its matchers `any`, and so does `@types/jest` for je
 
 ## How arguments are compared
 Arguments that are not matchers are compared with deep strict equality, the rule of `assert.deepStrictEqual` (`util.isDeepStrictEqual`). Objects and arrays are equal when they have the same prototype and their own enumerable properties (with string or symbol keys) are equal. `NaN` equals `NaN`, but `0` and `-0` are different. Where Node.js changed the rule, the library follows the running version: two invalid `Date`s are different up to Node.js 22 and equal from Node.js 24 on, and two cyclic objects whose cycles have a different shape are equal up to Node.js 22 and different from Node.js 24 on. Substitutes are compared by identity and never member by member.
+
+Deep strict equality reads the own enumerable properties of both values, so it runs their getters. What such a getter does to a substitute while the library compares arguments, for a call, a setup or a check, leaves no trace, as a [predicate's look](#matching-specific-arguments) does: its reads, calls and assignments are not recorded, setups still answer them, and they use up no values of a `returns()` or `resolves()` sequence. What the code under test itself does through the getter is recorded as usual.
+
+```js
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
+
+const pricing = Substitute.for()
+pricing.priceOf('A').returns(10, 20)
+// a cart line whose total asks the pricing service
+const line = qty => ({ sku: 'A', qty, get total() { return pricing.priceOf('A') * qty } })
+
+const cart = Substitute.for()
+cart.add(line(1))
+// compared with the first call, which reads total on both lines
+cart.add(line(2))
+cart.received(1).add(line(2))
+
+// the library's comparisons left no trace on pricing
+pricing.didNotReceive().priceOf(Arg.any())
+console.log(pricing.priceOf('A')) // prints 10
+```
 
 Arguments are compared position by position, up to the longer of the two argument lists. An argument that one side leaves out at the end counts as `undefined` there: it matches only a literal `undefined` or a matcher that accepts `undefined`, such as `Arg.any()`, `Arg.any('undefined')`, `Arg.is(value => value === undefined)` or `Arg.any.not('number')`. A predicate that throws for `undefined` (`Arg.is(name => name.length > 0)`) does not match, as always. So `f(1)` and `f(1, undefined)` are the same call: they match the same setups and checks, return the same [auto-substitute](#auto-substitutes-and-nested-members), and are one setup in the [`configure`](#re-configuring-a-call-configure) view, where a setup of one replaces a setup of the other. Arguments with values still count: `f(1)` and `f(1, 2)` are different calls, either way round. This applies to the arguments themselves only. Inside an array or an object, deep strict equality decides, so `[1]` and `[1, undefined]` are different, and so are `{ id: 1 }` and `{ id: 1, name: undefined }`. Failure messages show each call as it was made.
 
@@ -1115,7 +1136,7 @@ console.log(checkedBank.pay(new Money(5)) === 'paid') // prints false
 console.log(checkedBank.pay(new Money(100))) // prints paid
 ```
 
-A value that cannot be read, such as an object with a getter that throws, a revoked proxy, or a proxy whose keys cannot be listed (its `ownKeys` or `getOwnPropertyDescriptor` trap throws), is equal only to itself: Node.js' deep equality throws when it has to read such a value, which counts as unequal, and it does not read a value that it compares with itself. So the same value matches, and so does a new array or object that holds that same value, but another such value never does. This is decided again at each comparison: once the value can be read, it is compared by its contents, like any other value, so it matches a setup made with an equal object, and a setup made while it could not be read matches calls with an equal object from then on. Each comparison with another value can read it again (Node.js' deep equality stops at the first getter that throws): a call compares its arguments with the setups and the earlier calls of its member, and a check with each received call of its member. Such a value is never taken for a [matcher](#matchers-of-test-runners), so it matches by identity next to matchers, too, at the top level and inside objects and arrays: `repository.save(draft, Arg.any())` and `repository.load({ entity: draft, id: Arg.any() })`, where `draft` is a revoked proxy, such as an immer draft after `produce()` has finished, or a proxy whose keys cannot be listed. Such a setup answers, and such a check counts, the calls with that same value. A revoked proxy of a function (`Proxy.revocable(function connection() {}, {})`) is a value like any other as well, also as the value of a setup (`pool.acquire().returns(connection)`, which still answers that proxy after `revoke()`), of a member or of a mimicked instance. It prints as `<Revoked Proxy>`, except on Node.js versions whose `util.inspect()` cannot print a revoked proxy (16.9 and older, for example): there, a call with one prints its arguments as `(...)` in a path, and as `<object>` in a failure message.
+A value that cannot be read, such as an object with a getter that throws, a revoked proxy, or a proxy whose keys cannot be listed (its `ownKeys` or `getOwnPropertyDescriptor` trap throws), is equal only to itself: Node.js' deep equality throws when it has to read such a value, which counts as unequal, and it does not read a value that it compares with itself. So the same value matches, and so does a new array or object that holds that same value, but another such value never does. This is decided again at each comparison: once the value can be read, it is compared by its contents, like any other value, so it matches a setup made with an equal object, and a setup made while it could not be read matches calls with an equal object from then on. Each comparison with another value can read it again (Node.js' deep equality stops at the first getter that throws), so such a getter may be read several times for each call, setup or check that passes the value: a call or a setup is compared with the setups of its member and with the calls that created the member's auto-substitutes (the call of each setup among them), and a check with each received call of its member. Such a value is never taken for a [matcher](#matchers-of-test-runners), so it matches by identity next to matchers, too, at the top level and inside objects and arrays: `repository.save(draft, Arg.any())` and `repository.load({ entity: draft, id: Arg.any() })`, where `draft` is a revoked proxy, such as an immer draft after `produce()` has finished, or a proxy whose keys cannot be listed. Such a setup answers, and such a check counts, the calls with that same value. A revoked proxy of a function (`Proxy.revocable(function connection() {}, {})`) is a value like any other as well, also as the value of a setup (`pool.acquire().returns(connection)`, which still answers that proxy after `revoke()`), of a member or of a mimicked instance. It prints as `<Revoked Proxy>`, except on Node.js versions whose `util.inspect()` cannot print a revoked proxy (16.9 and older, for example): there, a call with one prints its arguments as `(...)` in a path, and as `<object>` in a failure message.
 
 ```js
 const { Substitute, Arg } = require('@fluffy-spoon/substitute')
@@ -1161,10 +1182,10 @@ console.log(repository.find({ entity: locked, page: 2 })) // prints found
 repository.didNotReceive().find({ entity: locked, page: Arg.any() }) // throws SubstituteException
 ```
 
-Setups, received calls and auto-substitutes keep the argument objects themselves, and compare them as they are at the time of each call or check. So when an object changes after it was passed, a setup made with it matches calls with an object equal to its new contents, also inside a new array or object, and no longer calls with an object equal to its old contents. A check compares the arguments of the received calls as they are when the check runs: if the code under test changes an object after passing it, check its new value. And a call gets the auto-substitute of the first earlier call whose arguments are equal to its own at that moment:
+Setups, received calls and auto-substitutes keep the argument objects themselves, and compare them as they are at the time of each call or check. So when an object changes after it was passed, a setup made with it matches calls with an object equal to its new contents, also inside a new array or object, and no longer calls with an object equal to its old contents. A check compares the arguments of the received calls as they are when the check runs: if the code under test changes an object after passing it, check its new value. An [auto-substitute](#auto-substitutes-and-nested-members) keeps the arguments of the call that created it: a call that no setup answers gets the first auto-substitute of its member, in the order they were created, whose arguments are equal to its own at that moment, or a new one. A call that gets an existing auto-substitute creates none, so its own arguments do not count there later. A check through a call with matchers counts the calls of the auto-substitute that each matching received call got, also when that call's arguments changed afterwards:
 
 ```js
-const { Substitute } = require('@fluffy-spoon/substitute')
+const { Substitute, Arg } = require('@fluffy-spoon/substitute')
 
 const repository = Substitute.for()
 const user = { name: 'ann' }
@@ -1183,6 +1204,25 @@ const query = { page: 1 }
 const firstPage = api.list(query)
 query.page = 2
 console.log(api.list({ page: 2 }) === firstPage) // prints true
+
+// a call that gets an existing auto-substitute creates none
+const filter = { page: 3 }
+const thirdPage = api.list({ page: 3 })
+console.log(api.list(filter) === thirdPage) // prints true
+filter.page = 4
+console.log(api.list({ page: 4 }) === thirdPage) // prints false
+
+// the code under test runs two queries, then changes the second filter
+const db = Substitute.for()
+const users = { table: 'users' }
+const orders = { table: 'orders' }
+db.query(users).run()
+db.query(orders).run()
+orders.table = 'users'
+// both calls match now, and each one's auto-substitute was run once
+db.query(Arg.any()).received(2).run()
+// a concrete call gets the first auto-substitute equal to it: the one of users
+db.query({ table: 'users' }).received(1).run()
 ```
 
 ## Match order
@@ -4267,9 +4307,9 @@ test('counts the rows', async () => {
 ## Debuggers
 With "pause on caught exceptions" turned on (VS Code's "Caught Exceptions", Chrome DevTools' "Pause on caught exceptions", WebStorm's "Any exception"), an ordinary test raises no exception inside the library, on every supported Node.js version, whether or not `Error.prepareStackTrace` holds a function, and in `vm` contexts such as jest 30's test environment, vitest's `vmThreads` and `vmForks` pools and `node:vm`: the library reads where each step of a chain was made without throwing. A check that fails throws its `SubstituteException`, which stops such a debugger like any error that a test catches. To skip the stops inside the library, add `**/node_modules/@fluffy-spoon/substitute/**` to the debugger's `skipFiles` (in VS Code's `launch.json`) or to its ignore list (in Chrome DevTools).
 
-A call that a setup answers with an error stops such a debugger once, where the error is thrown, also through `call` and `apply`: for `throws()`, in the library (`execute` in `dist/internals/Engine.js`), and for a `mimicks()` function or a mimicked method that throws, at its own `throw`. An uncaught error of such a call points at that `throw` as well (for `mimicks()`, the line of your function), not at a line of the library that rethrows it. Apart from these, only `new` stops it in the library: once for each `new` call answered by a `mimicks()` function or a mimicked method that cannot be called with `new`, such as an arrow function or a method written as `load() { }` (in `isConstructor`, which finds that out by trying), whether it throws or not.
+A call that a setup answers with an error stops such a debugger once, where the error is thrown, also through `call` and `apply`: for `throws()`, in the library (`execute` in `dist/internals/Engine.js`), and for a `mimicks()` function or a mimicked method that throws, at its own `throw`. An uncaught error of such a call points at that `throw` as well (for `mimicks()`, the line of your function), not at a line of the library that rethrows it. Apart from these, only two things stop it in the library. One is `new`: once for each `new` call answered by a `mimicks()` function or a mimicked method that cannot be called with `new`, such as an arrow function or a method written as `load() { }` (in `isConstructor`, which finds that out by trying), whether it throws or not. The other is an answer that is a revoked proxy of a function (`Proxy.revocable(function connection() {}, {})` after `revoke()`): once for each read or call that gets one, as the value of a setup, the result of a `mimicks()` function, or the value or result of a member of a mimicked instance, where the library finds out that it is not a substitute (`hasFacePrototype` in `dist/internals/Engine.js`, or `isSubstituteProxy` in `dist/shared/Constants.js`). A revoked proxy among the arguments, and a revoked proxy of an object that is not a function, do not stop it.
 
-A getter of your own that throws, in an argument that cannot be read yet (see [How arguments are compared](#how-arguments-are-compared)), stops the debugger whenever the library reads it: up to once for each comparison of the value with another one, so up to once for each setup and each earlier call of the member when a call or setup passes it, and for each received call of the member when a check does.
+A getter of your own that throws, in an argument that cannot be read yet (see [How arguments are compared](#how-arguments-are-compared)), stops the debugger whenever the library reads it, which can be several times for each call, setup or check that passes the argument: up to once for each comparison of the value with another one, as that section describes.
 
 # Benefits over other mocking libraries
 - Easier-to-understand fluent syntax.

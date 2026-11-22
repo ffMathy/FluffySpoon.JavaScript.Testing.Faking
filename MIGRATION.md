@@ -235,7 +235,7 @@ calculator.subtract(Arg.any(), 2)
 calculator.didNotReceive().subtract(Arg.all())
 ```
 
-This also holds for matchers inside plain objects and arrays, which are new: `repository.save({ id: Arg.any(), name: 'bob' }).returns('saved')` is a setup, and it matches `save({ id: 1, name: 'bob' })`. Before, a matcher inside an object was compared as a value, so such a call was a received call and never matched anything. Matchers inside class instances, `Map`s and `Set`s are still compared as values, and so are matchers more than 32 levels deep. See [Matchers inside objects and arrays](README.md#matchers-inside-objects-and-arrays).
+This also holds for matchers inside plain objects and arrays, which are new: `repository.save({ id: Arg.any(), name: 'bob' }).returns('saved')` is a setup, and it matches `save({ id: 1, name: 'bob' })`. Before, a matcher inside an object was compared as a value, so such a call was a received call and never matched anything. Matchers inside class instances, `Map`s and `Set`s are still compared as values, and so are matchers more than 32 levels deep in an argument that has none less deep. See [Matchers inside objects and arrays](README.md#matchers-inside-objects-and-arrays).
 
 ### Match order
 *Applies to: 1.x and the betas.*
