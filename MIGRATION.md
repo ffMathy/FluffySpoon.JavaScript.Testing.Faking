@@ -369,6 +369,8 @@ Checks that fail later (these two, and a property-style `sub.received(2).member`
 
 Literal arguments are compared with deep strict equality (`util.isDeepStrictEqual`), as before: own enumerable properties and prototypes. `#private` fields and other internal state are invisible to it, so all instances of a class that keeps its state only in `#private` fields are equal to each other. Use the same instance, or `Arg.is()`, for such classes (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
+Deep strict equality runs the getters of those properties. What such a getter does to a substitute while the library compares arguments (`get total() { return pricing.priceOf(sku) * qty }`) is not recorded and uses up no values of a `returns()` sequence. In 2.0.0-beta.4, it was recorded, so a check such as `pricing.didNotReceive().priceOf(Arg.any())` could fail although the code under test never called `priceOf`.
+
 Setups and received calls keep the argument objects themselves and compare them as they are at the time of each call or check, as before. So an argument object that you change after using it in a setup matches calls with an object equal to its new contents (see [How arguments are compared](README.md#how-arguments-are-compared)).
 
 <!-- docs-check: uses=migration-calculator -->
