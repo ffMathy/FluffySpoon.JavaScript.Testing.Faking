@@ -152,9 +152,10 @@ access to the npm registry. To check other versions after `npm run build`, pass 
 default ones): `node spec-types/min-ts/check.js 3.9 4.0 4.4`. Keep `consumer.ts` to code that TypeScript 3.6 can parse (no
 `@ts-expect-error`, for example). If a change makes the typings need a newer TypeScript, that is a breaking change:
 raise `MINIMUM_TYPESCRIPT_VERSION` in `spec-types/min-ts/check.js` and the documented minimum together.
-For each of these versions, it also compiles `spec-types/declaration-emit/R13TD-1.T73.check-views.ts` against the
+For each of these versions, it also compiles three fixtures of `spec-types/declaration-emit/`,
+`R13TD-1.T73.check-views.ts`, `R14TD-1.annotated-generic-helpers.ts` and `R17FE-2.T83.check-view-type.ts`, against the
 built typings with `declaration` and `emitDeclarationOnly`, into its temporary directory, which it removes afterwards
-(printed as `ok   typescript@3.6 (declaration emit of check views)`).
+(printed as `ok   typescript@3.6 (declaration emit of check views and annotated generic helpers)`).
 Afterwards the same script runs `spec-types/TD-10.T32.jsdoc.js` with the TypeScript of this repository: it checks
 that the public API in the built typings carries documentation comments (editor quick info), and fails when one of
 them is missing.
@@ -195,7 +196,7 @@ not against `src/`, and checks two things:
     by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
     `expect(42).toEqual(substitute)` fails with jest's normal assertion error. It also checks that snapshots
     (`toMatchSnapshot()` against the committed `__snapshots__/`, and `toMatchInlineSnapshot()`) and failure diffs of
-    values that hold substitutes finish quickly, print paths, and do not show substitutes as mock functions, and that
+    values that hold substitutes print paths and do not show substitutes as mock functions, and that
     instances of classes that extend a substitute are ordinary objects in `toEqual()`, `toHaveBeenCalledWith()`,
     inline snapshots, setups and checks, and that jest's asymmetric matchers (`expect.any()`,
     `expect.objectContaining()`, ...) work as matchers in setups and checks, as README "Matchers of test runners"
