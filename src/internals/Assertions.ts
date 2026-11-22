@@ -486,6 +486,17 @@ const scheduleReport = (report: PendingReport): void => {
 }
 
 /**
+ * The line of a check that its report keeps: the first "at" line of the check's stack (S-ADV-1: also where an
+ * Error.prepareStackTrace writes no "Error" line above the frames), or else, where its frames do not start with "at"
+ * (S2-V-2), the line below the first.
+ */
+const checkLineOf = (site: StackHolder): string | undefined => {
+  const stack = stackText(site)
+  const frame = firstStackFrame(stack) ?? (typeof stack === 'string' ? stack.split('\n')[1] : undefined)
+  return frame === '' ? undefined : frame
+}
+
+/**
  * Schedules a failure that is only reported if the assertion is not invoked (see assertPropertyRead).
  * The message is only built if the failure is really reported (usually the member is invoked right away).
  * E58: its stack is the call site only (the line of the check, as for a check view that nothing follows).
@@ -497,7 +508,7 @@ const defer = (stackStart: Function | undefined, createError: () => SubstituteEx
     site,
     error: () => {
       const error = createError()
-      const frame = firstStackFrame(stackText(site))
+      const frame = checkLineOf(site)
       if (frame !== undefined) error.stack = `${error.name}: ${error.message}\n${frame}`
       return error
     }
@@ -549,7 +560,7 @@ export const deferDanglingCheck = (state: { readonly path: string }, form: Check
     applies,
     error: () => {
       const error = danglingCheckError(state, form, count)
-      const frame = firstStackFrame(stackText(site))
+      const frame = checkLineOf(site)
       error.stack = frame !== undefined ? `${error.name}: ${error.message}\n${frame}` : `${error.name}: ${error.message}`
       return error
     }

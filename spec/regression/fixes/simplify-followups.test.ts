@@ -177,3 +177,32 @@ test('S-ADV-1 with an Error.prepareStackTrace that writes the frames only, "call
     clock.uninstall()
   }
 })
+
+// ---- S2-V-2: an Error.prepareStackTrace whose frames do not start with "at" ---------------------------------------
+
+test('S2-V-2 with an Error.prepareStackTrace whose frames do not start with "at", deferred reports keep the line of the check', t => {
+  const original = Object.getOwnPropertyDescriptor(Error, 'prepareStackTrace')
+  const lineOf = (frame: string | undefined) => /:(\d+):\d+\)?$/.exec(frame ?? '')?.[1]
+  // (the formatter below writes an "Error" line, then the frame of here(), then the caller's frame)
+  const here = () => new Error().stack!.split('\n')[2]
+  const clock = interceptDeferredReports()
+  Error.prepareStackTrace = (error, callSites) => `${error}\n` + callSites.map(callSite => `    -> ${callSite}`).join('\n')
+  try {
+    const calculator = Substitute.for<any>()
+    calculator.add(1, 2)
+    // the report of a property-style check that fails later, and of a check view that nothing follows
+    const checkLine = (void calculator.received(2).add, here())
+    const danglingLine = (calculator[received](1), here())
+    const errors = clock.run()
+    t.is(errors.length, 2)
+    for (const [index, error] of errors.entries()) {
+      const frames = (error as Error).stack!.split('\n').filter(text => /^\s+-> /.test(text))
+      t.is(frames.length, 1, (error as Error).stack)
+      t.is(lineOf(frames[0]), lineOf(index === 0 ? checkLine : danglingLine), (error as Error).stack)
+    }
+  } finally {
+    if (original === undefined) delete (Error as any).prepareStackTrace
+    else Object.defineProperty(Error, 'prepareStackTrace', original)
+    clock.uninstall()
+  }
+})
