@@ -1,6 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "rootDir": "../..",
     "declaration": true,
     "emitDeclarationOnly": true,
     "outDir": "../../node_modules/.cache/substitute-spec-types-declaration-emit",

@@ -29,10 +29,10 @@ jobs:
       # Lets npm publish with provenance (and with trusted publishing, if it is configured on npmjs.com).
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
-      - uses: actions/setup-node@v5
+      - uses: actions/setup-node@v7
         with:
           node-version-file: package.json
           registry-url: https://registry.npmjs.org/
