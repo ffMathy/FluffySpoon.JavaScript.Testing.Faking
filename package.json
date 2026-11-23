@@ -104,7 +104,7 @@
     "devDependencies": {
         "@ava/typescript": "^7.0.0",
         "@sinonjs/fake-timers": "^15.5.0",
-        "@types/node": "^18.19.130",
+        "@types/node": "^26.6.6",
         "@types/sinonjs__fake-timers": "^15.0.1",
         "ava": "^8.4.0",
         "typescript": "^6.0.3"
