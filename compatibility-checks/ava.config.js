@@ -1,9 +1,9 @@
 module.exports = {
-	extensions: {
-		ts: 'commonjs',
-	},
+	extensions: [
+		'ts',
+	],
 	nodeArguments: [
-		'--require=tsx/cjs'
+		'--import=tsx'
 	],
 	failWithoutAssertions: false
 }

@@ -15,7 +15,7 @@ interface Subsection {
   subMethod: () => string
 }
 
-const throwsUncaughtException = (cb: () => any, t: ExecutionContext, expectation: ThrowsExpectation) => {
+const throwsUncaughtException = (cb: () => any, t: ExecutionContext, expectation: ThrowsExpectation<Error>) => {
   const clock = interceptDeferredReports()
   cb()
   t.throws(() => clock.tick(1), expectation)

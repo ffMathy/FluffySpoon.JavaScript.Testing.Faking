@@ -7,7 +7,7 @@ import { SubstituteException } from '../../../src/internals/SubstituteException'
 
 const plain = (text: string) => text.replace(/\x1b\[\d+m/g, '')
 
-const throwsUncaughtException = (callback: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation) => {
+const throwsUncaughtException = (callback: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation<Error>) => {
   const clock = interceptDeferredReports()
   try {
     callback()

@@ -1,7 +1,8 @@
 'use strict'
 // Packaging, release and CI checks. These run as part of `npm test` (see ava.config.js).
 // They pack the repository the way `npm publish` does and use the tarball from a fresh consumer project.
-const test = require('ava')
+// ava is an ES module: require() returns its namespace
+const test = require('ava').default
 const { execFile, spawnSync } = require('child_process')
 const fs = require('fs')
 const path = require('path')
@@ -258,12 +259,14 @@ const typeScriptConsumer = [
   ''
 ].join('\n')
 
+// TypeScript 6 deprecates moduleResolution node10 (it is removed in TypeScript 7); consumers still use it, so the node10
+// checks below silence the deprecation with --ignoreDeprecations 6.0.
 const typeScriptModes = [
   { name: 'nodenext (ESM)', file: 'esm.mts', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] },
   { name: 'nodenext (CommonJS)', file: 'cjs.cts', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] },
   { name: 'node16 (ESM)', file: 'esm.mts', options: ['--module', 'node16', '--moduleResolution', 'node16'] },
   { name: 'bundler', file: 'bundler.ts', options: ['--module', 'esnext', '--moduleResolution', 'bundler'] },
-  { name: 'node10', file: 'node10.ts', options: ['--module', 'commonjs', '--moduleResolution', 'node'] }
+  { name: 'node10', file: 'node10.ts', options: ['--module', 'commonjs', '--moduleResolution', 'node', '--ignoreDeprecations', '6.0'] }
 ]
 
 for (const mode of typeScriptModes) {
@@ -327,7 +330,7 @@ test('P34 declarations emitted with moduleResolution node for check views and ma
   fs.writeFileSync(path.join(directory, 'producer', 'index.ts'), declarationProducer)
   const emitted = await run(process.execPath, [
     tsc, '--declaration', '--emitDeclarationOnly', '--strict', '--target', 'es2019',
-    '--module', 'commonjs', '--moduleResolution', 'node', '--outDir', 'declarations', path.join('producer', 'index.ts')
+    '--module', 'commonjs', '--moduleResolution', 'node', '--ignoreDeprecations', '6.0', '--outDir', 'declarations', path.join('producer', 'index.ts')
   ], directory)
   t.is(emitted.status, 0, emitted.output)
   // (The consumers import the emitted declarations, not the producer's source, which is in another directory.)
@@ -385,11 +388,11 @@ const checkViewConsumer = [
   ''
 ].join('\n')
 const checkViewProducerModes = [
-  { name: 'node10', options: ['--module', 'commonjs', '--moduleResolution', 'node'] },
+  { name: 'node10', options: ['--module', 'commonjs', '--moduleResolution', 'node', '--ignoreDeprecations', '6.0'] },
   { name: 'nodenext', options: ['--module', 'nodenext', '--moduleResolution', 'nodenext'] }
 ]
 const checkViewConsumerModes = [
-  { name: 'node10', file: 'consumer.ts', options: ['--module', 'commonjs', '--moduleResolution', 'node'] },
+  { name: 'node10', file: 'consumer.ts', options: ['--module', 'commonjs', '--moduleResolution', 'node', '--ignoreDeprecations', '6.0'] },
   ...declarationConsumerModes
 ]
 

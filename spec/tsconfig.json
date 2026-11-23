@@ -1,6 +1,9 @@
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
+    "rootDir": "..",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
     "strictNullChecks": false,
     "sourceMap": true
   },

@@ -28,7 +28,7 @@ const plain = (message: string) => message.replace(/\x1b\[\d+m/g, '')
 // runtime behaviour only: the substitutes are untyped so that the specs do not depend on the typings
 const substitute = <T = unknown>(): any => Substitute.for<T>()
 
-const throwsOnNextTick = (cb: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation) => {
+const throwsOnNextTick = (cb: () => unknown, t: ExecutionContext, expectation: ThrowsExpectation<Error>) => {
   const clock = interceptDeferredReports()
   try {
     cb()

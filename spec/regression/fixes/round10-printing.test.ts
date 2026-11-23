@@ -188,7 +188,7 @@ test('R9V-6 (E58) the ava run of npm test leaves nothing in os.tmpdir()', t => {
   // _createCacheDir, fs.mkdtempSync) and never removed it
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'r9v6-'))
   t.teardown(() => fs.rmSync(temporary, { recursive: true, force: true }))
-  const ava = path.join(root, 'node_modules/ava/entrypoints/cli.mjs')
+  const ava = path.join(root, 'node_modules/ava/entrypoints/cli.js')
   const result = spawnSync(process.execPath, [ava, 'spec/regression/issues/11.test.ts'], {
     cwd: root,
     encoding: 'utf8',
