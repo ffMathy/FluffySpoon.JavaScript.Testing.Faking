@@ -107,7 +107,7 @@
         "@types/node": "^18.19.130",
         "@types/sinonjs__fake-timers": "^15.0.1",
         "ava": "^8.4.0",
-        "typescript": "^6.0.3"
+        "typescript": "^7.0.2"
     },
     "volta": {
         "node": "24.22.3"
