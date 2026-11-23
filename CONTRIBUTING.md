@@ -29,7 +29,7 @@ npm ci
 | `src/` | The library source (TypeScript). `src/index.ts` is the public entry point. |
 | `spec/` | The runtime specs, run with [ava](https://github.com/avajs/ava). |
 | `spec-types/` | Type-level tests of the public typings (`npm run test:types`), and `spec-types/min-ts/`, which checks the built typings with the oldest supported TypeScript (`npm run test:types:min-ts`). |
-| `spec-docs/` | The documentation check (`npm run test:docs`): it type-checks and runs the code examples of the README, MIGRATION and CHANGELOG. See [spec-docs/README.md](spec-docs/README.md). |
+| `spec-docs/` | The documentation check (`npm run test:docs`): it type-checks and runs the code examples of the README, the guide (docs/GUIDE.md), MIGRATION and CHANGELOG. See [spec-docs/README.md](spec-docs/README.md). |
 | `packaging/` | Packaging checks (run as part of `npm test`), the ES module wrapper generator and the smoke tests. |
 | `compatibility-checks/` | A separate npm project that checks the packed package with ava, jest, mocha, node:test and vitest, and bundles it with Rollup, webpack, esbuild and Vite. |
 | `dist/` | Build output that gets published (generated, not committed). |
@@ -134,7 +134,7 @@ npm run test:types
 Type-level tests in `spec-types/` check the public typings with the TypeScript compiler of this repository
 (`spec-types/` with `strict`, `spec-types/loose/` without). `spec-types/declaration-emit/` is compiled with
 `declaration: true` and `emitDeclarationOnly`, as a project with `declaration` or `composite` would build it: it
-exports check views of substitutes, which must emit without errors (the README, "Typing limitations", says what
+exports check views of substitutes, which must emit without errors (the guide, "Typing limitations", says what
 cannot be exported). It writes the declaration files into `node_modules/.cache/substitute-spec-types-declaration-emit`,
 which git ignores. CI runs them with `npm run test:types --if-present`.
 
@@ -166,7 +166,7 @@ them is missing.
 npm run test:docs
 ```
 
-This builds `dist/` and checks every code example in `README.md`, `MIGRATION.md` and `CHANGELOG.md`: TypeScript
+This builds `dist/` and checks every code example in `README.md`, `docs/GUIDE.md`, `MIGRATION.md` and `CHANGELOG.md`: TypeScript
 examples are type-checked against the built package and run, JavaScript examples are run, and their
 `// prints ...` and `// throws ...` comments must hold. Relative links and `#anchors` must resolve. It then runs a
 self-test against deliberately broken fixtures. A change to the library's behaviour or typings that breaks a
@@ -175,7 +175,7 @@ and the directives that mark blocks (`compile-only`, `esm`, `skip`, ...), are de
 [spec-docs/README.md](spec-docs/README.md).
 
 The examples are type-checked with the `@types/node` of this repository (18.19.x). An example of what only older
-`@types/node` versions declare, such as the README's limitations of Node.js' `EventEmitter<Events>` with
+`@types/node` versions declare, such as the the guide's limitations of Node.js' `EventEmitter<Events>` with
 `@types/node` up to 24, is marked `types-node-below=25`: with a newer `@types/node`, the check says that it did not
 check that block, instead of failing. The examples that need a test runner (jest, vitest) are marked `skip`, and the
 compatibility checks below run the same code.
@@ -187,10 +187,10 @@ not against `src/`, and checks two things:
 
 - `test/index.ts`: every supported test runner (ava, jest, mocha, node:test, vitest, and vitest with the package
   inlined through `vitest.inline.config.mts`) reports a failing Substitute assertion, including one that is thrown
-  after the test function has returned, and checks what each runner then does with the tests around it, as README
+  after the test function has returned, and checks what each runner then does with the tests around it, as the guide
   "Assertions that fail later" describes. For mocha, it does so with a synchronous test (`test-runners/mocha/`) and
   with an `async` test (`test-runners/mocha-async/`), which mocha reports twice, the second time as "done() called
-  multiple times" (as long as the run is still going when the test's promise settles; README "Assertions that fail
+  multiple times" (as long as the run is still going when the test's promise settles; the guide "Assertions that fail
   later" describes the other case). It also runs these suites, which must pass:
   - `test-runners/jest-matchers/` (`npm run validate:jest-matchers`): substitutes used inside jest matchers compare
     by identity, so a non-matching `expect(fn).toHaveBeenCalledWith(substitute)` fails and
@@ -199,29 +199,29 @@ not against `src/`, and checks two things:
     values that hold substitutes print paths and do not show substitutes as mock functions, and that
     instances of classes that extend a substitute are ordinary objects in `toEqual()`, `toHaveBeenCalledWith()`,
     inline snapshots, setups and checks, and that jest's asymmetric matchers (`expect.any()`,
-    `expect.objectContaining()`, ...) work as matchers in setups and checks, as README "Matchers of test runners"
-    documents. `jest.fn(substitute)` must answer what the substitute answers (README "What counts as a call").
+    `expect.objectContaining()`, ...) work as matchers in setups and checks, as the guide "Matchers of test runners"
+    documents. `jest.fn(substitute)` must answer what the substitute answers (the guide "What counts as a call").
     `spyon-mimicked.spec.ts` checks `jest.spyOn()`, node:test's `mock.method()` and an instrumentation wrapper
     (`const original = obj.m; obj.m = wrap(original)`) on a substitute that mimicks an instance: setups still
-    answer, each call is recorded once, and the restore gives the instance its function back (README "Partial
+    answer, each call is recorded once, and the restore gives the instance its function back (the guide "Partial
     mocks" and "Test runners"). `spies-mimicked-round18.spec.ts` checks node:test's `mock.method()` with an
     implementation (setups first, then the mock) and that the instance's own calls through `this` of a member that
     `jest.spyOn()`, node:test or a wrapper replaced are not recorded, and `sinon-mimicked-round18.spec.ts` pins what
     sinon (22, a dev dependency of the checks) does on a mimicked substitute: `sinon.replace()` for an own method,
     the `TypeError`s of `spy()`, `stub()` and, for a method on a class prototype, `replace()`, and sinon on the
-    instance itself (README "Test runners").
+    instance itself (the guide "Test runners").
   - `test-runners/vitest-matchers/` (`npx vitest run ./test-runners/vitest-matchers/index.spec.ts`): the same for
     vitest's matchers, snapshots and diffs (including the checks and setups with vitest's asymmetric matchers that the
-    README's vitest example makes, and `vi.fn(substitute)`), and how vitest and `util.inspect` see printed, frozen and
+    the guide's vitest example makes, and `vi.fn(substitute)`), and how vitest and `util.inspect` see printed, frozen and
     `in`-probed substitutes.
   - `test-runners/jest-modules/` (`npm run validate:jest-modules-ts` and `npm run validate:jest-modules-babel`): a
     substitute that stands in for a whole module (a `jest.mock()` factory), imported by the code under test as a
     namespace, with named imports, with a default and named import together, and as a default export through the
-    factory that README "Mocking a whole module" documents, and a module re-exported by a barrel (`export *`), mocked
+    factory that the guide "Mocking a whole module" documents, and a module re-exported by a barrel (`export *`), mocked
     either through the barrel itself or with a plain object of the substitute's members (`barrel-substitute.spec.ts`,
     `barrel-members.spec.ts`). It runs once compiled by ts-jest with `esModuleInterop`
     (`jest.modules.ts-jest.config.js`) and once by babel-jest (`jest.modules.babel.config.js`).
-  - Module mocks that need a plain object of a substitute's members, as README "Mocking a whole module" shows:
+  - Module mocks that need a plain object of a substitute's members, as the guide "Mocking a whole module" shows:
     vitest's `vi.mock()` (`test-runners/vitest-modules/`, `npm run validate:vitest-modules`), node:test's
     `mock.module()` (`test-runners/nodejs-modules/`, `npm run validate:nodejs-modules`, with
     `--experimental-test-module-mocks`) and jest's `unstable_mockModule()` for native ES modules
@@ -230,7 +230,7 @@ not against `src/`, and checks two things:
     substitutes that mimick an instance and on those that do not (`spies-mimicked.test.mjs`), and that the
     instance's own calls through `this` of a member that `vi.spyOn()` replaced stay its own
     (`spies-mimicked-round18.test.mjs`).
-  - `test-runners/tsx-lines/`: the same checks of the line rules (README "Which calls lead to a setup or a check",
+  - `test-runners/tsx-lines/`: the same checks of the line rules (the guide "Which calls lead to a setup or a check",
     "Lines in transpiled test files") run with `node --import tsx` (`checks.ts` and `checks.mts`) and with
     `node --require tsx/cjs`, which put each file on one line, and must give what they give with a statement per
     line of the code that runs.
@@ -242,7 +242,7 @@ not against `src/`, and checks two things:
   It also bundles `bundlers/require-entry.mjs`, which imports CommonJS code that `require()`s the package
   (`bundlers/require-helper.cjs`). With `@rollup/plugin-commonjs` on default options and the package kept external,
   that `require()` gets the `Substitute` class instead of the exports object (Vite 7 and older SSR builds do the
-  same, since they externalize dependencies). README "Importing" and MIGRATION "Imports and packaging" document
+  same, since they externalize dependencies). the guide "Importing" and MIGRATION "Imports and packaging" document
   this and its workarounds, and the check makes sure each of them gives the exports object:
   `commonjs({ esmExternals: true })`, `commonjs({ esmExternals: ['@fluffy-spoon/substitute'] })`, bundling the
   package, Vite's `ssr.noExternal: ['@fluffy-spoon/substitute']`, and the default externals of the Vite version
@@ -253,7 +253,7 @@ not against `src/`, and checks two things:
   external, and a Vite SSR build with `output.format: 'cjs'`. Such a bundle `require()`s the package at run time,
   and its default import follows Node.js's CommonJS interop: it is the exports object, not the `Substitute` class
   (with Rollup for every source; with esbuild, webpack and Rolldown, which Vite 8 uses, for `.mjs` sources and
-  sources in a `"type": "module"` package). README "Importing" and MIGRATION "Imports and packaging" recommend the
+  sources in a `"type": "module"` package). the guide "Importing" and MIGRATION "Imports and packaging" recommend the
   named import there. The check bundles `bundlers/named-entry.mjs`, which uses only the named import, with each of
   them; bundles `bundlers/entry.mjs` with Rollup's `output.interop: 'auto'`, which makes the default import work;
   and checks that the caveat itself still holds for `bundlers/entry.mjs` with each of them.

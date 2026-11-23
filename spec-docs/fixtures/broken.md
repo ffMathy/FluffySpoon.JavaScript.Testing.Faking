@@ -251,7 +251,7 @@ const a = 1
 const b = 2
 ```
 
-Links are checked, too. These work: [the top of this file](#fixture-for-spec-docsself-testjs), [the README](../../README.md#usage) and `[not a link](in code)`.
+Links are checked, too. These work: [the top of this file](#fixture-for-spec-docsself-testjs), [the README](../../README.md#quick-start) and `[not a link](in code)`.
 
 <!-- self-test: next-line=has no heading with the anchor #no-such-heading -->
 A link to [a heading that does not exist](#no-such-heading).

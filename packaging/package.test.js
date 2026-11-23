@@ -205,7 +205,7 @@ test('P2 the compatibility checks bundle CommonJS code that require()s the packa
   const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
   const p2 = bundlers.slice(bundlers.indexOf('const requireBundlers'))
   t.true(p2.length < bundlers.length, 'test/bundlers.ts has the P2 checks')
-  // README "Importing" and MIGRATION "Imports and packaging" name these settings.
+  // the guide "Importing" and MIGRATION "Imports and packaging" name these settings.
   t.regex(p2, /commonjs\(\{ esmExternals: true \}\)/, 'commonjs({ esmExternals: true }) with the package external')
   t.regex(p2, /commonjs\(\{ esmExternals: \[packageName\] \}\)/, 'commonjs({ esmExternals: [the package] }) with the package external')
   t.regex(p2, /noExternal: \[packageName\]/, 'Vite with ssr.noExternal: [the package]')
@@ -216,14 +216,14 @@ test('P2 the compatibility checks bundle CommonJS code that require()s the packa
 
 test('PK4-1 the compatibility checks bundle ES module code into CommonJS output with the package external and use the named import', t => {
   const compatibility = path.join(root, 'compatibility-checks')
-  // The fixture uses only the named import, which README "Importing" recommends for this case.
+  // The fixture uses only the named import, which the guide "Importing" recommends for this case.
   const fixture = fs.readFileSync(path.join(compatibility, 'bundlers', 'named-entry.mjs'), 'utf8')
   t.regex(fixture, /^import \{ Substitute, Arg\b[^}]*\} from '@fluffy-spoon\/substitute'$/m, 'named-entry.mjs uses the named import')
   t.notRegex(fixture, /^import\s+(?!\{)[\w$]+/m, 'named-entry.mjs has no default import')
   const bundlers = fs.readFileSync(path.join(compatibility, 'test', 'bundlers.ts'), 'utf8')
   const pk41 = bundlers.slice(bundlers.indexOf('const commonJsOutputBundlers'))
   t.true(pk41.length < bundlers.length, 'test/bundlers.ts has the PK4-1 checks')
-  // Each bundler emits CommonJS and keeps the package external; README and MIGRATION name these settings.
+  // Each bundler emits CommonJS and keeps the package external; the guide and MIGRATION name these settings.
   t.regex(pk41, /rollupCommonJsBundle\(input, /, "Rollup with output.format 'cjs'")
   t.regex(bundlers, /format: 'cjs', \.\.\.\(interop === undefined/, "rollupCommonJsBundle writes output.format 'cjs'")
   t.regex(pk41, /format: 'cjs', packages: 'external'/, "esbuild with format 'cjs' and packages: 'external'")

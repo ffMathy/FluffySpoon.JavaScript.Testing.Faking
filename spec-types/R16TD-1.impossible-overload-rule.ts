@@ -1,4 +1,4 @@
-// R16TD-1 (documented typing, pinned for the README's T78 text) Which overloads that no argument fits once their type
+// R16TD-1 (documented typing, pinned for the the guide's T78 text) Which overloads that no argument fits once their type
 // parameters are replaced by their constraints (`<K extends keyof {}>(key: K, ...)`) are left out, and what the
 // others give. The same on TypeScript 3.6 to 7.0.2, strict or not.
 // (1) The LAST overload, returning `never` once its type parameters are replaced (`{}[K]`, hono's `Context.get`): left

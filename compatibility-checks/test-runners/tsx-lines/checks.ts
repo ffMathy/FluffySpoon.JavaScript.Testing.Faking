@@ -1,5 +1,5 @@
 // R17FE-5 (E125): tsx 4 transforms a file with esbuild's minifyWhitespace, which puts all of its code on one line. The
-// library's line rules (README 'Which calls lead to a setup or a check', 'Through a call with matchers', 'Assertions
+// library's line rules (the guide 'Which calls lead to a setup or a check', 'Through a call with matchers', 'Assertions
 // that fail later') must still give the results of the source's lines: tsx turns on source maps, and the library
 // decides by them. Run with `node --import tsx` and `node --require tsx/cjs` (this file, CommonJS) and as checks.mts
 // (an ES module); test/index.ts runs them all. Prints the outcomes as JSON.

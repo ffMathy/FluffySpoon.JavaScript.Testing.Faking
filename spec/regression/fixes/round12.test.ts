@@ -375,7 +375,7 @@ test('R11FE-3 sinon-chai does not take a substitute, an auto-substitute or a con
 
 test('R11FE-3 jest\'s spy probe (calls.all and calls.count) still answers: a substitute is no jest mock, but `calls` is an ordinary member', t => {
   // jest's isSpy (Jasmine compatibility): what makes jest's toHaveBeenCalled*() accept a value. It cannot be answered
-  // with undefined without breaking APIs that have a `calls` member (README 'Test runners': use received() instead).
+  // with undefined without breaking APIs that have a `calls` member (the guide 'Test runners': use received() instead).
   const isJestSpy = (received: any) => typeof received.calls?.all === 'function' && typeof received.calls?.count === 'function'
   const client = Substitute.for<any>()
   t.true(isJestSpy(client))
