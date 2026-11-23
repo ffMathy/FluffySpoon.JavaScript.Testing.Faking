@@ -102,7 +102,7 @@
         "test:compat": "npm --prefix compatibility-checks test"
     },
     "devDependencies": {
-        "@ava/typescript": "^3.0.1",
+        "@ava/typescript": "^7.0.0",
         "@sinonjs/fake-timers": "^11.2.2",
         "@types/node": "^18.19.122",
         "@types/sinonjs__fake-timers": "^8.1.5",
