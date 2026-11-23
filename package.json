@@ -19,14 +19,22 @@
     ],
     "repository": {
         "type": "git",
-        "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
+        "url": "git+https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
     },
+    "homepage": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking#readme",
     "keywords": [
-        "NSubstitute",
+        "typescript",
+        "mock",
         "mocking",
+        "stub",
+        "fake",
+        "faking",
+        "substitute",
+        "nsubstitute",
         "test",
         "testing",
-        "faking"
+        "unit-testing",
+        "tdd"
     ],
     "bugs": {
         "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues"
@@ -34,14 +42,64 @@
     "engines": {
         "node": ">=10"
     },
-    "main": "dist/index.js",
-    "typings": "./dist/index.d.ts",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": [
+            {
+                "import": {
+                    "types": "./dist/index.d.mts",
+                    "default": "./dist/index.mjs"
+                },
+                "default": {
+                    "types": "./dist/index.d.ts",
+                    "default": "./dist/index.js"
+                }
+            },
+            "./dist/index.js"
+        ],
+        "./package.json": "./package.json",
+        "./dist/shared": [
+            {
+                "types": "./dist/shared/index.d.ts",
+                "default": "./dist/shared/index.js"
+            },
+            "./dist/shared/index.js"
+        ],
+        "./dist/api": [
+            {
+                "types": "./dist/api/index.d.ts",
+                "default": "./dist/api/index.js"
+            },
+            "./dist/api/index.js"
+        ],
+        "./dist/api/types": [
+            {
+                "types": "./dist/api/types/index.d.ts",
+                "default": "./dist/api/types/index.js"
+            },
+            "./dist/api/types/index.js"
+        ],
+        "./dist/*.js": "./dist/*.js",
+        "./dist/*.mjs": "./dist/*.mjs",
+        "./dist/*": "./dist/*.js"
+    },
     "files": [
         "dist/**/*"
     ],
+    "publishConfig": {
+        "access": "public",
+        "registry": "https://registry.npmjs.org/"
+    },
     "scripts": {
-        "build": "rm -rf dist && tsc",
-        "test": "npm run build -- -p spec && ava"
+        "build": "rm -rf dist && tsc && node packaging/build-esm.js",
+        "build:spec": "rm -rf dist-spec && tsc -p spec --outDir dist-spec",
+        "prepack": "npm run build",
+        "test": "npm run build:spec && ava",
+        "test:types": "tsc -p spec-types && tsc -p spec-types/loose && tsc -p spec-types/declaration-emit",
+        "test:types:min-ts": "npm run build && node spec-types/min-ts/check.js",
+        "test:docs": "npm run build && node spec-docs/check.js && node spec-docs/self-test.js",
+        "test:compat": "npm --prefix compatibility-checks test"
     },
     "devDependencies": {
         "@ava/typescript": "^3.0.1",
@@ -52,6 +110,6 @@
         "typescript": "^5.9.2"
     },
     "volta": {
-        "node": "18.19.1"
+        "node": "24.22.3"
     }
 }

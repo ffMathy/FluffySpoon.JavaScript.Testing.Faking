@@ -1,0 +1,378 @@
+import { inspect, types } from 'util'
+
+import { SELF, keyToString } from './Constants'
+import { PATH_BOUNDS, formatBounded, withPrintGuard } from './utilities'
+import { libraryGuard } from './utilities/Guard'
+
+/*
+ * The paths of auto-substitutes (`@Substitute.logger`, `@Substitute.getUser(1).name`), as printouts and messages show
+ * them. Typed structurally (an AutoEntry is a PathEntry, a SubstituteState a PathState), so that this module does not
+ * depend on SubstituteState.
+ */
+export type PathEntry = {
+  readonly kind: 'get' | 'call'
+  readonly key: PropertyKey
+  readonly argumentList: readonly unknown[] | undefined
+  readonly parent: PathState
+  /**
+   * E99: whether this is the auto-substitute of a nested setup through a call with matchers, which every call matching it
+   * answers (see AutoEntry.specifiesMatchers).
+   */
+  readonly specifiesMatchers?: boolean
+}
+export type PathState = {
+  readonly owner?: PathEntry
+  /** E99: what the received calls of a member answered with a configured value (see SubstituteState.configuredAnswers). */
+  configuredAnswers?(key: PropertyKey): ReadonlyMap<HandOut, object> | undefined
+}
+
+/** E99: a received call that answered with a substitute (a CallRecord). */
+export type HandOut = { readonly kind: string, readonly args?: readonly unknown[], readonly retracted: boolean }
+
+/*
+ * E33: printing never recurses without end. The arguments in a path can hold substitutes, whose paths can hold the same
+ * arguments again: a factory's result stored on the object passed to it (`ctx.child = app.create(ctx)`), or a handler
+ * bound to the instance that holds it (`this.onSave = bus.handler.bind(this)`). So a call whose arguments are already
+ * being formatted further up shows them as `(…)` (`@Substitute.create(…)`), and so does a path inside the arguments of
+ * another path, unless its arguments are all primitives (`@Substitute.save(@Substitute.getUser(1))`), which hold no
+ * substitutes. This keeps a printout of many such values small.
+ */
+const formatting = new Set<object>()
+let argumentNesting = 0
+const MAX_ARGUMENT_NESTING = 1
+
+const isPrimitive = (value: unknown): boolean => value === null || (typeof value !== 'object' && typeof value !== 'function')
+
+/**
+ * The arguments of a call as a path shows them: `(1, { id: 1 })`, objects one level deep, substitutes by their paths
+ * (printed under the print guard, so that a substitute among the arguments is never printed in full), errors without
+ * their stack (E40, E45), each one bounded (E44, PATH_BOUNDS: a few keys and items, at most 200 characters), at most
+ * 10 of them. `entry`: the call whose arguments these are (see above).
+ */
+export const pathArguments = (args: readonly unknown[] | undefined, entry?: object): string => {
+  const values = args ?? []
+  if (values.length === 0) return '()'
+  if ((entry !== undefined && formatting.has(entry)) || (argumentNesting >= MAX_ARGUMENT_NESTING && !values.every(isPrimitive))) return '(…)'
+  if (entry !== undefined) formatting.add(entry)
+  argumentNesting++
+  try {
+    const shown = values.length > PATH_BOUNDS.maxArrayLength ? values.slice(0, PATH_BOUNDS.maxArrayLength) : values
+    const texts = withPrintGuard(() => shown.map(value => formatBounded(value, PATH_BOUNDS, false)))
+    if (values.length > shown.length) texts.push(`... ${values.length - shown.length} more arguments`)
+    return `(${texts.join(', ')})`
+  } catch {
+    return '(...)'
+  } finally {
+    argumentNesting--
+    if (entry !== undefined) formatting.delete(entry)
+  }
+}
+
+/*
+ * E35: a path shows at most PATH_HEAD + PATH_TAIL + 1 members. A longer one (a list walked 5,000 steps, a fluent
+ * builder in a loop) shows the first PATH_HEAD and the last PATH_TAIL, with `…` between them, so that printing a deep
+ * chain stays small. Paths are built by walking up the owners (no recursion).
+ */
+const PATH_HEAD = 3
+const PATH_TAIL = 6
+
+const memberOf = (entry: PathEntry): string => entry.key === SELF ? '' : `.${keyToString(entry.key)}`
+
+const pieceOf = (entry: PathEntry): string =>
+  entry.kind === 'call' ? `${memberOf(entry)}${pathArguments(entry.argumentList, entry)}` : memberOf(entry)
+
+/**
+ * The members from below `ancestor` (the root, when it is undefined) down to `leaf`, as a path shows them:
+ * `.logger.child('x')`, `('saved').name`. Empty when there are none. `piece`: how a member is shown (E99, see
+ * recordPieces).
+ */
+export const pathPieces = (leaf: PathEntry | undefined, ancestor?: PathState, piece: (entry: PathEntry) => string = pieceOf): string => {
+  const entries: PathEntry[] = []
+  for (let entry = leaf; entry !== undefined;) {
+    entries.push(entry)
+    const parent = entry.parent
+    if (parent === ancestor) break
+    entry = parent.owner
+  }
+  entries.reverse()
+  const count = entries.length
+  if (count <= PATH_HEAD + PATH_TAIL + 1) return entries.map(piece).join('')
+  return `${entries.slice(0, PATH_HEAD).map(piece).join('')}.…${entries.slice(count - PATH_TAIL).map(piece).join('')}`
+}
+
+/*
+ * E99 (R15FE-5): a nested setup through a call with matchers (`io.to(Arg.any()).emit(Arg.all()).returns(true)`) makes
+ * every call matching it answer one auto-substitute, whose path shows the matchers (`@Substitute.to(Arg.any{any})`).
+ * The calls received by that substitute (and further down) came through the concrete calls that it was handed out to
+ * (`io.to('room-a')`): when there is one such call (or several equal ones), its records are shown with it
+ * (`@Substitute.to('room-a').emit(...)`), in failure messages and in printouts; when there are several, they keep the
+ * path with the matchers, and a failure message says under its listing which calls it was handed out to (sharedNotes).
+ * The setups and the substitute itself keep that path: they apply to every matching call. The hand-outs are those that
+ * the engine notes for checks through a call with matchers (SubstituteState.configuredAnswers, E81), read only when a
+ * record is shown.
+ */
+
+/** E99: whether two argument lists of received calls are equal (RecordedArguments.literalsEqual, given by the caller). */
+export type SameArguments = (a: readonly unknown[], b: readonly unknown[]) => boolean
+
+/** E99: the calls a shared auto-substitute was handed out to (see handOuts). */
+type HandOuts = { readonly calls: readonly HandOut[], readonly more: number }
+
+/** E99: how many calls a note of sharedNotes names, at most. */
+const HAND_OUTS_SHOWN = 3
+
+const NO_ARGUMENTS: readonly unknown[] = []
+const NO_HAND_OUTS: HandOuts = { calls: [], more: 0 }
+
+/**
+ * E99: the received calls (not retracted) that the auto-substitute of a nested setup through a call with matchers was
+ * handed out to: the first HAND_OUTS_SHOWN distinct ones (by `same`), in the order they were received, and how
+ * many calls more there are with other arguments than those. None for any other auto-substitute.
+ */
+export const handOuts = (entry: PathEntry, same: SameArguments): HandOuts => {
+  if (entry.specifiesMatchers !== true) return NO_HAND_OUTS
+  const calls: HandOut[] = []
+  let more = 0
+  const answers = entry.parent.configuredAnswers?.(entry.key)
+  if (answers !== undefined) {
+    for (const [record, answer] of answers) {
+      if (answer !== entry || record.retracted || record.kind !== 'call') continue
+      const args = record.args ?? NO_ARGUMENTS
+      if (calls.some(known => same(known.args ?? NO_ARGUMENTS, args))) continue
+      if (calls.length < HAND_OUTS_SHOWN) calls.push(record)
+      else more++
+    }
+  }
+  return { calls, more }
+}
+
+/** E99: how a member is shown in the path of records (see above). */
+const recordPieces = (same: SameArguments) => (entry: PathEntry): string => {
+  if (entry.specifiesMatchers === true && entry.kind === 'call') {
+    const { calls } = handOuts(entry, same)
+    if (calls.length === 1) return `${memberOf(entry)}${pathArguments(calls[0].args, entry)}`
+  }
+  return pieceOf(entry)
+}
+
+/**
+ * E99: the path of an auto-substitute as its received calls are shown (`@Substitute.to('room-a')`, see above); its path
+ * when it is not below a nested setup through a call with matchers.
+ */
+export const recordPath = (entry: PathEntry, same: SameArguments): string =>
+  `${rootLabel(rootOf(entry))}${pathPieces(entry, undefined, recordPieces(same))}`
+
+/** E99: relativePath, as the received calls of `state` are shown (see above). */
+export const relativeRecordPath = (state: PathState, ancestor: PathState, same: SameArguments): string => {
+  if (state === ancestor) return ''
+  const pieces = pathPieces(state.owner, ancestor, recordPieces(same))
+  return pieces.startsWith('.') ? pieces.slice(1) : pieces
+}
+
+/**
+ * E99: for the auto-substitutes of nested setups through calls with matchers on the way to the substitutes whose received
+ * calls a failure message lists (`leaves`: their entries; undefined for a root) that calls with different arguments were
+ * handed out to, a line each that says so, outermost first: `@Substitute.to(Arg.any{any}) is shared by every call
+ * matching it; it was returned to @Substitute.to('room-a'), @Substitute.to('room-b'), @Substitute.to('room-c') and 2 more.`
+ */
+export const sharedNotes = (leaves: Iterable<PathEntry | undefined>, same: SameArguments): string[] => {
+  const notes: string[] = []
+  const seen = new Set<PathEntry>()
+  for (const leaf of leaves) {
+    const shared: PathEntry[] = []
+    for (let entry = leaf; entry !== undefined && !seen.has(entry); entry = entry.parent.owner) {
+      seen.add(entry)
+      if (entry.specifiesMatchers === true) shared.push(entry)
+    }
+    for (let index = shared.length - 1; index >= 0; index--) {
+      const entry = shared[index]
+      const { calls, more } = handOuts(entry, same)
+      if (calls.length < 2) continue
+      const parent = entry.parent.owner === undefined ? undefined : recordPath(entry.parent.owner, same)
+      const texts = calls.map(call => `${parent ?? rootLabel(entry.parent)}${memberOf(entry)}${pathArguments(call.args, entry)}`)
+      const returnedTo = more > 0 ? `${texts.join(', ')} and ${more} more` : `${texts.slice(0, -1).join(', ')} and ${texts[texts.length - 1]}`
+      notes.push(`${recordPath(entry, same)} is shared by every call matching it; it was returned to ${returnedTo}.`)
+    }
+  }
+  return notes
+}
+
+/*
+ * E112 (R16-ADV-4, R16-ADV-6): the paths that a remedy in a message writes as code (`sub.users.where({ id: 1 })`): each
+ * member as JavaScript accesses it, and the whole path, as a test would write it.
+ */
+
+const IDENTIFIER = /^[A-Za-z_$][\w$]*$/
+const ARRAY_INDEX = /^(?:0|[1-9]\d{0,14})$/
+
+/** The well-known symbols (Symbol.iterator, ...), by the name they have on Symbol. */
+const WELL_KNOWN_SYMBOLS = new Map<symbol, string>()
+for (const name of Object.getOwnPropertyNames(Symbol)) {
+  const value = (Symbol as any)[name]
+  if (typeof value === 'symbol') WELL_KNOWN_SYMBOLS.set(value, name)
+}
+
+/**
+ * E112: a member access as code: `.logger`, `['my-key']`, `[0]`, `[Symbol.for('k')]`, `[Symbol.iterator]`. Undefined for
+ * a symbol that is neither registered (Symbol.for) nor well-known: code cannot name it.
+ */
+export const codeMember = (key: PropertyKey): string | undefined => {
+  if (typeof key === 'symbol') {
+    const registered = Symbol.keyFor(key)
+    if (registered !== undefined) return `[Symbol.for(${inspect(registered)})]`
+    const name = WELL_KNOWN_SYMBOLS.get(key)
+    return name === undefined ? undefined : `[Symbol.${name}]`
+  }
+  const text = String(key)
+  if (IDENTIFIER.test(text)) return `.${text}`
+  return ARRAY_INDEX.test(text) ? `[${text}]` : `[${inspect(text)}]`
+}
+
+/**
+ * E132 (R17-ADV-5): whether an argument, printed as paths print it (see pathArguments), is code that gives an equal value
+ * (deep strict equality, as setups and checks compare): a primitive other than a symbol (a bigint prints with its `n`),
+ * or a plain array or object (of Array.prototype or Object.prototype) printed in full, whose items and values are such
+ * primitives or empty plain arrays and objects (paths print one level deep). Not code: functions and substitutes,
+ * symbols, matchers, class instances, Dates, Maps, Sets, errors, buffers and typed arrays, URLs, objects with a null
+ * prototype, accessors, symbol or non-enumerable keys, holes, proxies, and whatever printing cuts (strings of more than
+ * maxStringLength characters, more items or keys than are printed, a text of more than `characters` characters).
+ */
+const isCodeArgument = (value: unknown): boolean =>
+  isCodeValue(value, true) && (isPrimitive(value) || formatBounded(value, PATH_BOUNDS, false).length <= PATH_BOUNDS.characters)
+
+const isCodeValue = (value: unknown, top: boolean): boolean => {
+  switch (typeof value) {
+    case 'string':
+      return value.length <= PATH_BOUNDS.maxStringLength && (!top || inspect(value).length <= PATH_BOUNDS.characters)
+    case 'number':
+    case 'boolean':
+    case 'undefined':
+    case 'bigint':
+      return true
+    case 'object':
+      break
+    default: // symbols, functions (substitutes among them)
+      return false
+  }
+  if (value === null) return true
+  try {
+    if (types.isProxy(value)) return false
+    const prototype = Object.getPrototypeOf(value)
+    const keys = Reflect.ownKeys(value)
+    if (Array.isArray(value)) {
+      // (the keys of an array are its items and `length`: fewer with holes, more with keys of its own)
+      if (prototype !== Array.prototype || keys.length !== value.length + 1) return false
+      if (!top) return value.length === 0
+      return value.length <= PATH_BOUNDS.maxArrayLength && value.every((_item, index) => isCodeProperty(value, index))
+    }
+    if (prototype !== Object.prototype) return false
+    if (!top) return keys.length === 0
+    return keys.length <= PATH_BOUNDS.keys && keys.every(key => typeof key === 'string' && key !== '__proto__' && isCodeProperty(value, key))
+  } catch {
+    return false // a value that cannot be looked at
+  }
+}
+
+/** E132: an own enumerable data property whose value is code one level down (see isCodeValue). */
+const isCodeProperty = (container: object, key: PropertyKey): boolean => {
+  const descriptor = Reflect.getOwnPropertyDescriptor(container, key)
+  return descriptor !== undefined && descriptor.enumerable === true && 'value' in descriptor && isCodeValue(descriptor.value, false)
+}
+
+/** E132: why a path cannot be written as code (see codePath). */
+export type NotCode = { readonly notCode: 'member' | 'arguments' | 'length' }
+const NOT_CODE_MEMBER: NotCode = { notCode: 'member' }
+const NOT_CODE_ARGUMENTS: NotCode = { notCode: 'arguments' }
+const NOT_CODE_LENGTH: NotCode = { notCode: 'length' }
+
+/**
+ * E112: the path of an auto-substitute written as code, from the root substitute (`sub`) down to `leaf`, with every member
+ * (no `…` for a long one, unlike pathPieces) and the arguments of calls as paths print them (see pathArguments). A call
+ * that a substitute shared by a nested setup through a call with matchers was handed out to is written as that call when
+ * there was one such call (see recordPieces), or, with `firstHandOut`, as the first of several (they all answered the
+ * same substitute). Not code (see NotCode) when a member cannot be written as code (see codeMember), else, E132 (with
+ * `codeArguments`), when an argument does not print as code that gives an equal value (see isCodeArgument; the matchers
+ * of a call with matchers among them), else when the path is longer than `limit` characters. Built only for a failure
+ * message.
+ */
+export const codePath = (
+  leaf: PathEntry | undefined, same: SameArguments, firstHandOut: boolean, limit: number, codeArguments: boolean
+): string | NotCode => {
+  const pieces: string[] = []
+  let length = 3 // `sub`
+  let notCode: NotCode | undefined
+  for (let entry = leaf; entry !== undefined; entry = entry.parent.owner) {
+    const member = entry.key === SELF ? '' : codeMember(entry.key)
+    if (member === undefined) return NOT_CODE_MEMBER
+    if (notCode === NOT_CODE_ARGUMENTS) continue
+    let piece = member
+    if (entry.kind === 'call') {
+      let args = entry.argumentList
+      if (entry.specifiesMatchers === true) {
+        const { calls } = handOuts(entry, same)
+        if (calls.length === 1 || (firstHandOut && calls.length > 1)) args = calls[0].args
+      }
+      const values = args ?? []
+      if (codeArguments && (values.length > PATH_BOUNDS.maxArrayLength || !values.every(isCodeArgument))) {
+        notCode = NOT_CODE_ARGUMENTS
+        continue
+      }
+      if (notCode === undefined) piece += pathArguments(args, entry)
+    }
+    if (notCode !== undefined) continue
+    length += piece.length
+    if (length > limit) notCode = NOT_CODE_LENGTH
+    else pieces.push(piece)
+  }
+  return notCode ?? `sub${pieces.reverse().join('')}`
+}
+
+/*
+ * E52 (R8FE-9): every root substitute prints as `@Substitute`. A failure message whose expected call and a received
+ * call print alike, but differ in which substitute is an argument (`use('/admin', @Substitute)` twice), is built again
+ * with the roots numbered in the order they appear in it (`@Substitute#1.use('/admin', @Substitute#2)`), see
+ * SubstituteException. The numbers belong to that message only, so messages stay the same from run to run.
+ * E71 (R11V-4): the numbers are kept on the guard that the copies of the library share (see Guard), so that a
+ * substitute of another copy among the arguments (duplicate installs) is numbered in the message, too.
+ */
+
+/** How a root substitute is shown: `@Substitute`, or `@Substitute#n` while roots are numbered. */
+export const rootLabel = (root: PathState): string => {
+  const rootNumbers = libraryGuard.rootNumbers
+  if (rootNumbers === undefined) return '@Substitute'
+  let number = rootNumbers.get(root)
+  if (number === undefined) {
+    number = rootNumbers.size + 1
+    rootNumbers.set(root, number)
+  }
+  return `@Substitute#${number}`
+}
+
+/** Runs `print` with the roots numbered (see above), and gives how many roots it showed. */
+export const withRootNumbers = <T>(print: () => T): { value: T, roots: number } => {
+  const outer = libraryGuard.rootNumbers
+  const rootNumbers = new Map<object, number>()
+  libraryGuard.rootNumbers = rootNumbers
+  try {
+    const value = print()
+    return { value, roots: rootNumbers.size }
+  } finally {
+    libraryGuard.rootNumbers = outer
+  }
+}
+
+const rootOf = (entry: PathEntry): PathState => {
+  let state = entry.parent
+  while (state.owner !== undefined) state = state.owner.parent
+  return state
+}
+
+/** The path of an auto-substitute: `@Substitute.logger`, `@Substitute.getUser(1)`, `@Substitute('saved')`. */
+export const entryPath = (entry: PathEntry): string => `${rootLabel(rootOf(entry))}${pathPieces(entry)}`
+
+/** The path of a substitute (`@Substitute` for a root) relative to one of its ancestors: `logger`, `getUser(1)`, `('x')`. */
+export const relativePath = (state: PathState, ancestor: PathState): string => {
+  if (state === ancestor) return ''
+  const pieces = pathPieces(state.owner, ancestor)
+  return pieces.startsWith('.') ? pieces.slice(1) : pieces
+}

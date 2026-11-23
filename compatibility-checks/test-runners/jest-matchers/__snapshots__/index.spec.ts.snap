@@ -1,0 +1,38 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`E96 Arg matchers inside jest's asymmetric matchers Arg matchers and substitutes print as before (messages, snapshots, diffs) 1`] = `
+{
+  "matchers": [
+    Argument {
+      "_description": "Arg.any{any}",
+      "_matchingFunction": [Function],
+      "_options": undefined,
+      "_type": "SingleArgument",
+    },
+    AllArguments {
+      "_description": "Arg.all{}",
+      "_matchingFunction": [Function],
+      "_options": {},
+      "_type": "AllArguments",
+    },
+  ],
+  "repo": [Function],
+}
+`;
+
+exports[`R8 jest snapshots and diffs of values that hold substitutes E33 toMatchSnapshot does not take substitutes for mock functions 1`] = `
+{
+  "config": [Function],
+  "context": {
+    "child0": [Function],
+    "child1": [Function],
+    "name": "root",
+  },
+  "status": 200,
+  "user": [Function],
+  "widget": Widget {
+    "onClose": [Function],
+    "onSave": [Function],
+  },
+}
+`;

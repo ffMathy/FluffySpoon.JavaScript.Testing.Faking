@@ -119,7 +119,8 @@ test('getting a property twice with mock correctly asserts the call count', t =>
 test('calling a method with Arg correctly asserts the call count with Arg', t => {
   // #18: receive with arg https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking/issues/18
   const calculator = Substitute.for<Calculator>()
-  calculator.add(Arg.all())
+  // D3: a call with Arg matchers is a setup or an assertion, never a received call, so a real call is made here
+  calculator.add(1, 1)
 
   calculator.received(1).add(Arg.all())
   calculator.received().add(Arg.all())

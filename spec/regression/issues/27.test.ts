@@ -28,7 +28,8 @@ test('issue 27: mocks should work with Angular TestBed', t => {
   t.true(types.isProxy(result))
 
   const jitId = `jit_${result}`
-  t.is(jitId, 'jit_property<__anonymousType>: ')
+  // E24 (round 7): an auto-substitute prints as its path
+  t.is(jitId, 'jit_@Substitute.__anonymousType')
 })
 
 test('issue 27: subsitute node can be coerced to a primitive value', t => {

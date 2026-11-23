@@ -122,12 +122,16 @@ test('matches correctly with another RecordedArguments instance when object argu
 
 test('matches correctly with another RecordedArguments instance when using a wildcard argument', t => {
   t.true(RecordedArguments.from([Arg.all()]).match(RecordedArguments.from([1, 2, 3])))
-  t.true(RecordedArguments.from(['Substitute', 'JS']).match(RecordedArguments.from([Arg.all()])))
+  t.true(RecordedArguments.from([Arg.all()]).match(RecordedArguments.from(['Substitute', 'JS'])))
+  // D3: matching is one-directional; an Arg on the actual side is not a matcher
+  t.false(RecordedArguments.from(['Substitute', 'JS']).match(RecordedArguments.from([Arg.all()])))
 })
 
 test('matches correctly with another RecordedArguments instance when using predicate arguments', t => {
   t.true(RecordedArguments.from([Arg.any(), Arg.any('number'), Arg.is((x: number) => x === 3), 4]).match(RecordedArguments.from([1, 2, 3, 4])))
-  t.true(RecordedArguments.from(['Substitute', 'JS']).match(RecordedArguments.from([Arg.is(x => typeof x === 'string'), Arg.any('string')])))
+  t.true(RecordedArguments.from([Arg.is(x => typeof x === 'string'), Arg.any('string')]).match(RecordedArguments.from(['Substitute', 'JS'])))
+  // D3: matching is one-directional; an Arg on the actual side is not a matcher
+  t.false(RecordedArguments.from(['Substitute', 'JS']).match(RecordedArguments.from([Arg.is(x => typeof x === 'string'), Arg.any('string')])))
 })
 
 test('generates custom text representation', t => {

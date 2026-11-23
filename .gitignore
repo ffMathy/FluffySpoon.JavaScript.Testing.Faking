@@ -331,5 +331,6 @@ ASALocalRun/
 
 # Build
 dist/
+dist-spec/
 fluffy-spoon-substitute-*.tgz
 package/

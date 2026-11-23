@@ -1,7 +1,8 @@
 {
     "name": "substitute-compatibility-checks",
     "version": "0.0.0",
-    "description": "Checks compatibility of @fluffy-spoon/substitute with various test runners.",
+    "private": true,
+    "description": "Checks compatibility of the packed @fluffy-spoon/substitute build with various test runners.",
     "license": "MIT",
     "funding": {
         "type": "opencollective",
@@ -12,29 +13,52 @@
         "url": "https://github.com/ffMathy/FluffySpoon.JavaScript.Testing.Faking.git"
     },
     "engines": {
-        "node": ">=20"
+        "node": ">=22.12"
     },
     "scripts": {
+        "install:local": "node scripts/install-local-build.js",
         "validate:ava": "ava test-runners/ava/**.ts",
         "validate:jest": "jest test-runners/jest/**.ts",
+        "validate:jest-matchers": "jest test-runners/jest-matchers/**.ts",
+        "validate:jest-modules-ts": "jest -c jest.modules.ts-jest.config.js",
+        "validate:jest-modules-babel": "jest -c jest.modules.babel.config.js",
+        "validate:jest-modules-esm": "node --experimental-vm-modules node_modules/jest/bin/jest.js -c jest.modules.esm.config.js",
         "validate:mocha": "mocha --require tsx/cjs test-runners/mocha/**.ts",
+        "validate:mocha-async": "mocha --require tsx/cjs test-runners/mocha-async/**.ts",
         "validate:nodejs": "node --require tsx/cjs --test ./test-runners/nodejs/*.ts",
+        "validate:nodejs-modules": "node --test --experimental-test-module-mocks test-runners/nodejs-modules/index.test.mjs",
         "validate:vitest": "vitest run ./test-runners/vitest/*.ts",
-        "test": "node --require tsx/cjs --test test/**"
+        "validate:vitest-inline": "vitest run --config vitest.inline.config.mts ./test-runners/vitest-inline/index.spec.ts",
+        "validate:vitest-modules": "vitest run ./test-runners/vitest-modules/index.spec.ts",
+        "pretest": "npm run install:local",
+        "test": "node --require tsx/cjs --test test/index.ts test/bundlers.ts"
     },
     "devDependencies": {
-        "@types/mocha": "^10.0.6",
-        "@types/node": "^20.11.25",
+        "@babel/core": "^7.29.13",
+        "@babel/plugin-transform-modules-commonjs": "^7.29.14",
+        "@babel/preset-typescript": "^7.29.7",
+        "@jest/globals": "^30.5.2",
+        "@rollup/plugin-commonjs": "^29.0.3",
+        "@rollup/plugin-node-resolve": "^16.0.3",
+        "@types/mocha": "^10.0.10",
+        "@types/node": "^22.20.5",
         "ansi-regex": "^6.0.1",
-        "ava": "^6.1.2",
-        "jest": "^29.7.0",
-        "mocha": "^10.3.0",
-        "ts-jest": "^29.1.2",
-        "tsx": "^4.7.1",
-        "typescript": "^5.4.2",
-        "vitest": "^1.3.1"
+        "ava": "^6.4.1",
+        "babel-jest": "^30.5.2",
+        "esbuild": "^0.28.2",
+        "expect-jest29": "npm:expect@^29.7.0",
+        "jest": "^30.5.2",
+        "mocha": "^12.0.3",
+        "rollup": "^4.68.4",
+        "sinon": "^22.1.0",
+        "ts-jest": "^29.4.15",
+        "tsx": "^4.23.15",
+        "typescript": "^5.9.3",
+        "vite": "^8.3.8",
+        "vitest": "^5.1.0",
+        "webpack": "^5.112.2"
     },
     "volta": {
-        "node": "20.11.1"
+        "node": "24.22.3"
     }
 }
