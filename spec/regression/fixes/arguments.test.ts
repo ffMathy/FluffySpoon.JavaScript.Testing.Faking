@@ -254,7 +254,7 @@ test('A:RT-14 messages contain ANSI codes only when colour output is appropriate
   withEnvironment({ tty: true, FORCE_COLOR: '0' }, () => t.false(hasAnsi(messageOf()), 'FORCE_COLOR=0'))
 })
 
-test('A:DOC-1 the README "Match order" and "Partial mocks" examples work', t => {
+test('A:DOC-1 the the guide "Match order" and "Partial mocks" examples work', t => {
   interface Calculator { add(a: number, b: number): number, subtract(a: number, b: number): number, divide(a: number, b: number): number }
 
   // Match order, example 1: a specific setup after a catch-all one goes through [configure]()

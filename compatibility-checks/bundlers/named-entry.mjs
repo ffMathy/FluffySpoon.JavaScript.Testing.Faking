@@ -1,5 +1,5 @@
 // PK4-1 (P33): test/bundlers.ts bundles this file into CommonJS output while the package stays external, and runs
-// the bundle with Node.js. It uses only the named import, which README "Importing" recommends for that case: there
+// the bundle with Node.js. It uses only the named import, which the guide "Importing" recommends for that case: there
 // the default import follows Node.js's CommonJS interop and is the exports object, not the Substitute class.
 import { Substitute, Arg, received, SubstituteException } from '@fluffy-spoon/substitute'
 

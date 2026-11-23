@@ -507,7 +507,7 @@ test('R:RT-3 configure() overrides a setup whose literal arguments match an exis
   t.is(repository.find(1).name, 'admin')
   t.is(repository.find(2).name, 'any')
 
-  // README "Match order", first example
+  // the guide "Match order", first example
   repository.add(Arg.all()).returns(10)
   repository[configure]().add(1, 3).returns(1337)
   t.is(repository.add(1, 3), 1337)

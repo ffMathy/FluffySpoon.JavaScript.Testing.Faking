@@ -66,7 +66,7 @@ const verifyMocha = (output: string) => {
   assert.ok(/2 passing/.test(output) && /1 failing/.test(output), `mocha's summary changed: ${output}`)
   assert.ok(output.includes('mocha loaded later.ts'), `mocha did not load the later file: ${output}`)
   assert.ok(!output.includes('passes after the failing test') && !output.includes('runs in a later file'),
-    `mocha now runs the tests after the failure: update README "Assertions that fail later" and this check: ${output}`)
+    `mocha now runs the tests after the failure: update the guide "Assertions that fail later" and this check: ${output}`)
 }
 
 /**
@@ -83,9 +83,9 @@ const verifyMochaAsync = (output: string) => {
   assert.ok(output.includes(`1) ${test}`) && output.includes('Uncaught SubstituteException: Call count mismatch'),
     `mocha did not report the failure as the async test's own: ${output}`)
   assert.ok(output.includes(`2) ${test}`) && output.includes(`done() called multiple times in test <${test}>`),
-    `mocha no longer reports the async test a second time ("done() called multiple times"): update README "Assertions that fail later" and this check: ${output}`)
+    `mocha no longer reports the async test a second time ("done() called multiple times"): update the guide "Assertions that fail later" and this check: ${output}`)
   assert.ok(output.includes('✔ passes after the failing test') && output.includes('✔ runs in a later file'),
-    `mocha no longer runs the tests after the failing async test: update README "Assertions that fail later" and this check: ${output}`)
+    `mocha no longer runs the tests after the failing async test: update the guide "Assertions that fail later" and this check: ${output}`)
   assert.ok(/3 passing/.test(output) && /2 failing/.test(output), `mocha's summary changed: ${output}`)
 }
 
@@ -101,7 +101,7 @@ const verifyAva = (output: string) => {
   assert.ok(output.includes('Uncaught exception in test-runners/ava/index.ts') &&
     output.includes('test-runners/ava/index.ts exited with a non-zero exit code'), `ava did not report the uncaught exception: ${output}`)
   assert.ok(!output.includes('passes before the failing test') && !output.includes('passes after the failing test'),
-    `ava now reports the unfinished tests of the file: update README "Assertions that fail later" and this check: ${output}`)
+    `ava now reports the unfinished tests of the file: update the guide "Assertions that fail later" and this check: ${output}`)
 }
 
 /** vitest runs and reports every test (as passed), and reports the failure as an unhandled error of the last test. */

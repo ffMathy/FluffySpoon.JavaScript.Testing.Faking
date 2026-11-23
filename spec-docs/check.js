@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict'
-// The documentation check (`npm run test:docs`). It keeps README.md, MIGRATION.md and CHANGELOG.md honest:
+// The documentation check (`npm run test:docs`). It keeps README.md, docs/GUIDE.md, MIGRATION.md and CHANGELOG.md honest:
 //
 // - Every ```typescript / ```ts block is type-checked under `strict` against the BUILT package (dist/, resolved through
 //   package.json like an installed copy of @fluffy-spoon/substitute), then run with Node.js.
@@ -24,7 +24,7 @@
 // A ```text block marked <!-- docs-check: error-message --> must equal "<name>: <message>" of the error thrown by the
 // last `// throws` line of the preceding checked block (lines starting with "called at" match any stack frame).
 //
-// Usage: node spec-docs/check.js [--keep] [file.md ...]   (default: README.md MIGRATION.md CHANGELOG.md; build first)
+// Usage: node spec-docs/check.js [--keep] [file.md ...]   (default: README.md docs/GUIDE.md MIGRATION.md CHANGELOG.md; build first)
 // See spec-docs/README.md for examples.
 const fs = require('fs')
 const os = require('os')
@@ -32,7 +32,7 @@ const path = require('path')
 const { spawn } = require('child_process')
 
 const root = path.resolve(__dirname, '..')
-const defaultFiles = ['README.md', 'MIGRATION.md', 'CHANGELOG.md']
+const defaultFiles = ['README.md', 'docs/GUIDE.md', 'MIGRATION.md', 'CHANGELOG.md']
 const checkedLanguages = { typescript: 'ts', ts: 'ts', javascript: 'js', js: 'js' }
 const knownDirectives = new Set(['skip', 'compile-only', 'name', 'uses', 'esm', 'uncaught', 'error-message', 'types-node-below'])
 const snippetTimeout = 20 * 1000

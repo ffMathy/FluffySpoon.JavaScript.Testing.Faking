@@ -49,7 +49,7 @@ jobs:
         run: npm test
       - name: Run the type tests
         run: npm run test:types --if-present
-      # Type-checks and runs the code examples of README.md and MIGRATION.md against the built package, and checks links.
+      # Type-checks and runs the code examples of README.md, docs/GUIDE.md, MIGRATION.md and CHANGELOG.md against the built package, and checks links.
       - name: Check the code examples in the documentation
         run: npm run test:docs
 

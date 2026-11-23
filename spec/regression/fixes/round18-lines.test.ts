@@ -59,7 +59,7 @@ const scenario = [
   "const report = (label, check) => { try { check(); results[label] = 'passes' } catch (error) { results[label] = 'throws: ' + error.message.split(':')[0] } };",
   'const reported = [];',
   "process.on('uncaughtException', error => { reported.push(error.message.split(':')[0]) });",
-  // part A: a self-returning setup, a call of the test, and a check on the NEXT line (README 'Which calls lead to a setup or a check')
+  // part A: a self-returning setup, a call of the test, and a check on the NEXT line (the guide 'Which calls lead to a setup or a check')
   'function mapCase() {',
   '  const map = Substitute.for();',
   '  map.set(Arg.all()).returns(map);',
@@ -88,7 +88,7 @@ const scenario = [
   "  logger.received(1).info('a', { x: 1 });",
   '}',
   "report('mimicked fluent logger, received(1) on the next line', loggerCase);",
-  // README 'Through a call with matchers': a stored handle on a later line is a check of io itself; one line narrows
+  // the guide 'Through a call with matchers': a stored handle on a later line is a check of io itself; one line narrows
   'function storedHandle() {',
   '  const io = Substitute.for();',
   '  io.to(Arg.any()).returns(io);',
@@ -113,7 +113,7 @@ const scenario = [
   "    .received(1).emit('m');",
   '}',
   "report('check through io.to(room-b) over two lines', twoLines);",
-  // part B: a matcher usage error in a later statement never cancels the report of an earlier check (README 'Assertions that fail later')
+  // part B: a matcher usage error in a later statement never cancels the report of an earlier check (the guide 'Assertions that fail later')
   'function deferredRead() {',
   '  const sub = Substitute.for();',
   '  sub.m(1);',
@@ -163,7 +163,7 @@ const runFile = (code: string, args: string[]): Outcome => {
   }
 }
 
-/** What the scenario gives when its statements are on lines of their own, as README documents. */
+/** What the scenario gives when its statements are on lines of their own, as the guide documents. */
 const documented: Outcome = {
   results: {
     'map didNotReceive on the next line': 'throws: Call count mismatch in @Substitute.set',

@@ -6,14 +6,14 @@
 // P2 (P29): CommonJS code that require()s the package (bundlers/require-helper.cjs), bundled with Rollup's commonjs
 // plugin while the package stays external. With default options the plugin turns that require() into a default
 // import, which Node.js resolves to the ES module entry, whose default export is the Substitute class, so require()
-// gets the class instead of the exports object. README "Importing" and MIGRATION "Imports and packaging" document
+// gets the class instead of the exports object. the guide "Importing" and MIGRATION "Imports and packaging" document
 // this and its workarounds; the checks below make sure each documented workaround works and the caveat is still real.
 //
 // PK4-1 (P33): ES module code bundled into CommonJS output while the package stays external (Rollup format 'cjs',
 // Vite SSR builds with CommonJS output, esbuild format 'cjs', webpack with a commonjs external). The bundle require()s
 // the package at run time and turns the default import into module.exports, the exports object, as Node.js does for
 // CommonJS (Rollup with its default output.interop for any source; esbuild, webpack and Rolldown for .mjs sources and
-// sources in a "type": "module" package). README "Importing" and MIGRATION "Imports and packaging" recommend the named
+// sources in a "type": "module" package). the guide "Importing" and MIGRATION "Imports and packaging" recommend the named
 // import there; the checks below make sure it works with each of them, that Rollup's output.interop: 'auto' fixes the
 // default import, and that the caveat itself is still real.
 //
@@ -302,7 +302,7 @@ test.describe('P2 (P29) bundled CommonJS code that require()s the package gets t
   }
 
   // The caveat itself. If this fails because require() now gives the exports object, the tools changed: update
-  // the caveat in README "Importing" and MIGRATION "Imports and packaging", and then this check.
+  // the caveat in the guide "Importing" and MIGRATION "Imports and packaging", and then this check.
   test.it('P2 rollup with @rollup/plugin-commonjs (default options) and the package external: require() gives the Substitute class (the documented caveat)', async () => {
     const { report, output } = await runRequireBundle({
       name: 'rollup with @rollup/plugin-commonjs (default options) and the package external',
@@ -392,7 +392,7 @@ test.describe('PK4-1 (P33) CommonJS output with the package external: the named 
   })
 
   // The caveat itself, for bundlers/entry.mjs (an .mjs source). If one of these fails because the default import is
-  // now the Substitute class, the tool changed: update README "Importing" and MIGRATION "Imports and packaging",
+  // now the Substitute class, the tool changed: update the guide "Importing" and MIGRATION "Imports and packaging",
   // and then this check.
   for (const bundler of commonJsOutputBundlers) {
     test.it(`PK4-1 ${bundler.name}, package external: the default import of an .mjs source is the exports object (the documented caveat)`, async () => {

@@ -1,4 +1,4 @@
-// TD-6 / T29 A matcher created on its own from an annotated predicate (README "Matching specific arguments") takes its
+// TD-6 / T29 A matcher created on its own from an annotated predicate (the guide "Matching specific arguments") takes its
 // type from the predicate. spec-types/min-ts/consumer.ts checks the same pattern with TypeScript 3.6.
 import { Substitute, Arg } from '../src'
 import { assert, Equals, expectType } from './helpers'

@@ -177,7 +177,7 @@ const countLimitChanges = (setup: string) => `
   const { Substitute, Arg } = require(${JSON.stringify(library)})
 `
 
-/** D25 with and without frames: the README's openConnection example (the code under test's call is kept with frames). */
+/** D25 with and without frames: the the guide's openConnection example (the code under test's call is kept with frames). */
 const openConnection = `
   function openConnection(driver) { return driver.connect('db://test') }
   const driver = Substitute.for()
@@ -234,7 +234,7 @@ test('R6-ADV-6 (E21) a missing or non-number Error.stackTraceLimit gives no fram
 
 test('R6-ADV-2 (E21) with a frozen Error the library reads no frames, so position decides, while "called at" lines are still shown', t => {
   // pins the behaviour that README describes for a frozen Error (and, before Node.js 20.20, a sealed or non-extensible
-  // one, whose missing Error.prepareStackTrace cannot be defined): the README's openConnection example
+  // one, whose missing Error.prepareStackTrace cannot be defined): the the guide's openConnection example
   const result = runScript(`
     Object.freeze(Error)
     const { Substitute, Arg } = require(${JSON.stringify(library)})
