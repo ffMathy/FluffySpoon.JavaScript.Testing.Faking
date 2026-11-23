@@ -43,7 +43,7 @@
         "@types/mocha": "^10.0.10",
         "@types/node": "^22.20.5",
         "ansi-regex": "^6.0.1",
-        "ava": "^6.4.1",
+        "ava": "^8.4.0",
         "babel-jest": "^30.5.2",
         "esbuild": "^0.28.2",
         "expect-jest29": "npm:expect@^29.7.0",
