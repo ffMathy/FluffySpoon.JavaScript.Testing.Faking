@@ -29,7 +29,7 @@ jobs:
       # Lets npm publish with provenance (and with trusted publishing, if it is configured on npmjs.com).
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
       - uses: actions/setup-node@v5

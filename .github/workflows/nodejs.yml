@@ -33,7 +33,7 @@ jobs:
         # Every Node.js LTS line that is still supported: https://nodejs.org/en/about/previous-releases
         node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
       - name: Use Node.js ${{ matrix.node-version }}
@@ -60,7 +60,7 @@ jobs:
     name: Typings on the oldest supported TypeScript
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
       - name: Use the development Node.js version
@@ -81,7 +81,7 @@ jobs:
       matrix:
         node-version: [22, 24, 26]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
       - name: Use Node.js ${{ matrix.node-version }}
@@ -107,7 +107,7 @@ jobs:
     name: Packed package on the oldest supported Node versions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           show-progress: false
       - name: Use the development Node.js version
